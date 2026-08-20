@@ -482,6 +482,47 @@ describe('StorageManagerEngine', () => {
     assert.equal(result.action, 'deliver');
     assert.equal(result.deliveries[0].position.x, -181);
     assert.equal(result.deliveries[0].position.z, -350);
+    // Chest kosong itu HANYA tujuan SEMENTARA untuk pengantaran ini - memori sortir permanen
+    // (chestAssignments) TIDAK BOLEH ikut tertimpa ke sana, atau rumah asli yang benar akan
+    // hilang begitu saja - ditemukan dari bug live nyata (lihat tes bouncing-loop di bawah):
+    // rotten_flesh bolak-balik TANPA HENTI antara dua chest karena assignment permanennya
+    // ke-timpa oleh chest kosong yang cuma dimaksudkan sebagai solusi sementara.
+    assert.equal(engine.getChestAssignments().dirt, '-181,74,-352', 'rumah ASLI harus tetap tercatat, bukan tertimpa jadi chest kosong sementara itu');
+  });
+
+  it('BOUNCING LOOP: kalau rumah asli MASIH penuh, item yang baru ditaruh di chest kosong sementara TIDAK BOLEH langsung ditandai "salah tempat" lagi - ditemukan dari bug live nyata: rotten_flesh bolak-balik TANPA HENTI 2+ menit antara dua chest karena reorganize terus mencoba memindahkannya kembali ke rumah yang TERNYATA MASIH penuh, gagal, balik lagi ke sementara, dianggap salah tempat lagi... berulang selamanya', async () => {
+    const homeChest = { position: { x: -181, y: 71, z: -349 }, items: [] };
+    const tempEmptyChest = { position: { x: -180, y: 71, z: -344 }, items: [{ name: 'rotten_flesh', count: 13 }] };
+    const adapter = new FakeStorageAdapter({
+      chests: { '-181,71,-349': homeChest, '-180,71,-344': tempEmptyChest }
+    });
+    const WIDE_HOUSE = { min: { x: -190, y: 70, z: -360 }, max: { x: -179, y: 76, z: -340 } };
+    const engine = new StorageManagerEngine({ adapter, houseBounds: WIDE_HOUSE, initialAssignments: { rotten_flesh: '-181,71,-349' } });
+    // Rumah asli MASIH penuh (belum ada ruang) - reorganize TIDAK ADA GUNANYA mencoba memindah
+    // rotten_flesh ke sana sekarang, itu cuma akan gagal dan mubazir (nanti balik lagi ke sini).
+    engine.fullChestPositions.add('-181,71,-349');
+
+    const result = await engine.tick();
+
+    assert.notEqual(result.action, 'reorganize', 'jangan coba pindahkan ke rumah yang diketahui MASIH penuh - itu penyebab bolak-balik tanpa henti');
+  });
+
+  it('begitu rumah asli TIDAK LAGI penuh, item yang sempat ditaruh sementara BOLEH dipindah kembali (satu kali, bukan bolak-balik)', async () => {
+    const homeChest = { position: { x: -181, y: 71, z: -349 }, items: [] };
+    const tempEmptyChest = { position: { x: -180, y: 71, z: -344 }, items: [{ name: 'rotten_flesh', count: 13 }] };
+    const adapter = new FakeStorageAdapter({
+      chests: { '-181,71,-349': homeChest, '-180,71,-344': tempEmptyChest }
+    });
+    const WIDE_HOUSE = { min: { x: -190, y: 70, z: -360 }, max: { x: -179, y: 76, z: -340 } };
+    const engine = new StorageManagerEngine({ adapter, houseBounds: WIDE_HOUSE, initialAssignments: { rotten_flesh: '-181,71,-349' } });
+    // Rumah asli SUDAH TIDAK penuh lagi sekarang - kali ini reorganize memang harus jalan.
+    // (chest rumah diperiksa dulu - kosong, tidak ada yang salah - baru chest sementara berikutnya)
+
+    await engine.tick(); // memeriksa homeChest (kosong, tidak ada yang salah tempat)
+    const result = await engine.tick(); // memeriksa tempEmptyChest - di sinilah rotten_flesh ditemukan
+
+    assert.equal(result.action, 'reorganize');
+    assert.equal(result.items[0].name, 'rotten_flesh');
   });
 
   it('kalau item SUDAH punya assignment tapi rumahnya penuh, JANGAN percaya chest LAIN yang KEBETULAN sudah berisi jenis yang sama (leftover salah tempat dari sesi lama) sebagai "sudah cocok" - itu jalur korupsi yang SAMA persis, cuma lewat pencocokan isi bukan fallback asal-asalan - ditemukan dari bug live nyata: leather_chestplate yang assignment-nya sudah benar ke chest armor malah diantar ke chest buku karena chest buku itu MASIH menyimpan leather_chestplate nyasar dari korupsi sebelumnya, dan pencocokan isi keliru menganggap itu tujuan yang valid', async () => {

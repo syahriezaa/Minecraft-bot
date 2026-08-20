@@ -169,7 +169,14 @@ class StorageManagerEngine extends EventEmitter {
       const items = await this.safeGetChestContents(pos);
       if (!items) continue;
       if (items.length === 0) {
-        this.chestAssignments.set(itemName, posKey(pos));
+        // Chest kosong ini SEMENTARA saja (rumah asli sedang penuh) - kalau item ini SUDAH
+        // punya rumah permanen yang diketahui benar, JANGAN timpa memori sortirnya dengan chest
+        // kosong ini, itu akan MEMUTUSKAN item dari rumah aslinya - ditemukan dari bug live
+        // nyata: rotten_flesh bolak-balik TANPA HENTI karena assignment permanennya berulang
+        // kali ke-timpa jadi chest sementara ini, lalu ke-timpa balik ke rumah asli oleh
+        // canonical override saat restart, lalu ke-timpa lagi... Cuma simpan permanen kalau
+        // item ini MEMANG belum pernah punya rumah sama sekali.
+        if (!hasExistingAssignment) this.chestAssignments.set(itemName, posKey(pos));
         return pos;
       }
     }
@@ -284,12 +291,17 @@ class StorageManagerEngine extends EventEmitter {
       // Item SALAH TEMPAT: assignment yang sudah diketahui menunjuk ke chest LAIN (dinormalkan
       // lewat canonicalKeyFor supaya separuh double-chest yang sama tidak dianggap "lain"). Cuma
       // barang yang MEMANG punya assignment jelas yang dipindah - kalau belum ada info rumah yang
-      // benar, jangan tebak (itu justru penyebab bug sortir tercampur sebelumnya).
+      // benar, jangan tebak (itu justru penyebab bug sortir tercampur sebelumnya). Kalau rumah
+      // aslinya sendiri sedang PENUH/RUSAK, JANGAN tandai salah tempat sama sekali - memindahkan
+      // ke sana pasti gagal lagi (balik ke sini), lalu dianggap salah tempat lagi tick berikutnya
+      // - ditemukan dari bug live nyata: rotten_flesh bolak-balik TANPA HENTI 2+ menit karena
+      // reorganize terus memaksa memindah ke rumah yang ternyata masih penuh.
       const isChest = (p) => this.isChestBlock(p);
       const hereKey = canonicalKeyFor(nextToInspect, insideChests, isChest);
       const misplacedItems = items.filter((it) => {
         const assignedKey = this.chestAssignments.get(it.name);
         if (!assignedKey) return false;
+        if (this.fullChestPositions.has(assignedKey) || this.brokenPositions.has(assignedKey)) return false;
         return canonicalKeyFor(parseKey(assignedKey), insideChests, isChest) !== hereKey;
       });
 
