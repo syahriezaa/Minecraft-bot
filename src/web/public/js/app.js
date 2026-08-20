@@ -398,7 +398,7 @@
     emptyText: 'Tidak ada kuartermaster yang berjalan.',
     statsRenderer: (m) => {
       const storage = m.storage || {};
-      return `kumpul <b>${storage.collected || 0}</b> chest (${storage.itemsCollected || 0} item) · antar <b>${storage.delivered || 0}</b> · periksa <b>${storage.inspected || 0}</b> chest`;
+      return `kumpul <b>${storage.collected || 0}</b> chest (${storage.itemsCollected || 0} item) · antar <b>${storage.delivered || 0}</b> · periksa <b>${storage.inspected || 0}</b> chest · rapikan <b>${storage.reorganized || 0}</b> item salah tempat`;
     }
   });
 

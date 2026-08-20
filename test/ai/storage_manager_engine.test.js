@@ -63,6 +63,19 @@ class FakeStorageAdapter {
     this.actions.push({ type: 'navigate', position: pos });
     return true;
   }
+
+  async withdrawFromChest(pos, itemNames, count) {
+    const chest = this.chests[`${pos.x},${pos.y},${pos.z}`];
+    this.actions.push({ type: 'withdrawFrom', position: pos, itemNames, count });
+    if (!chest) return { withdrawn: 0 };
+    const match = chest.items.find((it) => itemNames.includes(it.name));
+    if (!match) return { withdrawn: 0 };
+    const take = Math.min(count, match.count);
+    this.inventory.set(match.name, (this.inventory.get(match.name) || 0) + take);
+    match.count -= take;
+    chest.items = chest.items.filter((it) => it.count > 0);
+    return { withdrawn: take };
+  }
 }
 
 describe('StorageManagerEngine', () => {
@@ -297,5 +310,63 @@ describe('StorageManagerEngine', () => {
     const navigateAction = adapter.actions.find((a) => a.type === 'navigate');
     assert.ok(navigateAction);
     assert.ok(navigateAction.position.x < -185, 'harus mendekat dari sisi BARAT juga saat memeriksa, bukan cuma saat mengantar');
+  });
+
+  it('kalau chest yang diperiksa berisi item yang assignment-nya menunjuk ke chest LAIN, harus PINDAHKAN item itu (bukan cuma catat/laporkan) - permintaan nyata pemilik: "jika ada ore atau ingot di peti yang salah silahkan di pindahkan"', async () => {
+    // x -185 dan -183 SENGAJA beda 2 (bukan bersebelahan/double-chest) supaya tes ini murni
+    // menguji reorganize antar chest yang BENAR-BENAR berbeda, bukan ke-trigger logika normalisasi
+    // double-chest (lihat tes terpisah di bawah untuk kasus itu).
+    const wrongChest = { position: { x: -183, y: 72, z: -352 }, items: [{ name: 'iron_ingot', count: 8 }] };
+    const oreChest = { position: { x: -185, y: 72, z: -352 }, items: [{ name: 'dirt', count: 5 }] };
+    const adapter = new FakeStorageAdapter({
+      chests: { '-183,72,-352': wrongChest, '-185,72,-352': oreChest }
+    });
+    // Memori sortir sudah tahu iron_ingot SEHARUSNYA di oreChest (-185,...), bukan di wrongChest.
+    const engine = new StorageManagerEngine({ adapter, houseBounds: HOUSE_BOUNDS, initialAssignments: { iron_ingot: '-185,72,-352' } });
+
+    const result = await engine.tick();
+
+    assert.equal(result.action, 'reorganize');
+    assert.equal(result.item, 'iron_ingot');
+    assert.equal(result.count, 8);
+    assert.ok(!wrongChest.items.some((i) => i.name === 'iron_ingot'), 'iron_ingot harus SUDAH DIAMBIL dari chest yang salah');
+
+    // Tick berikutnya: item yang baru diambil sudah di tangan, harus diantar ke chest yang BENAR
+    // lewat jalur deliver biasa (memakai assignment yang sama).
+    const second = await engine.tick();
+    assert.equal(second.action, 'deliver');
+    assert.equal(second.deliveries[0].position.x, -185);
+    assert.equal(second.deliveries[0].count, 8);
+    assert.ok(oreChest.items.some((i) => i.name === 'iron_ingot' && i.count === 8), 'iron_ingot harus SUDAH SAMPAI di chest yang benar');
+  });
+
+  it('chest yang isinya SUDAH sesuai assignment (tidak ada yang salah tempat) harus diperiksa normal (inspect), bukan dianggap perlu dipindah', async () => {
+    const adapter = new FakeStorageAdapter({
+      chests: { '-185,72,-352': { position: { x: -185, y: 72, z: -352 }, items: [{ name: 'iron_ingot', count: 8 }] } }
+    });
+    const engine = new StorageManagerEngine({ adapter, houseBounds: HOUSE_BOUNDS, initialAssignments: { iron_ingot: '-185,72,-352' } });
+
+    const result = await engine.tick();
+
+    assert.equal(result.action, 'inspect');
+    assert.equal(engine.metrics.inspected, 1);
+  });
+
+  it('DOUBLE CHEST: dua blok chest yang bersebelahan (x berbeda 1, y/z sama) adalah SATU wadah fisik yang sama - item di sana TIDAK BOLEH dianggap "salah tempat" hanya karena assignment-nya mencatat koordinat blok SEBELAH (separuh chest yang lain)', async () => {
+    const halfA = { position: { x: -181, y: 72, z: -352 }, items: [{ name: 'iron_ingot', count: 8 }] };
+    const halfB = { position: { x: -180, y: 72, z: -352 }, items: [{ name: 'iron_ingot', count: 8 }] };
+    const adapter = new FakeStorageAdapter({
+      chests: { '-181,72,-352': halfA, '-180,72,-352': halfB }
+    });
+    const HOUSE = { min: { x: -190, y: 70, z: -355 }, max: { x: -179, y: 76, z: -348 } };
+    // Assignment mencatat separuh -181 sebagai rumah iron_ingot yang benar. Chest yang akan
+    // DIPERIKSA lebih dulu (findChestPositions urutan objek) adalah separuh -181 itu sendiri -
+    // TIDAK masalah karena keynya identik. Tes ini fokus ke kasus assignment BEDA separuh dari
+    // yang sedang diperiksa (lihat setup di bawah, assignment pakai key separuh -180).
+    const engine = new StorageManagerEngine({ adapter, houseBounds: HOUSE, initialAssignments: { iron_ingot: '-180,72,-352' } });
+
+    const result = await engine.tick();
+
+    assert.notEqual(result.action, 'reorganize', 'separuh chest yang lain BUKAN "chest lain" - itu wadah fisik yang SAMA, jangan dipindah-pindah sia-sia');
   });
 });

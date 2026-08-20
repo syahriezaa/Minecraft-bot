@@ -24,6 +24,33 @@ function westOf(pos, distance = 2) {
   return { x: pos.x - distance, y: pos.y, z: pos.z };
 }
 
+function parseKey(key) {
+  const [x, y, z] = key.split(',').map(Number);
+  return { x, y, z };
+}
+
+// Chest DOUBLE (dua blok bersebelahan persis 1 blok, x ATAU z) berbagi SATU wadah fisik yang sama
+// di Minecraft - findChestPositions mengembalikan KEDUA bloknya sebagai posisi terpisah. Tanpa
+// normalisasi ini, membandingkan "posisi assignment" vs "posisi chest yang sedang diperiksa" akan
+// keliru menganggap separuh chest yang satu sebagai "chest lain" dari separuhnya sendiri, memicu
+// reorganize sia-sia (pindah barang ke wadah yang sebenarnya SAMA). Selalu menormalkan ke
+// koordinat TERKECIL di antara pos itu sendiri dan tetangga sebelahnya (kalau ada) - baik pos itu
+// sendiri maupun pasangannya akan menghasilkan key kanonik yang SAMA persis.
+function canonicalKeyFor(pos, allPositions) {
+  const set = new Set(allPositions.map(posKey));
+  const candidates = [pos];
+  for (const neighbor of [
+    { x: pos.x - 1, y: pos.y, z: pos.z },
+    { x: pos.x + 1, y: pos.y, z: pos.z },
+    { x: pos.x, y: pos.y, z: pos.z - 1 },
+    { x: pos.x, y: pos.y, z: pos.z + 1 }
+  ]) {
+    if (set.has(posKey(neighbor))) candidates.push(neighbor);
+  }
+  candidates.sort((a, b) => a.x - b.x || a.y - b.y || a.z - b.z);
+  return posKey(candidates[0]);
+}
+
 class StorageManagerEngine extends EventEmitter {
   constructor(options = {}) {
     super();
@@ -37,7 +64,8 @@ class StorageManagerEngine extends EventEmitter {
       collected: 0,
       itemsCollected: 0,
       delivered: 0,
-      inspected: 0
+      inspected: 0,
+      reorganized: 0
     };
     // Posisi chest yang sudah DIKUNJUNGI sesi ini - dilacak supaya tidak mengambil/memeriksa chest
     // yang sama berulang-ulang tiap tick (mis. chest kosong tetap ditandai "sudah dikunjungi").
@@ -168,8 +196,36 @@ class StorageManagerEngine extends EventEmitter {
     const insideChests = this.getInsideChestPositions();
     const nextToInspect = insideChests.find((pos) => !this.inspectedPositions.has(posKey(pos)));
     if (nextToInspect) {
-      await this.adapter.navigateNear(westOf(nextToInspect), 1);
       const items = await this.adapter.getChestContents(nextToInspect);
+
+      // Item SALAH TEMPAT: assignment yang sudah diketahui menunjuk ke chest LAIN (dinormalkan
+      // lewat canonicalKeyFor supaya separuh double-chest yang sama tidak dianggap "lain"). Cuma
+      // barang yang MEMANG punya assignment jelas yang dipindah - kalau belum ada info rumah yang
+      // benar, jangan tebak (itu justru penyebab bug sortir tercampur sebelumnya).
+      const hereKey = canonicalKeyFor(nextToInspect, insideChests);
+      const misplaced = items.find((it) => {
+        const assignedKey = this.chestAssignments.get(it.name);
+        if (!assignedKey) return false;
+        return canonicalKeyFor(parseKey(assignedKey), insideChests) !== hereKey;
+      });
+
+      if (misplaced) {
+        await this.adapter.navigateNear(westOf(nextToInspect), 1);
+        const result = await this.adapter.withdrawFromChest(nextToInspect, [misplaced.name], misplaced.count);
+        this.metrics.reorganized += result.withdrawn;
+        this.emit('misplaced', {
+          position: nextToInspect,
+          item: misplaced.name,
+          count: result.withdrawn,
+          correctPosition: parseKey(this.chestAssignments.get(misplaced.name))
+        });
+        // JANGAN tandai chest ini "sudah diperiksa" - mungkin masih ada item salah tempat lain di
+        // chest yang sama, akan dicek ulang di tick berikutnya setelah barang ini benar-benar
+        // diantar (via jalur deliver biasa, karena sekarang sudah ada di tangan/inventaris).
+        return { action: 'reorganize', position: nextToInspect, item: misplaced.name, count: result.withdrawn };
+      }
+
+      await this.adapter.navigateNear(westOf(nextToInspect), 1);
       this.inspectedPositions.add(posKey(nextToInspect));
       this.metrics.inspected += 1;
       this.emit('inspected', { position: nextToInspect, items });

@@ -47,6 +47,38 @@ function saveAssignments(assignments, log) {
     log(`PERINGATAN: gagal menyimpan memori sortir gudang ke disk (${e.message})`);
   }
 }
+
+// Rumah BAKU untuk ore/ingot/bahan berharga - dipetakan langsung dari isi gudang sungguhan (lihat
+// layout yang sudah didokumentasikan). Dipaksa (override memori yang mungkin sudah keliru belajar
+// sebelumnya) supaya barang seperti iron_ingot yang nyasar ke chest lain (mis. chest loot campuran)
+// benar-benar DIPINDAHKAN ke rumah yang benar - permintaan nyata pemilik: "jika ada ore atau ingot
+// di peti yang salah silahkan di pindahkan". Chest "Bahan Berharga" (y74,z-353) untuk barang yang
+// SUDAH diproses (ingot/blok/permata); chest "Bijih Mentah" (y73,z-353) untuk bijih mentah/redstone.
+const PROCESSED_ORE_CHEST = '-181,74,-353';
+const RAW_ORE_CHEST = '-181,73,-353';
+const CANONICAL_ORE_INGOT_ASSIGNMENTS = {
+  coal: PROCESSED_ORE_CHEST,
+  coal_block: PROCESSED_ORE_CHEST,
+  iron_ingot: PROCESSED_ORE_CHEST,
+  iron_block: PROCESSED_ORE_CHEST,
+  copper_ingot: PROCESSED_ORE_CHEST,
+  waxed_copper_block: PROCESSED_ORE_CHEST,
+  lapis_lazuli: PROCESSED_ORE_CHEST,
+  diamond: PROCESSED_ORE_CHEST,
+  gold_ingot: PROCESSED_ORE_CHEST,
+  emerald_block: PROCESSED_ORE_CHEST,
+  netherite_ingot: PROCESSED_ORE_CHEST,
+  redstone: RAW_ORE_CHEST,
+  redstone_block: RAW_ORE_CHEST,
+  raw_iron: RAW_ORE_CHEST,
+  raw_iron_block: RAW_ORE_CHEST,
+  raw_copper: RAW_ORE_CHEST,
+  raw_copper_block: RAW_ORE_CHEST,
+  raw_gold: RAW_ORE_CHEST,
+  raw_gold_block: RAW_ORE_CHEST,
+  gold_nugget: RAW_ORE_CHEST,
+  crying_obsidian: RAW_ORE_CHEST
+};
 const DEFAULT_BASE_GOAL = { x: -185, y: 71, z: -352 };
 // Ruang penyimpanan di dalam rumah - dipakai StorageManagerEngine untuk membedakan chest gudang
 // (tujuan pengantaran/rapi-rapi) dari chest lain di luar rumah (sumber koleksi). Perkiraan awal di
@@ -106,9 +138,9 @@ function startStorageWorker({ host, port, botName, scanRadius = 48, baseGoal = D
     const bedResult = await adapter.setSpawnAtNearestBed();
     log(bedResult ? 'Spawn point diset di bed dekat base.' : 'Tidak ada bed dalam jangkauan - spawn point tidak diubah.');
 
-    const initialAssignments = loadAssignments(log);
+    const initialAssignments = { ...loadAssignments(log), ...CANONICAL_ORE_INGOT_ASSIGNMENTS };
     if (Object.keys(initialAssignments).length > 0) {
-      log(`Muat memori sortir gudang dari sesi sebelumnya: ${Object.keys(initialAssignments).length} jenis item sudah punya chest langganan.`);
+      log(`Muat memori sortir gudang: ${Object.keys(initialAssignments).length} jenis item sudah punya chest langganan (termasuk rumah baku ore/ingot).`);
     }
     engine = new StorageManagerEngine({ adapter, scanRadius, houseBounds, initialAssignments });
     engine.on('collected', ({ position, count }) => log(`Ambil ${count} item dari chest luar di (${position.x},${position.y},${position.z})`));
@@ -118,6 +150,7 @@ function startStorageWorker({ host, port, botName, scanRadius = 48, baseGoal = D
     });
     engine.on('inspected', ({ position, items }) => log(`Periksa chest gudang di (${position.x},${position.y},${position.z}) - isi: ${items.map((i) => `${i.name}x${i.count}`).join(', ') || '(kosong)'}`));
     engine.on('deliverFailed', ({ position, error, name }) => log(`Gagal antar ${name} ke chest gudang di (${position.x},${position.y},${position.z}) - ${error} - coba chest lain di tick berikutnya.`));
+    engine.on('misplaced', ({ position, item, count, correctPosition }) => log(`Item SALAH TEMPAT: ${count}x ${item} di (${position.x},${position.y},${position.z}) - diambil, akan diantar ke (${correctPosition.x},${correctPosition.y},${correctPosition.z})`));
 
     log('Pekerja gudang mulai bekerja.');
     lastAction = 'WORKING';
