@@ -297,6 +297,23 @@ class MineflayerRoleAdapter {
     return true;
   }
 
+  // Klik bed terdekat untuk set titik spawn di sini - dipakai worker SEBELUM mulai kerja apapun,
+  // supaya kalau proses direstart/logout, bot lanjut dari base pada login berikutnya (Minecraft
+  // me-resume di posisi logout terakhir kalau tidak ada spawn point, tapi klik bed EKSPLISIT lebih
+  // andal - tidak bergantung posisi logout persis yang mana). Gagal jelas (false) kalau tidak ada
+  // bed dalam jangkauan, bukan macet menunggu.
+  async setSpawnAtNearestBed(maxDistance = 16) {
+    const bedBlock = typeof this.bot?.findBlock === 'function'
+      ? this.bot.findBlock({ matching: (b) => b && b.name.endsWith('_bed'), maxDistance })
+      : null;
+    if (!bedBlock) return false;
+    await this.navigateNear(bedBlock.position, 2);
+    const block = this.blockAt(bedBlock.position);
+    if (typeof this.bot?.activateBlock !== 'function') return false;
+    await this.bot.activateBlock(block);
+    return true;
+  }
+
   async depositToChest(pos, predicate = () => true) {
     const chest = await this.openChestAt(pos);
     if (!chest) return { deposited: 0 };

@@ -65,10 +65,27 @@ function startGuardWorker({ host, port, botName, scanRadius = 16, baseGoal = DEF
     }
 
     const adapter = new MineflayerRoleAdapter(bot);
+
+    // Klik bed terdekat SEBELUM mulai berjaga - sama seperti runFarmerWorker.js, supaya restart
+    // berikutnya lanjut dari base, bukan jalan kaki ulang dari world spawn.
+    const bedResult = await adapter.setSpawnAtNearestBed();
+    log(bedResult ? 'Spawn point diset di bed dekat base.' : 'Tidak ada bed dalam jangkauan - spawn point tidak diubah.');
+
+    // Patroli keliling base (bukan diam di satu titik) - keluhan nyata: penjaga yang cuma
+    // "standby" di satu koordinat jarang sekali ketemu mob, karena hanya bereaksi kalau mob
+    // kebetulan masuk ke bubble scanRadius di titik ITU SAJA. Radius 10 blok dari base tetap jauh
+    // dari avoidArea (area peternakan villager, ~34 blok dari base ke arah utara).
+    const patrolWaypoints = [
+      { x: baseGoal.x + 10, y: baseGoal.y, z: baseGoal.z },
+      { x: baseGoal.x, y: baseGoal.y, z: baseGoal.z + 10 },
+      { x: baseGoal.x - 10, y: baseGoal.y, z: baseGoal.z },
+      { x: baseGoal.x, y: baseGoal.y, z: baseGoal.z - 10 }
+    ];
+
     combatEngine = new MobFarmEngine({
       adapter,
       scanRadius,
-      standbyPosition: baseGoal,
+      patrolWaypoints,
       retreatPosition: baseGoal
     });
     combatEngine.on('attacked', ({ target }) => log(`Menyerang ${target.name || target.type}`));

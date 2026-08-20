@@ -80,6 +80,13 @@ function startFarmerWorker({ host, port, botName, scanRadius = 32, baseGoal = DE
     }
 
     const adapter = new MineflayerRoleAdapter(bot);
+
+    // Klik bed terdekat SEBELUM mulai kerja apapun - supaya kalau proses ini direstart/logout,
+    // bot lanjut dari base pada login berikutnya, bukan jalan kaki 300+ blok ulang dari world spawn
+    // setiap kali (masalah nyata yang berulang kali muncul sesi ini).
+    const bedResult = await adapter.setSpawnAtNearestBed();
+    log(bedResult ? 'Spawn point diset di bed dekat base.' : 'Tidak ada bed dalam jangkauan - spawn point tidak diubah.');
+
     engine = new FarmerEngine({
       adapter,
       scanRadius,

@@ -283,6 +283,43 @@ describe('MobFarmEngine', () => {
     assert.equal(adapter.actions[0].type, 'eat');
     assert.equal(adapter.actions.some(a => a.type === 'attack'), false);
   });
+
+  it('dengan patrolWaypoints diset dan tidak ada ancaman, harus berjalan ke waypoint SEKARANG, lalu pindah ke waypoint berikutnya begitu tiba - ditemukan dari keluhan nyata pemilik: penjaga cuma diam di satu titik ("standby") jadi jarang ketemu mob sama sekali, bukan benar-benar berpatroli', async () => {
+    const adapter = new FakeRoleAdapter({ position: { x: 0, y: 64, z: 0 } });
+    const waypoints = [{ x: 10, y: 64, z: 0 }, { x: -10, y: 64, z: 0 }];
+    const engine = new MobFarmEngine({ adapter, patrolWaypoints: waypoints, waypointReachRadius: 2 });
+
+    const result = await engine.tick();
+
+    assert.equal(result.action, 'patrol');
+    assert.equal(adapter.actions[0].type, 'navigate');
+    assert.deepEqual(adapter.actions[0].position, waypoints[0]);
+  });
+
+  it('begitu sudah dekat waypoint SEKARANG (dalam waypointReachRadius), tick berikutnya harus menuju waypoint BERIKUTNYA, bukan waypoint yang sama terus - supaya benar-benar berkeliling, bukan berhenti di satu titik lagi', async () => {
+    const adapter = new FakeRoleAdapter({ position: { x: 9.5, y: 64, z: 0 } }); // sudah dekat waypoint[0] di (10,64,0)
+    const waypoints = [{ x: 10, y: 64, z: 0 }, { x: -10, y: 64, z: 0 }];
+    const engine = new MobFarmEngine({ adapter, patrolWaypoints: waypoints, waypointReachRadius: 2 });
+
+    const result = await engine.tick();
+
+    assert.equal(result.action, 'patrol');
+    assert.deepEqual(adapter.actions[0].position, waypoints[1], 'harus lanjut ke waypoint kedua karena sudah dekat dengan waypoint pertama');
+  });
+
+  it('kalau ada ancaman, patrol harus berhenti sementara dan tetap melawan - patroli bukan alasan mengabaikan mob yang mendekat', async () => {
+    const adapter = new FakeRoleAdapter({
+      position: { x: 0, y: 64, z: 0 },
+      items: { iron_sword: 1 },
+      entities: [{ id: 20, name: 'zombie', position: { x: 1, y: 64, z: 0 } }]
+    });
+    const waypoints = [{ x: 10, y: 64, z: 0 }];
+    const engine = new MobFarmEngine({ adapter, patrolWaypoints: waypoints, attackCooldownMs: 0 });
+
+    const result = await engine.tick();
+
+    assert.equal(result.action, 'attack');
+  });
 });
 
 describe('SurvivalRoleCoordinator', () => {

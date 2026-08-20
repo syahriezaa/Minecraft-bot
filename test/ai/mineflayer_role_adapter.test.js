@@ -210,6 +210,40 @@ describe('MineflayerRoleAdapter.craftItem - buat item lewat crafting table terde
   });
 });
 
+describe('MineflayerRoleAdapter.setSpawnAtNearestBed - klik bed terdekat untuk set spawn point sebelum mulai bekerja', () => {
+  it('harus mencari bed terdekat, mendekat, lalu klik (activateBlock) - ditemukan dari permintaan nyata pemilik: worker harus klik bed dulu sebelum mulai apapun, supaya kalau proses direstart/logout, bot lanjut dari base (bukan world spawn) - menghindari jalan kaki 300+ blok ulang tiap kali', async () => {
+    const activateCalls = [];
+    const gotoCalls = [];
+    const bedPos = { x: 5, y: 64, z: 5 };
+    const bot = {
+      entity: { position: { x: 0, y: 64, z: 0 } },
+      pathfinder: { goto: async (goal) => { gotoCalls.push(goal); } },
+      findBlock: ({ matching }) => (matching({ name: 'red_bed' }) ? { position: bedPos, name: 'red_bed' } : null),
+      blockAt: () => ({ name: 'red_bed', position: bedPos }),
+      activateBlock: async (block) => { activateCalls.push(block); }
+    };
+    const adapter = new MineflayerRoleAdapter(bot);
+
+    const result = await adapter.setSpawnAtNearestBed();
+
+    assert.equal(result, true);
+    assert.equal(activateCalls.length, 1);
+    assert.equal(gotoCalls.length, 1, 'harus mendekat ke bed dulu sebelum klik');
+  });
+
+  it('kalau tidak ada bed dalam jangkauan, harus mengembalikan false tanpa error - jangan macet menunggu bed yang tidak ada', async () => {
+    const bot = {
+      entity: { position: { x: 0, y: 64, z: 0 } },
+      findBlock: () => null
+    };
+    const adapter = new MineflayerRoleAdapter(bot);
+
+    const result = await adapter.setSpawnAtNearestBed();
+
+    assert.equal(result, false);
+  });
+});
+
 describe('MineflayerRoleAdapter.dig - harus mengambil barang yang jatuh, bukan cuma menggali', () => {
   it('setelah menggali, harus mendekat SAMPAI BENAR-BENAR MENGINJAK posisi blok (range 0) supaya item yang jatuh ke tanah ikut terambil - ditemukan dari kekhawatiran nyata: menggali dari jarak 3 blok (cukup untuk gali) TIDAK cukup dekat untuk memicu pickup otomatis, item bisa tertinggal di tanah', async () => {
     const gotoCalls = [];

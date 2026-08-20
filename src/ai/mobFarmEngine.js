@@ -27,6 +27,12 @@ class MobFarmEngine extends EventEmitter {
       hostileMobs: HOSTILE_MOBS,
       killChamber: null,
       standbyPosition: null,
+      // Titik-titik yang dikelilingi bergantian saat tidak ada ancaman - ditemukan dari keluhan
+      // nyata: penjaga yang cuma diam di satu titik (standbyPosition) jarang sekali ketemu mob,
+      // karena hanya bereaksi kalau mob kebetulan masuk ke bubble scanRadius di titik itu. Kalau
+      // diisi, MENGGANTIKAN standbyPosition (bukan dipakai bersamaan).
+      patrolWaypoints: null,
+      waypointReachRadius: 3,
       retreatPosition: null,
       scanRadius: 16,
       attackRange: 3.6,
@@ -39,6 +45,7 @@ class MobFarmEngine extends EventEmitter {
       ...options
     };
     this.lastAttackAt = 0;
+    this.patrolIndex = 0;
     this.metrics = {
       attacks: 0,
       shieldUses: 0,
@@ -95,6 +102,15 @@ class MobFarmEngine extends EventEmitter {
 
     const target = this.getThreats()[0];
     if (!target) {
+      if (this.options.patrolWaypoints && this.options.patrolWaypoints.length > 0) {
+        const waypoint = this.options.patrolWaypoints[this.patrolIndex % this.options.patrolWaypoints.length];
+        if (distance(this.adapter.getPosition(), waypoint) <= this.options.waypointReachRadius) {
+          this.patrolIndex = (this.patrolIndex + 1) % this.options.patrolWaypoints.length;
+        }
+        const current = this.options.patrolWaypoints[this.patrolIndex % this.options.patrolWaypoints.length];
+        await this.adapter.navigateNear(current, 1);
+        return { action: 'patrol', waypoint: current };
+      }
       if (this.options.standbyPosition) {
         await this.adapter.navigateNear(this.options.standbyPosition, 1);
         return { action: 'standby' };
