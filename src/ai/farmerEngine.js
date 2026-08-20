@@ -67,6 +67,7 @@ class FarmerEngine extends EventEmitter {
     // tidak perlu membuka ulang semua chest di gudang - gudang nyata pemilik bisa berisi puluhan
     // chest (lihat komentar autoMatchStorage), membukanya satu-satu tiap tick jelas mahal.
     this.depositChestCache = new Map();
+    this.plantRotationIndex = 0;
   }
 
   isMatureCrop(block) {
@@ -101,10 +102,15 @@ class FarmerEngine extends EventEmitter {
 
   chooseSeedFor(referenceBlock) {
     if (referenceBlock?.name === 'soul_sand' && this.adapter.hasItem('nether_wart')) return 'nether_wart';
-    for (const rule of Object.values(CROP_RULES)) {
-      if (this.adapter.hasItem(rule.seed)) return rule.seed;
-    }
-    return null;
+    // Bergantian di antara jenis benih yang SUNGGUH tersedia di inventaris - bukan selalu benih
+    // pertama di CROP_RULES (wheat_seeds) - ditemukan dari permintaan nyata pemilik: kebun jadi
+    // seragam wheat semua walau punya benih carrot/potato juga, karena benih pertama yang cocok
+    // selalu dipakai duluan dan wheat_seeds biasanya paling melimpah.
+    const available = Object.values(CROP_RULES).map(rule => rule.seed).filter(seed => this.adapter.hasItem(seed));
+    if (available.length === 0) return null;
+    const seed = available[this.plantRotationIndex % available.length];
+    this.plantRotationIndex++;
+    return seed;
   }
 
   async tick() {
@@ -127,15 +133,21 @@ class FarmerEngine extends EventEmitter {
     }
 
     const spots = this.findPlantingSpots().slice(0, this.options.plantBatchSize);
-    for (const spot of spots) {
-      const seed = this.chooseSeedFor(spot);
-      if (!seed) break;
-      const planted = await this.adapter.placeSeed(spot, seed);
-      if (planted) {
-        this.metrics.planted++;
-        this.emit('planted', { seed, position: spot.position });
-        return { action: 'plant', seed };
+    if (spots.length > 0) {
+      let plantedCount = 0;
+      let lastSeed = null;
+      for (const spot of spots) {
+        const seed = this.chooseSeedFor(spot);
+        if (!seed) break; // kehabisan semua jenis benih - tidak ada lagi yang bisa ditanam
+        const planted = await this.adapter.placeSeed(spot, seed);
+        if (planted) {
+          plantedCount++;
+          lastSeed = seed;
+          this.metrics.planted++;
+          this.emit('planted', { seed, position: spot.position });
+        }
       }
+      if (plantedCount > 0) return { action: 'plant', seed: lastSeed, count: plantedCount };
     }
 
     // Gudang nyata pemilik sudah terorganisir per jenis item (mis. wheat dan carrot masing-masing

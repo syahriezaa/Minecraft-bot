@@ -142,6 +142,24 @@ describe('FarmerEngine', () => {
     assert.equal(adapter.actions[0].type, 'placeSeed');
   });
 
+  it('kalau punya wheat_seeds, carrot, DAN potato sekaligus, harus BERGANTIAN menanam ketiganya di beberapa farmland kosong berurutan - BUKAN selalu wheat_seeds saja - ditemukan dari permintaan nyata pemilik: kebun jadi seragam wheat semua padahal punya bibit carrot/potato juga', async () => {
+    const adapter = new FakeRoleAdapter({
+      items: { wheat_seeds: 10, carrot: 10, potato: 10 },
+      blocks: [
+        { name: 'farmland', position: { x: 1, y: 63, z: 0 } },
+        { name: 'farmland', position: { x: 2, y: 63, z: 0 } },
+        { name: 'farmland', position: { x: 3, y: 63, z: 0 } }
+      ]
+    });
+    const engine = new FarmerEngine({ adapter, plantBatchSize: 3 });
+
+    await engine.tick();
+
+    const seedsPlanted = adapter.actions.filter(a => a.type === 'placeSeed').map(a => a.seed);
+    assert.equal(seedsPlanted.length, 3);
+    assert.deepEqual(new Set(seedsPlanted), new Set(['wheat_seeds', 'carrot', 'potato']), 'harus menanam ketiga jenis, bukan cuma wheat_seeds berulang');
+  });
+
   it('dengan autoMatchStorage aktif, harus menyimpan tiap jenis hasil panen ke chest yang SUDAH berisi jenis yang sama (bukan satu chest tunggal) - ditemukan dari gudang nyata pemilik: wheat dan carrot disimpan terpisah di chest masing-masing, bukan digabung sembarangan', async () => {
     const adapter = new FakeRoleAdapter({
       items: { wheat: 5, carrot: 3 }

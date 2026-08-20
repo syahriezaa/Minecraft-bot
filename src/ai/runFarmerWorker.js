@@ -115,12 +115,21 @@ function startFarmerWorker({ host, port, botName, scanRadius = 32, baseGoal = DE
     lastAction = 'WORKING';
     async function tick() {
       if (stopped) return;
+      // Panen & tanam adalah prioritas UTAMA - beri makan ternak baru dijalankan setelah benar-benar
+      // tidak ada lagi yang perlu dipanen/ditanam tick ini (farmResult 'idle' atau 'deposit'),
+      // bukan diselingi setiap tick tanpa peduli masih ada kerjaan tani yang tertunda.
+      let farmDone = true;
       try {
         const farmResult = await engine.tick();
         if (farmResult.action === 'deposit') log(`Simpan ${farmResult.count} item ke gudang.`);
         if (farmResult.action !== 'idle') lastAction = farmResult.action.toUpperCase();
+        farmDone = farmResult.action === 'idle' || farmResult.action === 'deposit';
       } catch (e) {
         log(`ERROR di tick pertanian (non-fatal, lanjut tick berikutnya): ${e.message}`);
+      }
+      if (!farmDone) {
+        timer = setTimeout(tick, TICK_INTERVAL_MS);
+        return;
       }
       try {
         const animalResult = await animalEngine.tick();
