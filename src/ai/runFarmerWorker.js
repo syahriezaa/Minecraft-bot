@@ -11,7 +11,12 @@
  */
 
 const { patchMineflayerVersionGate } = require('../network/mineflayerVersionPatch');
-const SERVER_VERSION = process.env.MC_VERSION || '26.1.2';
+// Nama env var SENGAJA beda dari MC_VERSION generik - .env proyek ini punya MC_VERSION=1.20.1
+// untuk keperluan LAIN (server dev lokal flying-squid), dan dotenv.config() di webServer.js
+// membuat nilai itu diam-diam menimpa versi server nyata di sini kalau nama env-nya sama (bug
+// nyata: worker yang dimulai lewat dashboard gagal konek - "you are using version 1.20.1" -
+// padahal server sungguhan 26.1.2 - karena webServer.js load .env sebelum modul ini di-require).
+const SERVER_VERSION = process.env.MC_REMOTE_VERSION || '26.1.2';
 patchMineflayerVersionGate(SERVER_VERSION);
 
 const mineflayer = require('mineflayer');
@@ -57,6 +62,7 @@ function startFarmerWorker({ host, port, botName, scanRadius = 32, baseGoal = DE
   let animalEngine = null;
   let stopped = false;
   let timer = null;
+  let lastAction = 'CONNECTING';
 
   bot.once('spawn', async () => {
     bot.loadPlugin(pathfinder);
@@ -99,16 +105,19 @@ function startFarmerWorker({ host, port, botName, scanRadius = 32, baseGoal = DE
     animalEngine.on('culled', ({ type, entity }) => log(`Panen surplus ${type} (id ${entity.id})`));
 
     log('Pekerja pertanian & peternakan mulai bekerja.');
+    lastAction = 'WORKING';
     async function tick() {
       if (stopped) return;
       try {
         const farmResult = await engine.tick();
         if (farmResult.action === 'deposit') log(`Simpan ${farmResult.count} item ke gudang.`);
+        if (farmResult.action !== 'idle') lastAction = farmResult.action.toUpperCase();
       } catch (e) {
         log(`ERROR di tick pertanian (non-fatal, lanjut tick berikutnya): ${e.message}`);
       }
       try {
-        await animalEngine.tick();
+        const animalResult = await animalEngine.tick();
+        if (animalResult.action !== 'idle') lastAction = animalResult.action.toUpperCase();
       } catch (e) {
         log(`ERROR di tick peternakan (non-fatal, lanjut tick berikutnya): ${e.message}`);
       }
@@ -129,6 +138,16 @@ function startFarmerWorker({ host, port, botName, scanRadius = 32, baseGoal = DE
     getMetrics() {
       if (!engine) return null;
       return { farm: engine.metrics, animals: animalEngine ? animalEngine.metrics : null };
+    },
+    // Dipakai panel "Koordinat Armada Live" di dashboard - posisi/kesehatan/aksi terakhir SUNGGUHAN
+    // dari bot ini, bukan data simulasi.
+    getStatus() {
+      return {
+        role: 'Pekerja Tani',
+        position: bot.entity ? { x: bot.entity.position.x, y: bot.entity.position.y, z: bot.entity.position.z } : null,
+        health: bot.health ?? null,
+        status: lastAction
+      };
     }
   };
 }

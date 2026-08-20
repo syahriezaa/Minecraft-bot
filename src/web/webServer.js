@@ -4,6 +4,19 @@
  */
 
 require('dotenv').config();
+
+// HARUS di baris paling atas, sebelum require APAPUN yang bisa menarik 'mineflayer' secara
+// transitif (mis. BenchmarkRunner -> botClient.js -> require('mineflayer')) - lib/loader.js
+// mineflayer men-destructure latestSupportedVersion dari './version' SEKALI saat modul itu
+// PERTAMA di-require (nilainya disalin ke konstanta lokal, bukan referensi hidup), jadi menambal
+// require.cache SETELAH mineflayer sempat ter-require di tempat lain sama sekali tidak berpengaruh
+// - ditemukan dari bug live nyata: worker yang dimulai lewat dashboard tetap gagal konek
+// ("Server version '26.1' is not supported... Latest supported version is '1.21.11'") padahal
+// runFarmerWorker.js sendiri sudah memanggil patch di baris paling atasnya - karena BenchmarkRunner
+// (di-require lebih dulu di file ini) sudah menarik mineflayer duluan.
+const { patchMineflayerVersionGate } = require('../network/mineflayerVersionPatch');
+patchMineflayerVersionGate(process.env.MC_REMOTE_VERSION || '26.1.2');
+
 const express = require('express');
 const cors = require('cors');
 const http = require('http');
@@ -57,52 +70,54 @@ app.get('/api/status', (req, res) => {
   });
 });
 
-// Data koordinat armada live bot
-let swarmBotsList = [
-  { id: 'bot-1', name: 'Swarm_Slayer_01', role: 'Zombie Slayer', x: -31.5, y: 63.0, z: -7.5, target: { x: -256, y: -20, z: -432 }, status: 'NAVIGATING_TO_BASE', health: 20, xp: 45, level: 6 },
-  { id: 'bot-2', name: 'Swarm_Sorter_02', role: 'Chest Sorter', x: -31.5, y: 63.0, z: -8.5, target: { x: -256, y: -20, z: -429 }, status: 'SORTING_STORAGE', health: 20, xp: 0, level: 0 },
-  { id: 'bot-3', name: 'Swarm_Cleaner_03', role: 'Trash Cleaner', x: -30.5, y: 63.0, z: -7.5, target: { x: -259, y: -20, z: -433 }, status: 'MONITORING_LAVA', health: 20, xp: 0, level: 0 },
-  { id: 'bot-4', name: 'Swarm_Miner_04', role: 'Ore Miner', x: -32.5, y: 63.0, z: -7.5, target: { x: -256, y: -20, z: -432 }, status: 'EXPLORING_TUNNELS', health: 20, xp: 30, level: 4 },
-  { id: 'bot-5', name: 'Swarm_Guard_05', role: 'Base Guard', x: -31.5, y: 63.0, z: -6.5, target: { x: -256, y: -20, z: -432 }, status: 'PATROLLING_PERIMETER', health: 20, xp: 20, level: 2 }
-];
+// Koordinat armada SUNGGUHAN - digabung dari seluruh pekerja tani (farmerWorkers) dan penjaga
+// (guardWorkers) yang benar-benar berjalan (lihat handle.getStatus() di runFarmerWorker.js /
+// runGuardWorker.js), BUKAN simulasi. Base sungguhan dipakai untuk hitung jarak (lihat
+// DEFAULT_BASE_GOAL di runFarmerWorker.js/runGuardWorker.js - disamakan di sini).
+const REAL_BASE_POSITION = { x: -185, y: 71, z: -352 };
 
-// Helper kalkulasi jarak 3D ke base
-function calculateDistToBase(bot) {
-  const dx = bot.x - bot.target.x;
-  const dy = bot.y - bot.target.y;
-  const dz = bot.z - bot.target.z;
-  return Number(Math.sqrt(dx*dx + dy*dy + dz*dz).toFixed(1));
+function distance3d(a, b) {
+  if (!a || !b) return null;
+  const dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
+  return Number(Math.sqrt(dx * dx + dy * dy + dz * dz).toFixed(1));
 }
 
-// Simulasi pergerakan mikro real-time untuk visualizer
+function buildRealSwarmList() {
+  const bots = [];
+  for (const [name, handle] of farmerWorkers) {
+    const status = typeof handle.getStatus === 'function' ? handle.getStatus() : null;
+    if (!status?.position) continue;
+    bots.push({
+      id: name, name, role: status.role,
+      x: status.position.x, y: status.position.y, z: status.position.z,
+      status: status.status, health: status.health,
+      distToBase: distance3d(status.position, REAL_BASE_POSITION)
+    });
+  }
+  for (const [name, handle] of guardWorkers) {
+    const status = typeof handle.getStatus === 'function' ? handle.getStatus() : null;
+    if (!status?.position) continue;
+    bots.push({
+      id: name, name, role: status.role,
+      x: status.position.x, y: status.position.y, z: status.position.z,
+      status: status.status, health: status.health,
+      distToBase: distance3d(status.position, REAL_BASE_POSITION)
+    });
+  }
+  return bots;
+}
+
 setInterval(() => {
-  swarmBotsList.forEach(b => {
-    // Pergerakan mikro menuju base
-    const dx = b.target.x - b.x;
-    const dz = b.target.z - b.z;
-    const stepX = (Math.sign(dx) * 0.4) + (Math.random() * 0.1 - 0.05);
-    const stepZ = (Math.sign(dz) * 0.4) + (Math.random() * 0.1 - 0.05);
-    
-    // Perbarui koordinat jika belum tiba
-    if (Math.abs(dx) > 1 || Math.abs(dz) > 1) {
-      b.x = Number((b.x + stepX).toFixed(1));
-      b.z = Number((b.z + stepZ).toFixed(1));
-    }
-    b.distToBase = calculateDistToBase(b);
-  });
-  broadcast({ type: 'SWARM_COORDINATES_UPDATE', data: swarmBotsList });
-}, 1500);
+  broadcast({ type: 'SWARM_COORDINATES_UPDATE', data: buildRealSwarmList() });
+}, 2000);
 
 app.get('/api/swarm/coordinates', (req, res) => {
-  const enriched = swarmBotsList.map(b => ({
-    ...b,
-    distToBase: calculateDistToBase(b)
-  }));
-  res.json({ success: true, data: { server: 'atoms-girl.tun.ply.gg:25565', activeBots: enriched.length, bots: enriched } });
+  const bots = buildRealSwarmList();
+  res.json({ success: true, data: { server: 'atoms-girl.tun.ply.gg:25565', activeBots: bots.length, bots } });
 });
 
 app.get('/api/telemetry', (req, res) => {
-  res.json({ success: true, data: { botStatus, swarmBotsList, lastUpdate: new Date().toISOString() } });
+  res.json({ success: true, data: { botStatus, swarmBotsList: buildRealSwarmList(), lastUpdate: new Date().toISOString() } });
 });
 
 app.get('/api/benchmarks', (req, res) => {

@@ -10,7 +10,10 @@
  */
 
 const { patchMineflayerVersionGate } = require('../network/mineflayerVersionPatch');
-const SERVER_VERSION = process.env.MC_VERSION || '26.1.2';
+// Nama env var SENGAJA beda dari MC_VERSION generik - lihat komentar identik di runFarmerWorker.js
+// (bug nyata: .env proyek ini punya MC_VERSION=1.20.1 untuk server dev lokal lain, diam-diam
+// menimpa versi server nyata di sini kalau nama env-nya sama).
+const SERVER_VERSION = process.env.MC_REMOTE_VERSION || '26.1.2';
 patchMineflayerVersionGate(SERVER_VERSION);
 
 const mineflayer = require('mineflayer');
@@ -48,6 +51,7 @@ function startGuardWorker({ host, port, botName, scanRadius = 16, baseGoal = DEF
   let repairEngine = null;
   let stopped = false;
   let timer = null;
+  let lastAction = 'CONNECTING';
 
   bot.once('spawn', async () => {
     bot.loadPlugin(pathfinder);
@@ -74,10 +78,12 @@ function startGuardWorker({ host, port, botName, scanRadius = 16, baseGoal = DEF
     repairEngine.on('gathered', ({ item, count }) => log(`Ambil ${count}x ${item} dari gudang untuk craft gear.`));
 
     log('Pekerja penjaga mulai berjaga.');
+    lastAction = 'GUARDING';
     async function tick() {
       if (stopped) return;
       try {
         const combatResult = await combatEngine.tick();
+        lastAction = combatResult.action.toUpperCase();
         // Kalau ada ancaman nyata (bukan cuma standby/idle), tangani itu dulu - jangan buang
         // waktu tick ini untuk crafting saat mob sedang mendekat.
         if (!['idle', 'standby'].includes(combatResult.action)) {
@@ -89,7 +95,10 @@ function startGuardWorker({ host, port, botName, scanRadius = 16, baseGoal = DEF
       }
       try {
         const repairResult = await repairEngine.tick();
-        if (repairResult.action !== 'idle') log(`Tick perbaikan: ${repairResult.action}`);
+        if (repairResult.action !== 'idle') {
+          log(`Tick perbaikan: ${repairResult.action}`);
+          lastAction = repairResult.action.toUpperCase();
+        }
       } catch (e) {
         log(`ERROR di tick perbaikan gear (non-fatal, lanjut tick berikutnya): ${e.message}`);
       }
@@ -110,6 +119,14 @@ function startGuardWorker({ host, port, botName, scanRadius = 16, baseGoal = DEF
     getMetrics() {
       if (!combatEngine) return null;
       return { combat: combatEngine.metrics, repair: repairEngine ? repairEngine.metrics : null };
+    },
+    getStatus() {
+      return {
+        role: 'Penjaga',
+        position: bot.entity ? { x: bot.entity.position.x, y: bot.entity.position.y, z: bot.entity.position.z } : null,
+        health: bot.health ?? null,
+        status: lastAction
+      };
     }
   };
 }

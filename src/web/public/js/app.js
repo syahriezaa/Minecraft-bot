@@ -100,10 +100,21 @@
     if (!swarmContainer || !Array.isArray(bots)) return;
     swarmContainer.innerHTML = '';
 
+    const badge = document.getElementById('swarm-live-badge');
+    if (badge) badge.textContent = `${bots.length} BOT AKTIF`;
+
+    if (bots.length === 0) {
+      swarmContainer.innerHTML = '<div class="fleet-empty">Tidak ada bot yang berjalan. Mulai armada tani atau penjaga di bawah.</div>';
+      return;
+    }
+
     bots.forEach(bot => {
       const card = document.createElement('div');
       card.className = 'bot-coord-card';
-      const statusBadgeClass = bot.status.includes('NAVIGATING') ? 'badge-nav' : (bot.status.includes('SORTING') ? 'badge-sort' : 'badge-idle');
+      const s = bot.status || '';
+      const statusBadgeClass = ['ATTACK', 'APPROACH', 'RETREAT'].includes(s) ? 'badge-nav'
+        : ['HARVEST', 'PLANT', 'DEPOSIT', 'FEED', 'REPAIR'].includes(s) ? 'badge-sort'
+        : 'badge-idle';
       
       card.innerHTML = `
         <div class="bot-header">
