@@ -62,7 +62,7 @@
       if (data.success && data.data) {
         addMessage('ai', data.data.message || 'Tidak ada respons');
         if (data.data.toolCalls && data.data.toolCalls.length > 0) {
-          const toolSummary = data.data.toolCalls.map(tc => `🔧 ${tc.name}(${JSON.stringify(tc.arguments)})`).join('\n');
+          const toolSummary = data.data.toolCalls.map(tc => `> ${tc.name}(${JSON.stringify(tc.arguments)})`).join('\n');
           addMessage('system', `Tool calls yang akan dieksekusi:\n${toolSummary}`);
         }
       } else {

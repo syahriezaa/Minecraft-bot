@@ -283,16 +283,17 @@
     const list = document.getElementById('farmer-fleet-list');
     if (!list) return;
     if (!workers || workers.length === 0) {
-      list.innerHTML = '<div style="color:var(--text-sub); font-size:0.9rem;">Tidak ada pekerja tani yang berjalan.</div>';
+      list.innerHTML = '<div class="fleet-empty">Tidak ada pekerja tani yang berjalan.</div>';
       return;
     }
     list.innerHTML = workers.map(w => {
       const farm = w.metrics?.farm || {};
       const animals = w.metrics?.animals || {};
       return `
-        <div style="display:flex; align-items:center; justify-content:space-between; padding:8px 12px; background:rgba(46,139,87,0.1); border-radius:8px;">
-          <span><strong>${w.botName}</strong> — panen: ${farm.harvested || 0}, tanam: ${farm.planted || 0}, simpan: ${farm.deposited || 0}, beri makan: ${animals.fed || 0}</span>
-          <button class="btn btn-action" data-stop-bot="${w.botName}" style="padding:4px 10px; font-size:0.85rem;">Hentikan</button>
+        <div class="fleet-row">
+          <span class="fleet-row-name">${w.botName}</span>
+          <span class="fleet-row-stats">panen <b>${farm.harvested || 0}</b> · tanam <b>${farm.planted || 0}</b> · simpan <b>${farm.deposited || 0}</b> · beri makan <b>${animals.fed || 0}</b></span>
+          <button class="btn btn-fleet-stop-one" data-stop-bot="${w.botName}">Hentikan</button>
         </div>`;
     }).join('');
     list.querySelectorAll('[data-stop-bot]').forEach(btn => {

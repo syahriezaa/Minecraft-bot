@@ -3,22 +3,20 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <meta name="description" content="Dashboard AI Companion Minecraft — Kontrol Browser Penuh, Navigasi Otonom, Multi-Instance Swarm, dan DeepSeek AI">
-  <title>🧠 AI Companion Minecraft — Dashboard & Browser Controller</title>
+  <meta name="description" content="Konsol operasi untuk agen otonom Minecraft — navigasi, armada pekerja tani, dan kendali langsung.">
+  <title>Konsol Operasi — Companion Minecraft</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
   <!-- Header -->
   <header id="app-header">
     <div class="header-content">
-      <h1>🧠 AI Companion Minecraft — Browser Controller</h1>
-      <div style="display:flex; align-items:center; gap:16px;">
-        <div class="connection-status" id="connection-status">
-          <span class="status-dot" id="status-dot"></span>
-          <span id="status-text">Menghubungkan...</span>
-        </div>
+      <h1>Konsol Operasi <span class="header-tag">— Companion Minecraft</span></h1>
+      <div class="connection-status" id="connection-status">
+        <span class="status-dot" id="status-dot"></span>
+        <span id="status-text">Menghubungkan...</span>
       </div>
     </div>
   </header>
@@ -27,7 +25,7 @@
     <!-- Baris 1: Status Bot + Metrik Real-Time -->
     <section class="row">
       <div class="card" id="bot-status-card">
-        <h2>📍 Status Karakter / Bot</h2>
+        <h2>Status Bot</h2>
         <div class="stat-grid">
           <div class="stat-item">
             <span class="stat-label">Posisi X</span>
@@ -57,7 +55,7 @@
       </div>
 
       <div class="card" id="metrics-card">
-        <h2>📊 Metrik Operasi Otonom</h2>
+        <h2>Metrik Operasi Otonom</h2>
         <div class="stat-grid">
           <div class="stat-item highlight">
             <span class="stat-label">Total Uji</span>
@@ -78,12 +76,13 @@
         </div>
       </div>
     </section>
+
     <!-- Baris 1.5: Panel Koordinat Real-Time Seluruh Bot Armada (Live Swarm) -->
     <section class="row">
       <div class="card full-width" id="swarm-coordinates-card">
         <div class="card-header-flex">
-          <h2>🤖 Koordinat Real-Time Armada Bot Live (atoms-girl.tun.ply.gg)</h2>
-          <span class="badge live-badge">🟢 5 Bot Aktif di Server</span>
+          <h2>Koordinat Armada Live — atoms-girl.tun.ply.gg</h2>
+          <span class="badge live-badge">5 BOT AKTIF</span>
         </div>
         <div class="swarm-grid" id="swarm-bots-container">
           <!-- Kartu bot di-render otomatis secara real-time via JavaScript -->
@@ -94,35 +93,35 @@
     <!-- Baris 2: Panel Kontrol Langsung dari Browser -->
     <section class="row">
       <div class="card full-width" id="direct-action-panel">
-        <h2>🎮 Panel Kontrol Aksi Langsung (Klik untuk Menjalankan)</h2>
+        <h2>Kontrol Aksi Langsung</h2>
         <div class="benchmark-controls action-grid">
           <button class="btn btn-action btn-farm" id="btn-action-farm">
-            <span class="btn-icon">⚔️</span>
-            <span class="btn-text">Bantai Zombie & XP<br><small>Menuju Spawner [-256,-20,-432]</small></span>
+            <span class="btn-icon"></span>
+            <span class="btn-text">Bantai Zombie & XP<br><small>Menuju spawner [-256,-20,-432]</small></span>
           </button>
           <button class="btn btn-action btn-sort" id="btn-action-sort">
-            <span class="btn-icon">📦</span>
-            <span class="btn-text">Sortir 4 Unit Peti<br><small>Weapons, Drops, Armor, Trash</small></span>
+            <span class="btn-icon"></span>
+            <span class="btn-text">Sortir 4 Unit Peti<br><small>Weapons, drops, armor, trash</small></span>
           </button>
           <button class="btn btn-action btn-trash" id="btn-action-trash">
-            <span class="btn-icon">🔥</span>
-            <span class="btn-text">Bakar Sampah ke Lava<br><small>Perimeter Aman 2.0m</small></span>
+            <span class="btn-icon"></span>
+            <span class="btn-text">Bakar Sampah ke Lava<br><small>Perimeter aman 2.0m</small></span>
           </button>
           <button class="btn btn-action btn-walk" id="btn-action-walk">
-            <span class="btn-icon">🚶</span>
-            <span class="btn-text">Auto Walk / Maju<br><small>Eksplorasi Voxel Terbuka</small></span>
+            <span class="btn-icon"></span>
+            <span class="btn-text">Auto Walk / Maju<br><small>Eksplorasi voxel terbuka</small></span>
           </button>
           <button class="btn btn-action btn-fleet" id="btn-action-fleet">
-            <span class="btn-icon">🤖</span>
-            <span class="btn-text">Multi-Instance Fleet<br><small>Jalankan 3 Bot Simultan</small></span>
+            <span class="btn-icon"></span>
+            <span class="btn-text">Multi-Instance Fleet<br><small>Jalankan 3 bot simultan</small></span>
           </button>
-          <button class="btn btn-action btn-live-swarm" id="btn-action-live-swarm" style="background:#5B52E6;color:#fff;">
-            <span class="btn-icon">🌐</span>
-            <span class="btn-text">Swarm ke Live Server<br><small>Gabung atoms-girl (2 Bot)</small></span>
+          <button class="btn btn-action btn-live-swarm" id="btn-action-live-swarm">
+            <span class="btn-icon"></span>
+            <span class="btn-text">Swarm ke Live Server<br><small>Gabung atoms-girl (2 bot)</small></span>
           </button>
           <button class="btn btn-action btn-stop" id="btn-action-stop">
-            <span class="btn-icon">⏹️</span>
-            <span class="btn-text">Emergency Stop<br><small>Hentikan Semua Aksi</small></span>
+            <span class="btn-icon"></span>
+            <span class="btn-text">Emergency Stop<br><small>Hentikan semua aksi</small></span>
           </button>
         </div>
       </div>
@@ -131,46 +130,39 @@
     <!-- Armada Pekerja Tani - bisa banyak bot sekaligus, tiap bot bisa dihentikan sendiri-sendiri -->
     <section class="row">
       <div class="card full-width" id="farmer-fleet-panel">
-        <h2>🌾 Armada Pekerja Tani (Panen, Tanam, Simpan, Beri Makan Ternak)</h2>
-        <div class="benchmark-controls" style="align-items:center; gap:12px; flex-wrap:wrap;">
-          <label for="farmer-fleet-count" style="color:var(--text-sub);">Jumlah bot:</label>
-          <input type="number" id="farmer-fleet-count" min="1" max="10" value="1" style="width:60px; padding:6px; border-radius:6px; border:1px solid var(--border, #444); background:transparent; color:inherit;">
-          <button class="btn btn-action" id="btn-farmer-fleet-start" style="background:#2E8B57;color:#fff;">
-            <span class="btn-icon">🌾</span>
-            <span class="btn-text">Mulai Armada</span>
-          </button>
-          <button class="btn btn-action" id="btn-farmer-fleet-stop-all">
-            <span class="btn-icon">🛑</span>
-            <span class="btn-text">Hentikan Semua</span>
-          </button>
+        <h2>Armada Pekerja Tani — panen, tanam, simpan, beri makan ternak</h2>
+        <div class="fleet-controls">
+          <label for="farmer-fleet-count">Jumlah bot</label>
+          <input type="number" id="farmer-fleet-count" class="fleet-count-input" min="1" max="10" value="1">
+          <button class="btn btn-fleet-start" id="btn-farmer-fleet-start">Mulai Armada</button>
+          <button class="btn btn-fleet-stop-all" id="btn-farmer-fleet-stop-all">Hentikan Semua</button>
         </div>
-        <div id="farmer-fleet-list" style="margin-top:14px; display:flex; flex-direction:column; gap:8px;"></div>
+        <div id="farmer-fleet-list"></div>
       </div>
     </section>
 
     <!-- Baris 3: Panel Benchmark Kurikulum -->
     <section class="row">
       <div class="card full-width" id="benchmark-panel">
-        <h2>🏟️ Panel Uji Kurikulum Bertingkat (Benchmark Level 1–4)</h2>
+        <h2>Uji Kurikulum Bertingkat — Level 1–4</h2>
         <div class="benchmark-controls">
           <button class="btn btn-level" data-level="1" id="btn-level-1">
-            <span class="btn-icon">🟢</span>
-            <span class="btn-text">Level 1<br><small>Medan Datar (30m)</small></span>
+            <span class="btn-icon"></span>
+            <span class="btn-text">Level 1<br><small>Medan datar (30m)</small></span>
           </button>
           <button class="btn btn-level" data-level="2" id="btn-level-2">
-            <span class="btn-icon">🟡</span>
-            <span class="btn-text">Level 2<br><small>Rintangan & Elevasi</small></span>
+            <span class="btn-icon"></span>
+            <span class="btn-text">Level 2<br><small>Rintangan & elevasi</small></span>
           </button>
           <button class="btn btn-level" data-level="3" id="btn-level-3">
-            <span class="btn-icon">🟠</span>
-            <span class="btn-text">Level 3<br><small>Tangga & Jembatan</small></span>
+            <span class="btn-icon"></span>
+            <span class="btn-text">Level 3<br><small>Tangga & jembatan</small></span>
           </button>
           <button class="btn btn-level" data-level="4" id="btn-level-4">
-            <span class="btn-icon">🔴</span>
-            <span class="btn-text">Level 4<br><small>Farm Spawner Bawah Tanah</small></span>
+            <span class="btn-icon"></span>
+            <span class="btn-text">Level 4<br><small>Farm spawner bawah tanah</small></span>
           </button>
           <button class="btn btn-all" id="btn-all-levels">
-            <span class="btn-icon">⚡</span>
             <span class="btn-text">Jalankan Semua<br><small>Level 1 → 4</small></span>
           </button>
         </div>
@@ -184,12 +176,12 @@
     <!-- Baris 4: Visualizer Peta 2D (Click-to-Move) + Terminal Log -->
     <section class="row">
       <div class="card" id="visualizer-card">
-        <h2>🗺️ Visualizer Peta 2D Real-Time (Klik Peta untuk Menggerakkan Bot)</h2>
+        <h2>Peta 2D Real-Time — klik untuk menggerakkan bot</h2>
         <canvas id="path-canvas" width="500" height="360"></canvas>
       </div>
 
       <div class="card" id="terminal-card">
-        <h2>📜 Konsol Audit Pergerakan & Aksi</h2>
+        <h2>Konsol Audit Pergerakan & Aksi</h2>
         <div class="terminal" id="terminal-logs">
           <div class="terminal-line system">[ Sistem ] Dashboard siap. Menunggu perintah dari browser...</div>
         </div>
@@ -199,7 +191,7 @@
     <!-- Baris 5: AI Chat Terminal -->
     <section class="row">
       <div class="card full-width" id="ai-chat-card">
-        <h2>🤖 Terminal DeepSeek AI (Ketik Perintah Bahasa Indonesia)</h2>
+        <h2>Terminal DeepSeek AI</h2>
         <div class="chat-container" id="chat-container">
           <div class="chat-message system">
             <span class="chat-role">Sistem</span>
@@ -216,7 +208,7 @@
     <!-- Baris 6: Hasil Benchmark -->
     <section class="row">
       <div class="card full-width" id="results-card">
-        <h2>📋 Riwayat Hasil Operasi & Database PostgreSQL</h2>
+        <h2>Riwayat Operasi — Database PostgreSQL</h2>
         <div class="results-table-container">
           <table id="results-table">
             <thead>

@@ -58,11 +58,11 @@ app.get('/api/status', (req, res) => {
 
 // Data koordinat armada live bot
 let swarmBotsList = [
-  { id: 'bot-1', name: 'Swarm_Slayer_01', role: '⚔️ Zombie Slayer', x: -31.5, y: 63.0, z: -7.5, target: { x: -256, y: -20, z: -432 }, status: 'NAVIGATING_TO_BASE', health: 20, xp: 45, level: 6 },
-  { id: 'bot-2', name: 'Swarm_Sorter_02', role: '📦 Chest Sorter', x: -31.5, y: 63.0, z: -8.5, target: { x: -256, y: -20, z: -429 }, status: 'SORTING_STORAGE', health: 20, xp: 0, level: 0 },
-  { id: 'bot-3', name: 'Swarm_Cleaner_03', role: '🔥 Trash Cleaner', x: -30.5, y: 63.0, z: -7.5, target: { x: -259, y: -20, z: -433 }, status: 'MONITORING_LAVA', health: 20, xp: 0, level: 0 },
-  { id: 'bot-4', name: 'Swarm_Miner_04', role: '⛏️ Ore Miner', x: -32.5, y: 63.0, z: -7.5, target: { x: -256, y: -20, z: -432 }, status: 'EXPLORING_TUNNELS', health: 20, xp: 30, level: 4 },
-  { id: 'bot-5', name: 'Swarm_Guard_05', role: '🛡️ Base Guard', x: -31.5, y: 63.0, z: -6.5, target: { x: -256, y: -20, z: -432 }, status: 'PATROLLING_PERIMETER', health: 20, xp: 20, level: 2 }
+  { id: 'bot-1', name: 'Swarm_Slayer_01', role: 'Zombie Slayer', x: -31.5, y: 63.0, z: -7.5, target: { x: -256, y: -20, z: -432 }, status: 'NAVIGATING_TO_BASE', health: 20, xp: 45, level: 6 },
+  { id: 'bot-2', name: 'Swarm_Sorter_02', role: 'Chest Sorter', x: -31.5, y: 63.0, z: -8.5, target: { x: -256, y: -20, z: -429 }, status: 'SORTING_STORAGE', health: 20, xp: 0, level: 0 },
+  { id: 'bot-3', name: 'Swarm_Cleaner_03', role: 'Trash Cleaner', x: -30.5, y: 63.0, z: -7.5, target: { x: -259, y: -20, z: -433 }, status: 'MONITORING_LAVA', health: 20, xp: 0, level: 0 },
+  { id: 'bot-4', name: 'Swarm_Miner_04', role: 'Ore Miner', x: -32.5, y: 63.0, z: -7.5, target: { x: -256, y: -20, z: -432 }, status: 'EXPLORING_TUNNELS', health: 20, xp: 30, level: 4 },
+  { id: 'bot-5', name: 'Swarm_Guard_05', role: 'Base Guard', x: -31.5, y: 63.0, z: -6.5, target: { x: -256, y: -20, z: -432 }, status: 'PATROLLING_PERIMETER', health: 20, xp: 20, level: 2 }
 ];
 
 // Helper kalkulasi jarak 3D ke base
@@ -345,7 +345,7 @@ setInterval(() => {
 
 const PORT = process.env.PORT || 8080;
 server.listen(PORT, () => {
-  console.log(`\n🧠 AI Companion Minecraft Dashboard`);
+  console.log(`\nKonsol Operasi — Companion Minecraft`);
   console.log(`   Server HTTP  : http://localhost:${PORT}`);
   console.log(`   WebSocket    : ws://localhost:${PORT}`);
   console.log(`   Status       : Aktif & Siap\n`);
