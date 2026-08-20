@@ -328,16 +328,36 @@ class MineflayerRoleAdapter {
     return true;
   }
 
-  async depositToChest(pos, predicate = () => true) {
+  // maxPerItem (opsional): { namaItem: jumlahCadangan } - sisakan sejumlah itu di inventaris,
+  // cuma setor SISA di atasnya. Dipakai FarmerEngine supaya benih (carrot/potato/wheat_seeds dst -
+  // item yang sama dipakai baik sebagai hasil panen MAUPUN benih tanam) tidak habis disetor semua
+  // ke gudang sebelum kebun benar-benar selesai ditanami - ditemukan dari permintaan nyata pemilik.
+  async depositToChest(pos, predicate = () => true, maxPerItem = {}) {
     const chest = await this.openChestAt(pos);
     if (!chest) return { deposited: 0 };
     let deposited = 0;
+    const depositedSoFar = new Map();
     try {
       for (const item of this.getInventoryItems()) {
         if (!predicate(item)) continue;
+        const reserve = maxPerItem[item.name];
+        let amount = item.count || 1;
+        if (reserve !== undefined) {
+          const already = depositedSoFar.get(item.name) || 0;
+          // Anggap semua stack item ini sejauh ini (di stack-stack sebelumnya) sudah "dihitung"
+          // menuju cadangan - sisakan cadangan dari stack PERTAMA yang cukup, setor penuh sisanya.
+          const totalOfThisItem = this.getInventoryItems()
+            .filter((i) => i.name === item.name)
+            .reduce((s, i) => s + (i.count || 1), 0);
+          const totalAllowedToDeposit = Math.max(0, totalOfThisItem - reserve);
+          const remainingAllowance = Math.max(0, totalAllowedToDeposit - already);
+          amount = Math.min(amount, remainingAllowance);
+          if (amount <= 0) continue;
+        }
         if (typeof chest.deposit === 'function') {
-          await chest.deposit(item.type, item.metadata ?? null, item.count || 1);
-          deposited += item.count || 1;
+          await chest.deposit(item.type, item.metadata ?? null, amount);
+          deposited += amount;
+          depositedSoFar.set(item.name, (depositedSoFar.get(item.name) || 0) + amount);
         }
       }
     } finally {

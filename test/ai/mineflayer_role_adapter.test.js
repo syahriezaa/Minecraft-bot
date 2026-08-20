@@ -268,6 +268,72 @@ describe('MineflayerRoleAdapter.attack - harus tulis paket attack LANGSUNG, buka
   });
 });
 
+describe('MineflayerRoleAdapter.depositToChest - dukung batas maksimum per jenis item (sisakan cadangan)', () => {
+  function fakeChestForDeposit() {
+    const depositCalls = [];
+    return {
+      window: {
+        containerItems: () => [],
+        deposit: async (type, metadata, count) => { depositCalls.push({ type, metadata, count }); },
+        close: () => {}
+      },
+      depositCalls
+    };
+  }
+
+  it('tanpa maxPerItem, harus menyetor SELURUH jumlah stack seperti biasa (kompatibel mundur)', async () => {
+    const { window, depositCalls } = fakeChestForDeposit();
+    const bot = {
+      entity: { position: { x: 0, y: 64, z: 0 } },
+      pathfinder: { goto: async () => {} },
+      blockAt: () => ({ name: 'chest', position: { x: 1, y: 64, z: 1 } }),
+      openChest: async () => window,
+      inventory: { items: () => [{ name: 'wheat', type: 5, count: 10 }] }
+    };
+    const adapter = new MineflayerRoleAdapter(bot);
+
+    const result = await adapter.depositToChest({ x: 1, y: 64, z: 1 }, () => true);
+
+    assert.equal(depositCalls[0].count, 10);
+    assert.equal(result.deposited, 10);
+  });
+
+  it('dengan maxPerItem diset untuk suatu nama item, HANYA setor sisa DI ATAS batas itu - sisakan cadangan di inventaris untuk ditanam lagi nanti, ditemukan dari permintaan nyata pemilik: jangan setor semua benih ke gudang sebelum kebun benar-benar selesai ditanami, nanti kehabisan benih untuk tanam berikutnya', async () => {
+    const { window, depositCalls } = fakeChestForDeposit();
+    const bot = {
+      entity: { position: { x: 0, y: 64, z: 0 } },
+      pathfinder: { goto: async () => {} },
+      blockAt: () => ({ name: 'chest', position: { x: 1, y: 64, z: 1 } }),
+      openChest: async () => window,
+      inventory: { items: () => [{ name: 'carrot', type: 7, count: 20 }] }
+    };
+    const adapter = new MineflayerRoleAdapter(bot);
+
+    const result = await adapter.depositToChest({ x: 1, y: 64, z: 1 }, () => true, { carrot: 8 });
+
+    assert.equal(depositCalls.length, 1);
+    assert.equal(depositCalls[0].count, 12, 'harus setor 20-8=12, sisakan 8 sebagai cadangan benih');
+    assert.equal(result.deposited, 12);
+  });
+
+  it('kalau jumlah item TIDAK melebihi cadangan di maxPerItem, TIDAK BOLEH menyetor sama sekali item itu', async () => {
+    const { window, depositCalls } = fakeChestForDeposit();
+    const bot = {
+      entity: { position: { x: 0, y: 64, z: 0 } },
+      pathfinder: { goto: async () => {} },
+      blockAt: () => ({ name: 'chest', position: { x: 1, y: 64, z: 1 } }),
+      openChest: async () => window,
+      inventory: { items: () => [{ name: 'potato', type: 9, count: 5 }] }
+    };
+    const adapter = new MineflayerRoleAdapter(bot);
+
+    const result = await adapter.depositToChest({ x: 1, y: 64, z: 1 }, () => true, { potato: 8 });
+
+    assert.equal(depositCalls.length, 0);
+    assert.equal(result.deposited, 0);
+  });
+});
+
 describe('MineflayerRoleAdapter.dig - harus mengambil barang yang jatuh, bukan cuma menggali', () => {
   it('setelah menggali, harus mendekat SAMPAI BENAR-BENAR MENGINJAK posisi blok (range 0) supaya item yang jatuh ke tanah ikut terambil - ditemukan dari kekhawatiran nyata: menggali dari jarak 3 blok (cukup untuk gali) TIDAK cukup dekat untuk memicu pickup otomatis, item bisa tertinggal di tanah', async () => {
     const gotoCalls = [];

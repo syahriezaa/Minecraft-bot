@@ -54,6 +54,12 @@ class FarmerEngine extends EventEmitter {
       depositChest: null,
       autoMatchStorage: false,
       depositWhenSlotsFreeBelow: 4,
+      // Sisakan sejumlah ini di inventaris untuk item yang JUGA dipakai sebagai benih (carrot,
+      // potato - item hasil panen yang sama persis dipakai lagi untuk menanam) sebelum menyetor
+      // sisanya ke gudang - jangan sampai kehabisan benih untuk tanam berikutnya karena sudah
+      // disetor semua. Item yang benihnya BEDA (mis. wheat, benihnya wheat_seeds) bebas disetor
+      // penuh tanpa batas.
+      seedReserve: 32,
       autoEatFoodThreshold: 14,
       ...options
     };
@@ -166,7 +172,9 @@ class FarmerEngine extends EventEmitter {
           if (chestPos) this.depositChestCache.set(name, chestPos);
         }
         if (!chestPos) continue;
-        const result = await this.adapter.depositToChest(chestPos, item => item.name === name);
+        const isSeedItem = Object.values(CROP_RULES).some(rule => rule.seed === name);
+        const maxPerItem = isSeedItem ? { [name]: this.options.seedReserve } : {};
+        const result = await this.adapter.depositToChest(chestPos, item => item.name === name, maxPerItem);
         totalDeposited += result.deposited || 0;
       }
       this.metrics.deposited += totalDeposited;

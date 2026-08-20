@@ -74,10 +74,16 @@ class FakeRoleAdapter {
     this.actions.push({ type: 'shield' });
     return true;
   }
-  async depositToChest(pos, predicate = () => true) {
+  async depositToChest(pos, predicate = () => true, maxPerItem = {}) {
     const matched = this.getInventoryItems().filter(predicate);
-    this.actions.push({ type: 'deposit', position: pos, items: matched.map((i) => i.name) });
-    return { deposited: matched.reduce((s, i) => s + (i.count || 1), 0) };
+    this.actions.push({ type: 'deposit', position: pos, items: matched.map((i) => i.name), maxPerItem });
+    let deposited = 0;
+    for (const item of matched) {
+      const reserve = maxPerItem[item.name];
+      const amount = reserve !== undefined ? Math.max(0, (item.count || 1) - reserve) : (item.count || 1);
+      deposited += amount;
+    }
+    return { deposited };
   }
   getInventoryItems() {
     return Array.from(this.items.entries()).map(([name, count]) => ({ name, count }));
@@ -191,6 +197,22 @@ describe('FarmerEngine', () => {
     const deposits = adapter.actions.filter((a) => a.type === 'deposit');
     assert.equal(deposits.length, 0, 'tidak boleh ada deposit sama sekali kalau tidak ada chest yang cocok');
     assert.equal(result.action, 'idle');
+  });
+
+  it('dengan autoMatchStorage aktif, item yang JUGA dipakai sebagai benih (carrot/potato/wheat_seeds dst) harus disetor dengan cadangan tersisa (seedReserve) - JANGAN disetor habis sebelum kebun selesai ditanami, ditemukan dari permintaan nyata pemilik: jangan sampai kehabisan benih untuk tanam berikutnya karena sudah disetor semua ke gudang', async () => {
+    const adapter = new FakeRoleAdapter({ items: { carrot: 20, wheat: 15 } }); // wheat BUKAN benih (benihnya wheat_seeds, beda item) - bebas disetor penuh
+    adapter.chests = [
+      { position: { x: 0, y: 64, z: 0 }, contents: ['carrot'] },
+      { position: { x: 1, y: 64, z: 0 }, contents: ['wheat'] }
+    ];
+    const engine = new FarmerEngine({ adapter, autoMatchStorage: true, seedReserve: 8 });
+
+    await engine.tick();
+
+    const carrotDeposit = adapter.actions.find((a) => a.type === 'deposit' && a.items.includes('carrot'));
+    const wheatDeposit = adapter.actions.find((a) => a.type === 'deposit' && a.items.includes('wheat'));
+    assert.deepEqual(carrotDeposit.maxPerItem, { carrot: 8 }, 'carrot adalah benih (juga jadi bibit sendiri) - harus dibatasi cadangan');
+    assert.deepEqual(wheatDeposit.maxPerItem, {}, 'wheat bukan benih (benihnya wheat_seeds, item beda) - bebas disetor penuh tanpa batas');
   });
 });
 
