@@ -222,26 +222,35 @@ class StorageManagerEngine extends EventEmitter {
       // barang yang MEMANG punya assignment jelas yang dipindah - kalau belum ada info rumah yang
       // benar, jangan tebak (itu justru penyebab bug sortir tercampur sebelumnya).
       const hereKey = canonicalKeyFor(nextToInspect, insideChests);
-      const misplaced = items.find((it) => {
+      const misplacedItems = items.filter((it) => {
         const assignedKey = this.chestAssignments.get(it.name);
         if (!assignedKey) return false;
         return canonicalKeyFor(parseKey(assignedKey), insideChests) !== hereKey;
       });
 
-      if (misplaced) {
+      if (misplacedItems.length > 0) {
+        // Ambil SEMUA item salah tempat di chest ini dalam SATU kunjungan (bukan satu per
+        // kunjungan) - ditemukan dari keluhan nyata pemilik ("banyak yang tidak sesuai"): dengan
+        // satu item per kunjungan, membersihkan chest berisi puluhan barang salah tempat butuh
+        // puluhan tick bolak-balik (kalah prioritas sama deliver/collect tiap kali), progresnya
+        // jadi sangat lambat. Bot sudah berdiri di sini - sekalian ambil semuanya.
         await this.adapter.navigateNear(westOf(nextToInspect), 1);
-        const result = await this.adapter.withdrawFromChest(nextToInspect, [misplaced.name], misplaced.count);
-        this.metrics.reorganized += result.withdrawn;
-        this.emit('misplaced', {
-          position: nextToInspect,
-          item: misplaced.name,
-          count: result.withdrawn,
-          correctPosition: parseKey(this.chestAssignments.get(misplaced.name))
-        });
-        // JANGAN tandai chest ini "sudah diperiksa" - mungkin masih ada item salah tempat lain di
-        // chest yang sama, akan dicek ulang di tick berikutnya setelah barang ini benar-benar
-        // diantar (via jalur deliver biasa, karena sekarang sudah ada di tangan/inventaris).
-        return { action: 'reorganize', position: nextToInspect, item: misplaced.name, count: result.withdrawn };
+        const relocated = [];
+        for (const item of misplacedItems) {
+          const result = await this.adapter.withdrawFromChest(nextToInspect, [item.name], item.count);
+          if (result.withdrawn <= 0) continue;
+          this.metrics.reorganized += result.withdrawn;
+          relocated.push({ name: item.name, count: result.withdrawn });
+          this.emit('misplaced', {
+            position: nextToInspect,
+            item: item.name,
+            count: result.withdrawn,
+            correctPosition: parseKey(this.chestAssignments.get(item.name))
+          });
+        }
+        // JANGAN tandai chest ini "sudah diperiksa" - periksa ulang tick berikutnya untuk
+        // memastikan benar-benar bersih (mis. kalau ada stack lain dari jenis yang sama).
+        return { action: 'reorganize', position: nextToInspect, items: relocated, count: relocated.reduce((s, i) => s + i.count, 0) };
       }
 
       await this.adapter.navigateNear(westOf(nextToInspect), 1);

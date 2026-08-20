@@ -327,8 +327,9 @@ describe('StorageManagerEngine', () => {
     const result = await engine.tick();
 
     assert.equal(result.action, 'reorganize');
-    assert.equal(result.item, 'iron_ingot');
-    assert.equal(result.count, 8);
+    assert.equal(result.items.length, 1);
+    assert.equal(result.items[0].name, 'iron_ingot');
+    assert.equal(result.items[0].count, 8);
     assert.ok(!wrongChest.items.some((i) => i.name === 'iron_ingot'), 'iron_ingot harus SUDAH DIAMBIL dari chest yang salah');
 
     // Tick berikutnya: item yang baru diambil sudah di tangan, harus diantar ke chest yang BENAR
@@ -338,6 +339,48 @@ describe('StorageManagerEngine', () => {
     assert.equal(second.deliveries[0].position.x, -185);
     assert.equal(second.deliveries[0].count, 8);
     assert.ok(oreChest.items.some((i) => i.name === 'iron_ingot' && i.count === 8), 'iron_ingot harus SUDAH SAMPAI di chest yang benar');
+  });
+
+  it('kalau SATU chest berisi BEBERAPA jenis item yang salah tempat sekaligus, harus ambil SEMUANYA dalam SATU kali kunjungan (bukan satu jenis per kunjungan) - ditemukan dari keluhan nyata pemilik ("banyak yang tidak sesuai"): dengan cuma satu item per kunjungan, membersihkan chest yang berisi puluhan barang salah tempat butuh puluhan tick bolak-balik (kalah prioritas sama deliver/collect tiap kali), jadi progresnya sangat lambat', async () => {
+    const messyChest = {
+      position: { x: -183, y: 71, z: -350 },
+      items: [
+        { name: 'enchanted_book', count: 3 },
+        { name: 'iron_ingot', count: 8 },
+        { name: 'dirt', count: 20 },
+        { name: 'cobblestone', count: 10 }
+      ]
+    };
+    const bookChest = { position: { x: -185, y: 71, z: -350 }, items: [] };
+    const oreChest = { position: { x: -187, y: 71, z: -350 }, items: [] };
+    const dirtChest = { position: { x: -189, y: 71, z: -350 }, items: [] };
+    const adapter = new FakeStorageAdapter({
+      chests: {
+        '-183,71,-350': messyChest,
+        '-185,71,-350': bookChest,
+        '-187,71,-350': oreChest,
+        '-189,71,-350': dirtChest
+      }
+    });
+    const engine = new StorageManagerEngine({
+      adapter,
+      houseBounds: HOUSE_BOUNDS,
+      initialAssignments: {
+        enchanted_book: '-185,71,-350',
+        iron_ingot: '-187,71,-350',
+        dirt: '-189,71,-350'
+        // cobblestone SENGAJA tidak punya assignment - harus DIBIARKAN (tidak ada info rumah yang benar).
+      }
+    });
+
+    const result = await engine.tick();
+
+    assert.equal(result.action, 'reorganize');
+    assert.equal(result.items.length, 3, 'harus ambil SEMUA 3 jenis yang punya assignment jelas dalam satu kunjungan (bukan cuma 1)');
+    const names = result.items.map((i) => i.name).sort();
+    assert.deepEqual(names, ['dirt', 'enchanted_book', 'iron_ingot']);
+    assert.ok(messyChest.items.some((i) => i.name === 'cobblestone'), 'cobblestone TIDAK BOLEH ikut diambil - tidak ada assignment jelas untuk itu');
+    assert.ok(!messyChest.items.some((i) => i.name === 'enchanted_book' || i.name === 'iron_ingot' || i.name === 'dirt'), 'ketiga item yang punya assignment harus SUDAH terambil semua');
   });
 
   it('chest yang isinya SUDAH sesuai assignment (tidak ada yang salah tempat) harus diperiksa normal (inspect), bukan dianggap perlu dipindah', async () => {
