@@ -79,6 +79,43 @@ const CANONICAL_ORE_INGOT_ASSIGNMENTS = {
   gold_nugget: RAW_ORE_CHEST,
   crying_obsidian: RAW_ORE_CHEST
 };
+
+// Reorganisasi lanjutan (atas persetujuan pemilik): 4 chest di y71 sebelumnya jadi tempat sampah
+// campuran (armor, senjata, buku, makanan tercampur acak dengan bahan mentah lain). Dipetakan
+// ulang jadi satu kategori jelas per chest, dipilih dari chest yang SUDAH paling dominan berisi
+// kategori itu (supaya perpindahan minimal) - bukan slot baru, cuma menata ulang 4 slot yang sama.
+const BOOKS_CHEST = '-181,71,-350';
+const ARMOR_CHEST = '-181,71,-345';
+const WEAPONS_CHEST = '-181,71,-347';
+const FOOD_CHEST = '-181,71,-349';
+const CANONICAL_GEAR_ASSIGNMENTS = {
+  enchanted_book: BOOKS_CHEST,
+  book: BOOKS_CHEST,
+  bookshelf: BOOKS_CHEST,
+  writable_book: BOOKS_CHEST,
+  written_book: BOOKS_CHEST,
+  knowledge_book: BOOKS_CHEST,
+
+  leather_helmet: ARMOR_CHEST, leather_chestplate: ARMOR_CHEST, leather_leggings: ARMOR_CHEST, leather_boots: ARMOR_CHEST,
+  golden_helmet: ARMOR_CHEST, golden_chestplate: ARMOR_CHEST, golden_leggings: ARMOR_CHEST, golden_boots: ARMOR_CHEST,
+  iron_helmet: ARMOR_CHEST, iron_chestplate: ARMOR_CHEST, iron_leggings: ARMOR_CHEST, iron_boots: ARMOR_CHEST,
+  diamond_helmet: ARMOR_CHEST, diamond_chestplate: ARMOR_CHEST, diamond_leggings: ARMOR_CHEST, diamond_boots: ARMOR_CHEST,
+  netherite_helmet: ARMOR_CHEST, netherite_chestplate: ARMOR_CHEST, netherite_leggings: ARMOR_CHEST, netherite_boots: ARMOR_CHEST,
+  chainmail_helmet: ARMOR_CHEST, chainmail_chestplate: ARMOR_CHEST, chainmail_leggings: ARMOR_CHEST, chainmail_boots: ARMOR_CHEST,
+  turtle_helmet: ARMOR_CHEST, shield: ARMOR_CHEST,
+  iron_horse_armor: ARMOR_CHEST, golden_horse_armor: ARMOR_CHEST, diamond_horse_armor: ARMOR_CHEST, leather_horse_armor: ARMOR_CHEST,
+  elytra: ARMOR_CHEST,
+
+  wooden_sword: WEAPONS_CHEST, stone_sword: WEAPONS_CHEST, golden_sword: WEAPONS_CHEST, iron_sword: WEAPONS_CHEST, diamond_sword: WEAPONS_CHEST, netherite_sword: WEAPONS_CHEST,
+  bow: WEAPONS_CHEST, crossbow: WEAPONS_CHEST, trident: WEAPONS_CHEST, arrow: WEAPONS_CHEST, spectral_arrow: WEAPONS_CHEST, tipped_arrow: WEAPONS_CHEST,
+
+  cooked_chicken: FOOD_CHEST, chicken: FOOD_CHEST, cooked_beef: FOOD_CHEST, beef: FOOD_CHEST,
+  cooked_porkchop: FOOD_CHEST, porkchop: FOOD_CHEST, mutton: FOOD_CHEST, cooked_mutton: FOOD_CHEST,
+  baked_potato: FOOD_CHEST, bread: FOOD_CHEST, apple: FOOD_CHEST, golden_apple: FOOD_CHEST,
+  enchanted_golden_apple: FOOD_CHEST, cooked_salmon: FOOD_CHEST, salmon: FOOD_CHEST, cooked_cod: FOOD_CHEST,
+  cod: FOOD_CHEST, cake: FOOD_CHEST, cookie: FOOD_CHEST, pumpkin_pie: FOOD_CHEST, egg: FOOD_CHEST
+};
+
 const DEFAULT_BASE_GOAL = { x: -185, y: 71, z: -352 };
 // Ruang penyimpanan di dalam rumah - dipakai StorageManagerEngine untuk membedakan chest gudang
 // (tujuan pengantaran/rapi-rapi) dari chest lain di luar rumah (sumber koleksi). Perkiraan awal di
@@ -138,9 +175,9 @@ function startStorageWorker({ host, port, botName, scanRadius = 48, baseGoal = D
     const bedResult = await adapter.setSpawnAtNearestBed();
     log(bedResult ? 'Spawn point diset di bed dekat base.' : 'Tidak ada bed dalam jangkauan - spawn point tidak diubah.');
 
-    const initialAssignments = { ...loadAssignments(log), ...CANONICAL_ORE_INGOT_ASSIGNMENTS };
+    const initialAssignments = { ...loadAssignments(log), ...CANONICAL_ORE_INGOT_ASSIGNMENTS, ...CANONICAL_GEAR_ASSIGNMENTS };
     if (Object.keys(initialAssignments).length > 0) {
-      log(`Muat memori sortir gudang: ${Object.keys(initialAssignments).length} jenis item sudah punya chest langganan (termasuk rumah baku ore/ingot).`);
+      log(`Muat memori sortir gudang: ${Object.keys(initialAssignments).length} jenis item sudah punya chest langganan (termasuk rumah baku ore/ingot dan gear/makanan/buku).`);
     }
     engine = new StorageManagerEngine({ adapter, scanRadius, houseBounds, initialAssignments });
     engine.on('collected', ({ position, count }) => log(`Ambil ${count} item dari chest luar di (${position.x},${position.y},${position.z})`));
