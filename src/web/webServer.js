@@ -26,6 +26,7 @@ const { BenchmarkRunner } = require('../benchmark/benchmarkRunner');
 const { DeepSeekClient } = require('../ai/deepseekClient');
 const { startFarmerWorker } = require('../ai/runFarmerWorker');
 const { startGuardWorker } = require('../ai/runGuardWorker');
+const { startRancherWorker } = require('../ai/runRancherWorker');
 
 const app = express();
 const server = http.createServer(app);
@@ -84,25 +85,20 @@ function distance3d(a, b) {
 
 function buildRealSwarmList() {
   const bots = [];
-  for (const [name, handle] of farmerWorkers) {
-    const status = typeof handle.getStatus === 'function' ? handle.getStatus() : null;
-    if (!status?.position) continue;
-    bots.push({
-      id: name, name, role: status.role,
-      x: status.position.x, y: status.position.y, z: status.position.z,
-      status: status.status, health: status.health,
-      distToBase: distance3d(status.position, REAL_BASE_POSITION)
-    });
-  }
-  for (const [name, handle] of guardWorkers) {
-    const status = typeof handle.getStatus === 'function' ? handle.getStatus() : null;
-    if (!status?.position) continue;
-    bots.push({
-      id: name, name, role: status.role,
-      x: status.position.x, y: status.position.y, z: status.position.z,
-      status: status.status, health: status.health,
-      distToBase: distance3d(status.position, REAL_BASE_POSITION)
-    });
+  // rancherWorkers dideklarasikan lebih bawah di file ini (const) - aman diakses di sini karena
+  // fungsi ini cuma benar-benar DIPANGGIL belakangan (lewat setInterval/endpoint), bukan saat baris
+  // ini pertama dieksekusi.
+  for (const workerMap of [farmerWorkers, guardWorkers, rancherWorkers]) {
+    for (const [name, handle] of workerMap) {
+      const status = typeof handle.getStatus === 'function' ? handle.getStatus() : null;
+      if (!status?.position) continue;
+      bots.push({
+        id: name, name, role: status.role,
+        x: status.position.x, y: status.position.y, z: status.position.z,
+        status: status.status, health: status.health,
+        distToBase: distance3d(status.position, REAL_BASE_POSITION)
+      });
+    }
   }
   return bots;
 }
@@ -399,6 +395,72 @@ app.get('/api/guard/status', (req, res) => {
       running: guardWorkers.size > 0,
       count: guardWorkers.size,
       workers: Array.from(guardWorkers.entries()).map(([name, handle]) => ({
+        botName: name,
+        metrics: handle.getMetrics()
+      }))
+    }
+  });
+});
+
+// Pekerja peternakan otonom (lihat runRancherWorker.js) - beri makan ternak, dipisah dari pekerja
+// tani atas permintaan pemilik. Sama pola armada seperti farmerWorkers/guardWorkers di atas.
+const rancherWorkers = new Map(); // botName -> handle
+
+app.post('/api/rancher/start', (req, res) => {
+  const { host, port, botName, scanRadius } = req.body || {};
+  const name = botName || 'RancherWorker';
+  if (rancherWorkers.has(name)) {
+    return res.status(409).json({ success: false, error: { code: 'ALREADY_RUNNING', message: `Peternak '${name}' sudah berjalan` } });
+  }
+  broadcast({ type: 'AI_ACTION_EVENT', data: { task: 'RANCHER_WORKER', step: `Memulai peternak '${name}'...`, status: 'RUNNING' } });
+
+  const handle = startRancherWorker({
+    host: host || 'atoms-girl.tun.ply.gg',
+    port: port || 25565,
+    botName: name,
+    scanRadius: scanRadius || 24,
+    log: (msg) => broadcast({ type: 'AI_ACTION_EVENT', data: { task: 'RANCHER_WORKER', step: `[${name}] ${msg}`, status: 'RUNNING' } }),
+    onDisconnect: () => {
+      rancherWorkers.delete(name);
+      broadcast({ type: 'AI_ACTION_EVENT', data: { task: 'RANCHER_WORKER', step: `[${name}] Koneksi terputus - dihapus dari daftar armada.`, status: 'STOPPED' } });
+    }
+  });
+  rancherWorkers.set(name, handle);
+
+  res.json({ success: true, data: { message: `Peternak '${name}' dimulai` } });
+});
+
+app.post('/api/rancher/stop', (req, res) => {
+  const { botName } = req.body || {};
+  if (!botName) {
+    const count = rancherWorkers.size;
+    if (count === 0) {
+      return res.status(409).json({ success: false, error: { code: 'NOT_RUNNING', message: 'Tidak ada peternak yang berjalan' } });
+    }
+    for (const [name, handle] of rancherWorkers) {
+      handle.stop();
+      broadcast({ type: 'AI_ACTION_EVENT', data: { task: 'RANCHER_WORKER', step: `[${name}] Dihentikan dari dashboard.`, status: 'STOPPED' } });
+    }
+    rancherWorkers.clear();
+    return res.json({ success: true, data: { message: `${count} peternak dihentikan` } });
+  }
+  const handle = rancherWorkers.get(botName);
+  if (!handle) {
+    return res.status(409).json({ success: false, error: { code: 'NOT_RUNNING', message: `Peternak '${botName}' tidak ditemukan` } });
+  }
+  handle.stop();
+  rancherWorkers.delete(botName);
+  broadcast({ type: 'AI_ACTION_EVENT', data: { task: 'RANCHER_WORKER', step: `[${botName}] Dihentikan dari dashboard.`, status: 'STOPPED' } });
+  res.json({ success: true, data: { message: `Peternak '${botName}' dihentikan` } });
+});
+
+app.get('/api/rancher/status', (req, res) => {
+  res.json({
+    success: true,
+    data: {
+      running: rancherWorkers.size > 0,
+      count: rancherWorkers.size,
+      workers: Array.from(rancherWorkers.entries()).map(([name, handle]) => ({
         botName: name,
         metrics: handle.getMetrics()
       }))

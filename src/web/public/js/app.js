@@ -349,8 +349,7 @@
     emptyText: 'Tidak ada pekerja tani yang berjalan.',
     statsRenderer: (m) => {
       const farm = m.farm || {};
-      const animals = m.animals || {};
-      return `panen <b>${farm.harvested || 0}</b> · tanam <b>${farm.planted || 0}</b> · simpan <b>${farm.deposited || 0}</b> · beri makan <b>${animals.fed || 0}</b>`;
+      return `panen <b>${farm.harvested || 0}</b> · tanam <b>${farm.planted || 0}</b> · simpan <b>${farm.deposited || 0}</b>`;
     }
   });
 
@@ -368,6 +367,22 @@
       const combat = m.combat || {};
       const repair = m.repair || {};
       return `serang <b>${combat.attacks || 0}</b> · perbaikan <b>${repair.repaired || 0}</b> · besi diambil <b>${repair.gathered || 0}</b>`;
+    }
+  });
+
+  createFleetController({
+    apiPrefix: 'rancher',
+    label: 'peternak',
+    listElId: 'rancher-fleet-list',
+    countElId: 'rancher-fleet-count',
+    startBtnId: 'btn-rancher-fleet-start',
+    stopAllBtnId: 'btn-rancher-fleet-stop-all',
+    defaultName: 'RancherWorker',
+    namePrefix: 'Rancher',
+    emptyText: 'Tidak ada peternak yang berjalan.',
+    statsRenderer: (m) => {
+      const animals = m.animals || {};
+      return `beri makan <b>${animals.fed || 0}</b> · panen surplus <b>${animals.culled || 0}</b>`;
     }
   });
 

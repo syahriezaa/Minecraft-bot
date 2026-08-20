@@ -155,6 +155,20 @@
       </div>
     </section>
 
+    <!-- Armada Peternak - beri makan ternak, dipisah dari pekerja tani -->
+    <section class="row">
+      <div class="card full-width" id="rancher-fleet-panel">
+        <h2>Armada Peternak — beri makan & panen surplus ternak</h2>
+        <div class="fleet-controls">
+          <label for="rancher-fleet-count">Jumlah bot</label>
+          <input type="number" id="rancher-fleet-count" class="fleet-count-input" min="1" max="10" value="1">
+          <button class="btn btn-fleet-start" id="btn-rancher-fleet-start">Mulai Armada</button>
+          <button class="btn btn-fleet-stop-all" id="btn-rancher-fleet-stop-all">Hentikan Semua</button>
+        </div>
+        <div id="rancher-fleet-list"></div>
+      </div>
+    </section>
+
     <!-- Baris 3: Panel Benchmark Kurikulum -->
     <section class="row">
       <div class="card full-width" id="benchmark-panel">

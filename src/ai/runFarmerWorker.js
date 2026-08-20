@@ -1,11 +1,11 @@
 /**
  * @file runFarmerWorker.js
- * @description Pekerja pertanian+peternakan otonom: panen crop matang, tanam ulang benih, simpan
- * hasil panen ke chest gudang yang SUDAH berisi jenis item yang sama (lihat autoMatchStorage di
- * farmerEngine.js), dan beri makan hewan ternak (sapi, kambing, ayam, dst - lihat ANIMAL_RULES di
- * animalHusbandryEngine.js) supaya terus breeding. Dibangun di atas mineflayer + mineflayer-
- * pathfinder langsung (sama seperti walkToBase.js), BUKAN pipeline A-star/voxel kustom yang sudah
- * dihapus sesi ini.
+ * @description Pekerja pertanian otonom: panen crop matang, tanam ulang benih (bergantian antar
+ * jenis - lihat chooseSeedFor di farmerEngine.js), simpan hasil panen ke chest gudang yang SUDAH
+ * berisi jenis item yang sama (autoMatchStorage). Peternakan (beri makan ternak) DIPISAH ke worker
+ * sendiri (runRancherWorker.js) atas permintaan pemilik - supaya tidak bersaing rebutan waktu tick
+ * dengan panen/tanam. Dibangun di atas mineflayer + mineflayer-pathfinder langsung (sama seperti
+ * walkToBase.js), BUKAN pipeline A-star/voxel kustom yang sudah dihapus sesi ini.
  *
  * Aturan Tim: Semua komentar, log, dan pesan error ditulis dalam Bahasa Indonesia.
  */
@@ -22,8 +22,7 @@ patchMineflayerVersionGate(SERVER_VERSION);
 const mineflayer = require('mineflayer');
 const { pathfinder, Movements } = require('mineflayer-pathfinder');
 const { MineflayerRoleAdapter } = require('./mineflayerRoleAdapter');
-const { FarmerEngine } = require('./farmerEngine');
-const { AnimalHusbandryEngine } = require('./animalHusbandryEngine');
+const { FarmerEngine, CROP_RULES } = require('./farmerEngine');
 const { walkToBase } = require('./walkToBase');
 
 const TICK_INTERVAL_MS = Number(process.env.FARMER_TICK_MS) || 2000;
@@ -31,13 +30,13 @@ const TICK_INTERVAL_MS = Number(process.env.FARMER_TICK_MS) || 2000;
 // ternyata area peternakan villager, bukan base). FarmerEngine cuma menyisir dalam scanRadius dari
 // posisi bot SEKARANG - kalau bot dengan identitas BARU (belum pernah login, atau logout jauh dari
 // base) mulai bekerja, dia diam saja karena tidak ada apa-apa dalam jangkauan di posisi spawn/world
-// spawn. Jalan ke base dulu SEBELUM mulai tick pertanian/peternakan, apapun posisi awalnya.
+// spawn. Jalan ke base dulu SEBELUM mulai tick pertanian, apapun posisi awalnya.
 const DEFAULT_BASE_GOAL = { x: -185, y: 71, z: -352 };
 // Area peternakan villager, ditemukan live sesi ini (beds di sekitar -181..-185,64,-330..-331,
 // crop di ~-190,63,-327 dan -188,64,-326) - sebagian terhalang tembok kandang, dan berada dalam
 // scanRadius default dari base sehingga terus-menerus menarik bot ke sana untuk mencoba mencapai
-// target yang kadang tak terjangkau. Dikecualikan sama sekali dari pertimbangan farm/animal engine
-// (lihat avoidArea) - pemilik minta bot jangan pernah ke sana lagi.
+// target yang kadang tak terjangkau. Dikecualikan sama sekali dari pertimbangan farm engine (lihat
+// avoidArea) - pemilik minta bot jangan pernah ke sana lagi.
 const DEFAULT_AVOID_AREA = { min: { x: -200, y: 0, z: -337 }, max: { x: -170, y: 100, z: -318 } };
 
 function buildMovements(bot) {
@@ -47,6 +46,23 @@ function buildMovements(bot) {
   movements.allowParkour = true;
   movements.allowSprinting = true;
   return movements;
+}
+
+// Kalau stok benih di inventaris cuma satu jenis (mis. cuma wheat_seeds, sisa kebun sebelumnya
+// selalu didominasi wheat) - kebun jadi seragam wheat terus walau ada carrot/potato yang mestinya
+// bisa ditanam, KARENA jenis lain itu tidak pernah masuk inventaris sama sekali (crop lain harus
+// dipanen dulu dari lapangan untuk dapat benihnya, dan kalau lapangannya sendiri didominasi wheat,
+// bot tidak pernah kebagian benih carrot/potato). Ambil sedikit dari gudang (kalau ada stok di sana
+// dari panen sebelumnya) supaya rotasi tanam benar-benar punya variasi untuk dipilih.
+async function restockSeedVarietyFromStorage(adapter, log) {
+  const seedNames = Object.values(CROP_RULES).map((rule) => rule.seed);
+  for (const seedName of seedNames) {
+    if (adapter.hasItem(seedName)) continue; // sudah punya, tidak perlu restock jenis ini
+    const chestPos = await adapter.findMatchingChest([seedName]);
+    if (!chestPos) continue; // tidak ada stok di gudang untuk jenis ini - lewati
+    const result = await adapter.withdrawFromChest(chestPos, [seedName], 16);
+    if (result.withdrawn > 0) log(`Ambil ${result.withdrawn}x ${seedName} dari gudang untuk variasi tanam.`);
+  }
 }
 
 function startFarmerWorker({ host, port, botName, scanRadius = 32, baseGoal = DEFAULT_BASE_GOAL, avoidArea = DEFAULT_AVOID_AREA, log = (m) => console.log(m), onDisconnect = () => {} }) {
@@ -59,7 +75,6 @@ function startFarmerWorker({ host, port, botName, scanRadius = 32, baseGoal = DE
   });
 
   let engine = null;
-  let animalEngine = null;
   let stopped = false;
   let timer = null;
   let lastAction = 'CONNECTING';
@@ -70,10 +85,6 @@ function startFarmerWorker({ host, port, botName, scanRadius = 32, baseGoal = DE
     bot.pathfinder.thinkTimeout = 20000;
     log(`Spawn di (${bot.entity.position.x.toFixed(1)}, ${bot.entity.position.y.toFixed(1)}, ${bot.entity.position.z.toFixed(1)}) - menunggu chunk sekitar ter-load...`);
 
-    // Jalan ke base DULU sebelum mulai bekerja - identitas bot baru (belum pernah login) atau yang
-    // logout jauh dari base akan diam saja kalau langsung mulai tick (tidak ada crop/hewan dalam
-    // jangkauan scanRadius di posisi spawn). Kalau sudah berada dekat base (mis. logout terakhir di
-    // sana), walkToBase akan langsung selesai cepat (goal sudah tercapai).
     const walkResult = await walkToBase({ bot, goal: baseGoal, range: 4, settleMs: 5000, log });
     if (!walkResult.success) {
       log(`PERINGATAN: gagal berjalan ke base (${walkResult.reason}) - tetap mulai bekerja di posisi sekarang, mungkin tidak menemukan apa-apa.`);
@@ -86,6 +97,8 @@ function startFarmerWorker({ host, port, botName, scanRadius = 32, baseGoal = DE
     // setiap kali (masalah nyata yang berulang kali muncul sesi ini).
     const bedResult = await adapter.setSpawnAtNearestBed();
     log(bedResult ? 'Spawn point diset di bed dekat base.' : 'Tidak ada bed dalam jangkauan - spawn point tidak diubah.');
+
+    await restockSeedVarietyFromStorage(adapter, log);
 
     engine = new FarmerEngine({
       adapter,
@@ -107,35 +120,16 @@ function startFarmerWorker({ host, port, botName, scanRadius = 32, baseGoal = DE
     });
     engine.on('planted', ({ seed, position }) => log(`Tanam ${seed} di (${position.x},${position.y},${position.z})`));
 
-    animalEngine = new AnimalHusbandryEngine({ adapter, scanRadius, avoidArea });
-    animalEngine.on('fed', ({ type, entity }) => log(`Beri makan ${type} (id ${entity.id})`));
-    animalEngine.on('culled', ({ type, entity }) => log(`Panen surplus ${type} (id ${entity.id})`));
-
-    log('Pekerja pertanian & peternakan mulai bekerja.');
+    log('Pekerja pertanian mulai bekerja.');
     lastAction = 'WORKING';
     async function tick() {
       if (stopped) return;
-      // Panen & tanam adalah prioritas UTAMA - beri makan ternak baru dijalankan setelah benar-benar
-      // tidak ada lagi yang perlu dipanen/ditanam tick ini (farmResult 'idle' atau 'deposit'),
-      // bukan diselingi setiap tick tanpa peduli masih ada kerjaan tani yang tertunda.
-      let farmDone = true;
       try {
         const farmResult = await engine.tick();
         if (farmResult.action === 'deposit') log(`Simpan ${farmResult.count} item ke gudang.`);
         if (farmResult.action !== 'idle') lastAction = farmResult.action.toUpperCase();
-        farmDone = farmResult.action === 'idle' || farmResult.action === 'deposit';
       } catch (e) {
         log(`ERROR di tick pertanian (non-fatal, lanjut tick berikutnya): ${e.message}`);
-      }
-      if (!farmDone) {
-        timer = setTimeout(tick, TICK_INTERVAL_MS);
-        return;
-      }
-      try {
-        const animalResult = await animalEngine.tick();
-        if (animalResult.action !== 'idle') lastAction = animalResult.action.toUpperCase();
-      } catch (e) {
-        log(`ERROR di tick peternakan (non-fatal, lanjut tick berikutnya): ${e.message}`);
       }
       timer = setTimeout(tick, TICK_INTERVAL_MS);
     }
@@ -165,7 +159,7 @@ function startFarmerWorker({ host, port, botName, scanRadius = 32, baseGoal = DE
     },
     getMetrics() {
       if (!engine) return null;
-      return { farm: engine.metrics, animals: animalEngine ? animalEngine.metrics : null };
+      return { farm: engine.metrics };
     },
     // Dipakai panel "Koordinat Armada Live" di dashboard - posisi/kesehatan/aksi terakhir SUNGGUHAN
     // dari bot ini, bukan data simulasi.
