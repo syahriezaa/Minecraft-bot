@@ -262,23 +262,73 @@
     }).catch(e => addTerminalLog(`[ Error ] ${e.message}`, 'error'));
   });
 
-  document.getElementById('btn-action-farmer-start')?.addEventListener('click', () => {
-    addTerminalLog('[ Browser Control ] Memulai pekerja pertanian+peternakan...', 'warning');
-    fetch('/api/farmer/start', {
+  // ── Armada Pekerja Tani (banyak bot sekaligus) ──────────
+  function farmerStart(botName) {
+    return fetch('/api/farmer/start', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({})
-    }).then(r => r.json()).then(data => {
-      addTerminalLog(`[ Respon Server ] ${data.data?.message || data.error?.message || 'Pekerja tani dimulai'}`, 'system');
-    }).catch(e => addTerminalLog(`[ Error ] ${e.message}`, 'error'));
+      body: JSON.stringify({ botName })
+    }).then(r => r.json());
+  }
+
+  function farmerStop(botName) {
+    return fetch('/api/farmer/stop', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(botName ? { botName } : {})
+    }).then(r => r.json());
+  }
+
+  function renderFarmerFleet(workers) {
+    const list = document.getElementById('farmer-fleet-list');
+    if (!list) return;
+    if (!workers || workers.length === 0) {
+      list.innerHTML = '<div style="color:var(--text-sub); font-size:0.9rem;">Tidak ada pekerja tani yang berjalan.</div>';
+      return;
+    }
+    list.innerHTML = workers.map(w => {
+      const farm = w.metrics?.farm || {};
+      const animals = w.metrics?.animals || {};
+      return `
+        <div style="display:flex; align-items:center; justify-content:space-between; padding:8px 12px; background:rgba(46,139,87,0.1); border-radius:8px;">
+          <span><strong>${w.botName}</strong> — panen: ${farm.harvested || 0}, tanam: ${farm.planted || 0}, simpan: ${farm.deposited || 0}, beri makan: ${animals.fed || 0}</span>
+          <button class="btn btn-action" data-stop-bot="${w.botName}" style="padding:4px 10px; font-size:0.85rem;">Hentikan</button>
+        </div>`;
+    }).join('');
+    list.querySelectorAll('[data-stop-bot]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const name = btn.dataset.stopBot;
+        addTerminalLog(`[ Browser Control ] Menghentikan pekerja tani '${name}'...`, 'warning');
+        farmerStop(name).then(data => addTerminalLog(`[ Respon Server ] ${data.data?.message || data.error?.message}`, 'system'));
+      });
+    });
+  }
+
+  function pollFarmerStatus() {
+    fetch('/api/farmer/status').then(r => r.json()).then(data => renderFarmerFleet(data.data?.workers)).catch(() => {});
+  }
+
+  document.getElementById('btn-farmer-fleet-start')?.addEventListener('click', async () => {
+    const count = Math.max(1, Math.min(10, Number(document.getElementById('farmer-fleet-count')?.value) || 1));
+    addTerminalLog(`[ Browser Control ] Memulai armada ${count} pekerja tani...`, 'warning');
+    for (let i = 1; i <= count; i++) {
+      const name = count === 1 ? 'FarmerWorker' : `Farmer${i}`;
+      const data = await farmerStart(name);
+      addTerminalLog(`[ Respon Server ] ${data.data?.message || data.error?.message}`, 'system');
+    }
+    pollFarmerStatus();
   });
 
-  document.getElementById('btn-action-farmer-stop')?.addEventListener('click', () => {
-    addTerminalLog('[ Browser Control ] Menghentikan pekerja pertanian...', 'warning');
-    fetch('/api/farmer/stop', { method: 'POST' }).then(r => r.json()).then(data => {
-      addTerminalLog(`[ Respon Server ] ${data.data?.message || data.error?.message || 'Pekerja tani dihentikan'}`, 'system');
-    }).catch(e => addTerminalLog(`[ Error ] ${e.message}`, 'error'));
+  document.getElementById('btn-farmer-fleet-stop-all')?.addEventListener('click', () => {
+    addTerminalLog('[ Browser Control ] Menghentikan seluruh armada pekerja tani...', 'warning');
+    farmerStop(null).then(data => {
+      addTerminalLog(`[ Respon Server ] ${data.data?.message || data.error?.message}`, 'system');
+      pollFarmerStatus();
+    });
   });
+
+  pollFarmerStatus();
+  setInterval(pollFarmerStatus, 5000);
 
   // ── Benchmark Button Handlers ───────────────────────────
   document.querySelectorAll('.btn-level').forEach(btn => {

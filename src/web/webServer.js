@@ -253,44 +253,66 @@ app.post('/api/ai/chat', async (req, res) => {
   }
 });
 
-// Pekerja pertanian+peternakan otonom (lihat runFarmerWorker.js) - satu instance saja pada satu
-// waktu, dikontrol lewat dashboard (tombol Mulai/Hentikan di panel kontrol).
-let farmerWorkerHandle = null;
+// Pekerja pertanian+peternakan otonom (lihat runFarmerWorker.js) - BISA banyak instance sekaligus
+// (armada), masing-masing punya nama bot Minecraft sendiri (unik, dipakai sebagai key Map ini).
+// Dikontrol lewat dashboard (panel "Armada Pekerja Tani").
+const farmerWorkers = new Map(); // botName -> handle
 
 app.post('/api/farmer/start', (req, res) => {
-  if (farmerWorkerHandle) {
-    return res.status(409).json({ success: false, error: { code: 'ALREADY_RUNNING', message: 'Pekerja pertanian sudah berjalan' } });
-  }
   const { host, port, botName, scanRadius } = req.body || {};
-  broadcast({ type: 'AI_ACTION_EVENT', data: { task: 'FARMER_WORKER', step: 'Memulai pekerja pertanian+peternakan...', status: 'RUNNING' } });
+  const name = botName || 'FarmerWorker';
+  if (farmerWorkers.has(name)) {
+    return res.status(409).json({ success: false, error: { code: 'ALREADY_RUNNING', message: `Pekerja tani '${name}' sudah berjalan` } });
+  }
+  broadcast({ type: 'AI_ACTION_EVENT', data: { task: 'FARMER_WORKER', step: `Memulai pekerja pertanian+peternakan '${name}'...`, status: 'RUNNING' } });
 
-  farmerWorkerHandle = startFarmerWorker({
+  const handle = startFarmerWorker({
     host: host || 'atoms-girl.tun.ply.gg',
     port: port || 25565,
-    botName: botName || 'FarmerWorker',
+    botName: name,
     scanRadius: scanRadius || 32,
-    log: (msg) => broadcast({ type: 'AI_ACTION_EVENT', data: { task: 'FARMER_WORKER', step: msg, status: 'RUNNING' } })
+    log: (msg) => broadcast({ type: 'AI_ACTION_EVENT', data: { task: 'FARMER_WORKER', step: `[${name}] ${msg}`, status: 'RUNNING' } })
   });
+  farmerWorkers.set(name, handle);
 
-  res.json({ success: true, data: { message: 'Pekerja pertanian+peternakan dimulai' } });
+  res.json({ success: true, data: { message: `Pekerja tani '${name}' dimulai` } });
 });
 
 app.post('/api/farmer/stop', (req, res) => {
-  if (!farmerWorkerHandle) {
-    return res.status(409).json({ success: false, error: { code: 'NOT_RUNNING', message: 'Tidak ada pekerja pertanian yang berjalan' } });
+  const { botName } = req.body || {};
+  if (!botName) {
+    // Tanpa botName: hentikan SEMUA pekerja tani yang sedang berjalan (tombol "Hentikan Semua").
+    const count = farmerWorkers.size;
+    if (count === 0) {
+      return res.status(409).json({ success: false, error: { code: 'NOT_RUNNING', message: 'Tidak ada pekerja pertanian yang berjalan' } });
+    }
+    for (const [name, handle] of farmerWorkers) {
+      handle.stop();
+      broadcast({ type: 'AI_ACTION_EVENT', data: { task: 'FARMER_WORKER', step: `[${name}] Dihentikan dari dashboard.`, status: 'STOPPED' } });
+    }
+    farmerWorkers.clear();
+    return res.json({ success: true, data: { message: `${count} pekerja tani dihentikan` } });
   }
-  farmerWorkerHandle.stop();
-  farmerWorkerHandle = null;
-  broadcast({ type: 'AI_ACTION_EVENT', data: { task: 'FARMER_WORKER', step: 'Pekerja pertanian dihentikan dari dashboard.', status: 'STOPPED' } });
-  res.json({ success: true, data: { message: 'Pekerja pertanian dihentikan' } });
+  const handle = farmerWorkers.get(botName);
+  if (!handle) {
+    return res.status(409).json({ success: false, error: { code: 'NOT_RUNNING', message: `Pekerja tani '${botName}' tidak ditemukan` } });
+  }
+  handle.stop();
+  farmerWorkers.delete(botName);
+  broadcast({ type: 'AI_ACTION_EVENT', data: { task: 'FARMER_WORKER', step: `[${botName}] Dihentikan dari dashboard.`, status: 'STOPPED' } });
+  res.json({ success: true, data: { message: `Pekerja tani '${botName}' dihentikan` } });
 });
 
 app.get('/api/farmer/status', (req, res) => {
   res.json({
     success: true,
     data: {
-      running: Boolean(farmerWorkerHandle),
-      metrics: farmerWorkerHandle ? farmerWorkerHandle.getMetrics() : null
+      running: farmerWorkers.size > 0,
+      count: farmerWorkers.size,
+      workers: Array.from(farmerWorkers.entries()).map(([name, handle]) => ({
+        botName: name,
+        metrics: handle.getMetrics()
+      }))
     }
   });
 });

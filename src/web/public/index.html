@@ -120,19 +120,31 @@
             <span class="btn-icon">🌐</span>
             <span class="btn-text">Swarm ke Live Server<br><small>Gabung atoms-girl (2 Bot)</small></span>
           </button>
-          <button class="btn btn-action btn-farmer-start" id="btn-action-farmer-start" style="background:#2E8B57;color:#fff;">
-            <span class="btn-icon">🌾</span>
-            <span class="btn-text">Mulai Pekerja Tani<br><small>Panen, Tanam, Simpan, Beri Makan Ternak</small></span>
-          </button>
-          <button class="btn btn-action btn-farmer-stop" id="btn-action-farmer-stop">
-            <span class="btn-icon">🛑</span>
-            <span class="btn-text">Hentikan Pekerja Tani<br><small>Berhenti dari tugas pertanian</small></span>
-          </button>
           <button class="btn btn-action btn-stop" id="btn-action-stop">
             <span class="btn-icon">⏹️</span>
             <span class="btn-text">Emergency Stop<br><small>Hentikan Semua Aksi</small></span>
           </button>
         </div>
+      </div>
+    </section>
+
+    <!-- Armada Pekerja Tani - bisa banyak bot sekaligus, tiap bot bisa dihentikan sendiri-sendiri -->
+    <section class="row">
+      <div class="card full-width" id="farmer-fleet-panel">
+        <h2>🌾 Armada Pekerja Tani (Panen, Tanam, Simpan, Beri Makan Ternak)</h2>
+        <div class="benchmark-controls" style="align-items:center; gap:12px; flex-wrap:wrap;">
+          <label for="farmer-fleet-count" style="color:var(--text-sub);">Jumlah bot:</label>
+          <input type="number" id="farmer-fleet-count" min="1" max="10" value="1" style="width:60px; padding:6px; border-radius:6px; border:1px solid var(--border, #444); background:transparent; color:inherit;">
+          <button class="btn btn-action" id="btn-farmer-fleet-start" style="background:#2E8B57;color:#fff;">
+            <span class="btn-icon">🌾</span>
+            <span class="btn-text">Mulai Armada</span>
+          </button>
+          <button class="btn btn-action" id="btn-farmer-fleet-stop-all">
+            <span class="btn-icon">🛑</span>
+            <span class="btn-text">Hentikan Semua</span>
+          </button>
+        </div>
+        <div id="farmer-fleet-list" style="margin-top:14px; display:flex; flex-direction:column; gap:8px;"></div>
       </div>
     </section>
 
