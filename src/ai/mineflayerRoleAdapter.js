@@ -196,10 +196,24 @@ class MineflayerRoleAdapter {
   }
 
   async attack(entity) {
-    if (!entity || typeof this.bot?.attack !== 'function') return false;
+    if (!entity) return false;
     await this.lookAt(entity.position);
-    this.bot.attack(entity);
-    return true;
+    // bot.attack() bawaan mineflayer masih memanggil useEntity() internal, yang menulis paket
+    // use_entity skema LAMA (field "mouse", tanpa field "location" wajib) - crash yang sama persis
+    // dengan bug useOn() yang sudah ditemukan sebelumnya, tapi lewat jalur berbeda (serangan, bukan
+    // interact biasa) - merusak koneksi sampai bot ter-disconnect diam-diam. Server ini (protokol
+    // 775) sebenarnya sudah punya paket "attack" terpisah khusus untuk serangan (cuma field
+    // entityId) - tulis itu langsung, bypass bot.attack() yang belum diperbarui.
+    if (this.bot?._client?.write) {
+      this.bot._client.write('attack', { entityId: entity.id });
+      if (typeof this.bot?.swingArm === 'function') this.bot.swingArm();
+      return true;
+    }
+    if (typeof this.bot?.attack === 'function') {
+      this.bot.attack(entity);
+      return true;
+    }
+    return false;
   }
 
   activateShield() {

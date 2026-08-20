@@ -244,6 +244,30 @@ describe('MineflayerRoleAdapter.setSpawnAtNearestBed - klik bed terdekat untuk s
   });
 });
 
+describe('MineflayerRoleAdapter.attack - harus tulis paket attack LANGSUNG, bukan lewat bot.attack() bawaan yang masih pakai use_entity usang', () => {
+  it('harus menulis paket "attack" dengan field entityId, dan tetap mengayun tangan (swingArm) - ditemukan dari crash live nyata: bot.attack() bawaan mineflayer masih memanggil useEntity() internal yang menulis paket use_entity skema LAMA (field "mouse", tanpa "location") - server ini (protokol 775) sebenarnya sudah punya paket "attack" khusus terpisah (cuma field entityId) untuk serangan, use_entity cuma dipakai untuk interact/pakai. Crash ini yang bikin AnimalHusbandryEngine.cull() (dipanggil pekerja tani, bukan cuma penjaga) merusak koneksi dan bot ter-disconnect diam-diam', async () => {
+    const writeCalls = [];
+    const swingCalls = [];
+    const bot = {
+      entity: { position: { x: 0, y: 64, z: 0 } },
+      pathfinder: { goto: async () => {} },
+      lookAt: async () => {},
+      attack: () => { throw new Error('bot.attack() bawaan TIDAK BOLEH dipanggil - masih pakai use_entity skema usang'); },
+      swingArm: () => { swingCalls.push(true); },
+      _client: { write: (name, data) => writeCalls.push({ name, data }) }
+    };
+    const adapter = new MineflayerRoleAdapter(bot);
+    const zombie = { id: 42, position: { x: 2, y: 64, z: 2 } };
+
+    await adapter.attack(zombie);
+
+    assert.equal(writeCalls.length, 1);
+    assert.equal(writeCalls[0].name, 'attack');
+    assert.equal(writeCalls[0].data.entityId, 42);
+    assert.equal(swingCalls.length, 1, 'harus tetap mengayun tangan untuk animasi visual');
+  });
+});
+
 describe('MineflayerRoleAdapter.dig - harus mengambil barang yang jatuh, bukan cuma menggali', () => {
   it('setelah menggali, harus mendekat SAMPAI BENAR-BENAR MENGINJAK posisi blok (range 0) supaya item yang jatuh ke tanah ikut terambil - ditemukan dari kekhawatiran nyata: menggali dari jarak 3 blok (cukup untuk gali) TIDAK cukup dekat untuk memicu pickup otomatis, item bisa tertinggal di tanah', async () => {
     const gotoCalls = [];
