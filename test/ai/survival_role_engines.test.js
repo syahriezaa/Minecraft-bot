@@ -74,9 +74,18 @@ class FakeRoleAdapter {
     this.actions.push({ type: 'shield' });
     return true;
   }
-  async depositToChest(pos) {
-    this.actions.push({ type: 'deposit', position: pos });
-    return { deposited: 0 };
+  async depositToChest(pos, predicate = () => true) {
+    const matched = this.getInventoryItems().filter(predicate);
+    this.actions.push({ type: 'deposit', position: pos, items: matched.map((i) => i.name) });
+    return { deposited: matched.reduce((s, i) => s + (i.count || 1), 0) };
+  }
+  getInventoryItems() {
+    return Array.from(this.items.entries()).map(([name, count]) => ({ name, count }));
+  }
+  async findMatchingChest(itemNames) {
+    this.actions.push({ type: 'findMatchingChest', itemNames });
+    const match = (this.chests || []).find((c) => c.contents.some((n) => itemNames.includes(n)));
+    return match ? match.position : null;
   }
 }
 
@@ -114,6 +123,39 @@ describe('FarmerEngine', () => {
     assert.equal(result.seed, 'wheat_seeds');
     assert.equal(adapter.actions[0].type, 'placeSeed');
   });
+
+  it('dengan autoMatchStorage aktif, harus menyimpan tiap jenis hasil panen ke chest yang SUDAH berisi jenis yang sama (bukan satu chest tunggal) - ditemukan dari gudang nyata pemilik: wheat dan carrot disimpan terpisah di chest masing-masing, bukan digabung sembarangan', async () => {
+    const adapter = new FakeRoleAdapter({
+      items: { wheat: 5, carrot: 3 }
+    });
+    adapter.chests = [
+      { position: { x: -181, y: 73, z: -350 }, contents: ['wheat'] },
+      { position: { x: -181, y: 73, z: -349 }, contents: ['carrot'] }
+    ];
+    const engine = new FarmerEngine({ adapter, autoMatchStorage: true });
+
+    const result = await engine.tick();
+
+    assert.equal(result.action, 'deposit');
+    const deposits = adapter.actions.filter((a) => a.type === 'deposit');
+    assert.equal(deposits.length, 2, 'harus deposit ke DUA chest berbeda, satu per jenis item');
+    const wheatDeposit = deposits.find((d) => d.position.z === -350);
+    const carrotDeposit = deposits.find((d) => d.position.z === -349);
+    assert.deepEqual(wheatDeposit.items, ['wheat']);
+    assert.deepEqual(carrotDeposit.items, ['carrot']);
+  });
+
+  it('dengan autoMatchStorage aktif tapi TIDAK ADA chest yang cocok untuk suatu item, item itu TIDAK BOLEH dibuang ke chest sembarangan - biarkan di inventaris sampai chest yang cocok ditemukan', async () => {
+    const adapter = new FakeRoleAdapter({ items: { potato: 2 } });
+    adapter.chests = [{ position: { x: 0, y: 64, z: 0 }, contents: ['wheat'] }];
+    const engine = new FarmerEngine({ adapter, autoMatchStorage: true });
+
+    const result = await engine.tick();
+
+    const deposits = adapter.actions.filter((a) => a.type === 'deposit');
+    assert.equal(deposits.length, 0, 'tidak boleh ada deposit sama sekali kalau tidak ada chest yang cocok');
+    assert.equal(result.action, 'idle');
+  });
 });
 
 describe('AnimalHusbandryEngine', () => {
@@ -124,6 +166,22 @@ describe('AnimalHusbandryEngine', () => {
         { id: 1, name: 'cow', isBaby: false, position: { x: 1, y: 64, z: 0 } },
         { id: 2, name: 'cow', isBaby: false, position: { x: 2, y: 64, z: 0 } },
         { id: 3, name: 'cow', isBaby: true, position: { x: 3, y: 64, z: 0 } }
+      ]
+    });
+    const engine = new AnimalHusbandryEngine({ adapter });
+
+    const result = await engine.tick();
+
+    assert.equal(result.action, 'feed');
+    assert.deepEqual(adapter.actions.filter(a => a.type === 'useOn').map(a => a.id), [1, 2]);
+  });
+
+  it('harus memberi makan goat dengan wheat - ditemukan dari permintaan nyata pemilik: sapi, kambing (goat), ayam butuh diberi makan, tapi goat sebelumnya tidak ada di ANIMAL_RULES sama sekali', async () => {
+    const adapter = new FakeRoleAdapter({
+      items: { wheat: 8 },
+      entities: [
+        { id: 1, name: 'goat', isBaby: false, position: { x: 1, y: 64, z: 0 } },
+        { id: 2, name: 'goat', isBaby: false, position: { x: 2, y: 64, z: 0 } }
       ]
     });
     const engine = new AnimalHusbandryEngine({ adapter });

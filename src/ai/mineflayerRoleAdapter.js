@@ -115,8 +115,13 @@ class MineflayerRoleAdapter {
 
   async dig(block) {
     if (!block || typeof this.bot?.dig !== 'function') return false;
-    await this.navigateNear(block.position || block, 3);
+    const pos = block.position || block;
+    await this.navigateNear(pos, 3);
     await this.bot.dig(block);
+    // Barang hasil gali (mis. panen crop) jatuh sebagai item entity di tanah - jarak 3 blok cukup
+    // untuk menggali tapi TIDAK cukup dekat untuk memicu pickup otomatis Minecraft. Mendekat sampai
+    // benar-benar menginjak posisi blok (range 0) supaya barangnya ikut terambil, bukan ditinggalkan.
+    await this.navigateNear(pos, 0);
     return true;
   }
 
@@ -191,6 +196,29 @@ class MineflayerRoleAdapter {
     if (!block || typeof this.bot?.openChest !== 'function') return null;
     await this.navigateNear(pos, 3);
     return this.bot.openChest(block);
+  }
+
+  // Cari chest di sekitar yang SUDAH berisi salah satu dari itemNames - dipakai FarmerEngine
+  // (autoMatchStorage) supaya hasil panen ditaruh di gudang yang memang sudah terorganisir per
+  // jenis item (mis. wheat dan carrot masing-masing punya chest sendiri), bukan ditumpuk ke satu
+  // chest sembarangan. Membuka chest SATU-SATU (bukan paralel) - server Minecraft cuma izinkan satu
+  // window terbuka per pemain dalam satu waktu.
+  async findMatchingChest(itemNames, options = {}) {
+    const positions = typeof this.bot?.findBlocks === 'function'
+      ? this.bot.findBlocks({
+        matching: (b) => b && b.name === 'chest',
+        maxDistance: options.maxDistance || 24,
+        count: options.count || 40
+      })
+      : [];
+    for (const pos of positions) {
+      const chest = await this.openChestAt(pos);
+      if (!chest) continue;
+      const items = typeof chest.containerItems === 'function' ? chest.containerItems() : [];
+      if (typeof chest.close === 'function') chest.close();
+      if (items.some((it) => itemNames.includes(it.name))) return pos;
+    }
+    return null;
   }
 
   async depositToChest(pos, predicate = () => true) {

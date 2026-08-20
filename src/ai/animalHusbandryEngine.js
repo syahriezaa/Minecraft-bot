@@ -10,6 +10,7 @@ const { MineflayerRoleAdapter, distance } = require('./mineflayerRoleAdapter');
 
 const ANIMAL_RULES = Object.freeze({
   cow: { feed: 'wheat', preserveAdults: 2, maxAdults: 8, drops: ['beef', 'leather'] },
+  goat: { feed: 'wheat', preserveAdults: 2, maxAdults: 8, drops: [] },
   sheep: { feed: 'wheat', preserveAdults: 2, maxAdults: 8, drops: ['mutton', 'white_wool'] },
   pig: { feed: ['carrot', 'potato', 'beetroot'], preserveAdults: 2, maxAdults: 8, drops: ['porkchop'] },
   chicken: { feed: ['wheat_seeds', 'beetroot_seeds', 'melon_seeds', 'pumpkin_seeds'], preserveAdults: 2, maxAdults: 10, drops: ['chicken', 'feather'] }

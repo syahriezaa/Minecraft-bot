@@ -43,6 +43,7 @@ class FarmerEngine extends EventEmitter {
       harvestBatchSize: 1,
       plantBatchSize: 1,
       depositChest: null,
+      autoMatchStorage: false,
       depositWhenSlotsFreeBelow: 4,
       autoEatFoodThreshold: 14,
       ...options
@@ -53,6 +54,10 @@ class FarmerEngine extends EventEmitter {
       deposited: 0,
       eaten: 0
     };
+    // Ingat chest yang sudah ditemukan cocok untuk tiap jenis item, supaya tiap tick berikutnya
+    // tidak perlu membuka ulang semua chest di gudang - gudang nyata pemilik bisa berisi puluhan
+    // chest (lihat komentar autoMatchStorage), membukanya satu-satu tiap tick jelas mahal.
+    this.depositChestCache = new Map();
   }
 
   isMatureCrop(block) {
@@ -120,6 +125,30 @@ class FarmerEngine extends EventEmitter {
         this.emit('planted', { seed, position: spot.position });
         return { action: 'plant', seed };
       }
+    }
+
+    // Gudang nyata pemilik sudah terorganisir per jenis item (mis. wheat dan carrot masing-masing
+    // punya chest sendiri) - autoMatchStorage cari chest yang SUDAH berisi jenis item yang sama untuk
+    // tiap jenis hasil panen di inventaris, alih-alih menumpuk semuanya ke satu chest sembarangan
+    // (depositChest lama). Kalau tidak ada chest yang cocok untuk suatu item, item itu dibiarkan di
+    // inventaris (bukan ditaruh di chest sembarangan) sampai chest yang cocok ditemukan.
+    if (this.options.autoMatchStorage) {
+      const outputItems = this.adapter.getInventoryItems().filter(item => this.isFarmOutput(item.name));
+      const distinctNames = [...new Set(outputItems.map(item => item.name))];
+      let totalDeposited = 0;
+      for (const name of distinctNames) {
+        let chestPos = this.depositChestCache.get(name);
+        if (!chestPos) {
+          chestPos = await this.adapter.findMatchingChest([name]);
+          if (chestPos) this.depositChestCache.set(name, chestPos);
+        }
+        if (!chestPos) continue;
+        const result = await this.adapter.depositToChest(chestPos, item => item.name === name);
+        totalDeposited += result.deposited || 0;
+      }
+      this.metrics.deposited += totalDeposited;
+      if (totalDeposited > 0) return { action: 'deposit', count: totalDeposited };
+      return { action: 'idle' };
     }
 
     if (this.options.depositChest) {
