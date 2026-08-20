@@ -19,8 +19,15 @@ const { pathfinder, Movements } = require('mineflayer-pathfinder');
 const { MineflayerRoleAdapter } = require('./mineflayerRoleAdapter');
 const { FarmerEngine } = require('./farmerEngine');
 const { AnimalHusbandryEngine } = require('./animalHusbandryEngine');
+const { walkToBase } = require('./walkToBase');
 
 const TICK_INTERVAL_MS = Number(process.env.FARMER_TICK_MS) || 2000;
+// Base sungguhan pemilik (dikoreksi live sesi ini - lihat commit sebelumnya, -175,71,-325 lama
+// ternyata area peternakan villager, bukan base). FarmerEngine cuma menyisir dalam scanRadius dari
+// posisi bot SEKARANG - kalau bot dengan identitas BARU (belum pernah login, atau logout jauh dari
+// base) mulai bekerja, dia diam saja karena tidak ada apa-apa dalam jangkauan di posisi spawn/world
+// spawn. Jalan ke base dulu SEBELUM mulai tick pertanian/peternakan, apapun posisi awalnya.
+const DEFAULT_BASE_GOAL = { x: -185, y: 71, z: -352 };
 
 function buildMovements(bot) {
   const movements = new Movements(bot);
@@ -31,7 +38,7 @@ function buildMovements(bot) {
   return movements;
 }
 
-function startFarmerWorker({ host, port, botName, scanRadius = 32, log = (m) => console.log(m) }) {
+function startFarmerWorker({ host, port, botName, scanRadius = 32, baseGoal = DEFAULT_BASE_GOAL, log = (m) => console.log(m) }) {
   const bot = mineflayer.createBot({
     host, port,
     username: botName || 'FarmerWorker',
@@ -50,7 +57,15 @@ function startFarmerWorker({ host, port, botName, scanRadius = 32, log = (m) => 
     bot.pathfinder.setMovements(buildMovements(bot));
     bot.pathfinder.thinkTimeout = 20000;
     log(`Spawn di (${bot.entity.position.x.toFixed(1)}, ${bot.entity.position.y.toFixed(1)}, ${bot.entity.position.z.toFixed(1)}) - menunggu chunk sekitar ter-load...`);
-    await new Promise((r) => setTimeout(r, 5000));
+
+    // Jalan ke base DULU sebelum mulai bekerja - identitas bot baru (belum pernah login) atau yang
+    // logout jauh dari base akan diam saja kalau langsung mulai tick (tidak ada crop/hewan dalam
+    // jangkauan scanRadius di posisi spawn). Kalau sudah berada dekat base (mis. logout terakhir di
+    // sana), walkToBase akan langsung selesai cepat (goal sudah tercapai).
+    const walkResult = await walkToBase({ bot, goal: baseGoal, range: 4, settleMs: 5000, log });
+    if (!walkResult.success) {
+      log(`PERINGATAN: gagal berjalan ke base (${walkResult.reason}) - tetap mulai bekerja di posisi sekarang, mungkin tidak menemukan apa-apa.`);
+    }
 
     const adapter = new MineflayerRoleAdapter(bot);
     engine = new FarmerEngine({
