@@ -66,6 +66,13 @@ function buildMovements(bot) {
   movements.canOpenDoors = true;
   movements.allowParkour = true;
   movements.allowSprinting = true;
+  // Pemilik mengonfirmasi live: setiap chest gudang bisa dijangkau jalan kaki biasa, TANPA perlu
+  // menaruh blok tambahan (mis. bikin tower 1x1 buat naik). Matikan kemampuan menaruh blok sama
+  // sekali - kalau pathfinder sampai butuh menaruh blok untuk mencapai suatu chest, itu tandanya
+  // ada masalah lain (posisi/jalur salah), bukan sesuatu yang memang perlu "dipecahkan" dengan
+  // membangun - jangan buang-buang blok inventaris atau membangun struktur yang tidak diminta.
+  movements.scafoldingBlocks = [];
+  movements.allow1by1towers = false;
   return movements;
 }
 
