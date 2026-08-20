@@ -1,0 +1,52 @@
+{
+  "name": "minecraft-autonomous-companion",
+  "version": "1.0.0",
+  "description": "Sistem AI Autonomous Companion Minecraft yang mandiri, self-verifying, dan headless dengan telemetri PostgreSQL dan DeepSeek AI Brain",
+  "main": "src/web/webServer.js",
+  "scripts": {
+    "start": "node src/web/webServer.js",
+    "dev": "node --watch src/web/webServer.js",
+    "migrate": "node src/database/migrations.js --up",
+    "migrate:reset": "node src/database/migrations.js --reset",
+    "test": "node --test test/**/*.js",
+    "test:db": "node --test test/database/telemetry_db_test.js",
+    "test:e2e": "node test/runner.js",
+    "benchmark:l1": "node test/e2e/e2e_level1_test.js",
+    "benchmark:l2": "node test/e2e/e2e_level2_test.js",
+    "benchmark:l3": "node test/e2e/e2e_level3_test.js",
+    "benchmark:l4": "node test/e2e/e2e_level4_test.js",
+    "benchmark:ai": "node test/e2e/e2e_ai_tasks_test.js",
+    "survival:role-bot": "node src/ai/runSurvivalRoleBot.js"
+  },
+  "keywords": [
+    "minecraft",
+    "mineflayer",
+    "autonomous-agent",
+    "pathfinding",
+    "deepseek",
+    "postgresql",
+    "telemetry"
+  ],
+  "author": "Universal Engineering Team",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "flying-squid": "^1.12.0",
+    "minecraft-data": "^3.113.2",
+    "mineflayer": "^4.37.1",
+    "mineflayer-auto-eat": "^5.0.3",
+    "mineflayer-pathfinder": "^2.4.5",
+    "pg": "^8.13.1",
+    "prismarine-block": "^1.23.0",
+    "prismarine-chunk": "^1.41.0",
+    "prismarine-world": "^3.7.0",
+    "uuid": "^11.1.0",
+    "vec3": "^0.1.10",
+    "ws": "^8.18.0"
+  }
+}

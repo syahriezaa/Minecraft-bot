@@ -1,0 +1,115 @@
+--- a/test/runner.js
++++ b/test/runner.js
+@@ -106,66 +106,78 @@ class TestContext {
+     await suiteFn(suiteContext);
+ 
++    let filterRegex = null;
++    if (this.options.filter) {
++      try {
++        filterRegex = new RegExp(this.options.filter, 'i');
++      } catch (e) {
++        throw new Error(`Filter regex tidak valid "${this.options.filter}": ${e.message}`);
++      }
++    }
++
++    try {
++      // Jalankan before hooks
++      for (const hook of beforeHooks) {
++        await hook();
++      }
++
++      // Jalankan seluruh tes secara sekuensial
++      for (const item of testQueue) {
++        if (filterRegex && !filterRegex.test(item.name)) {
++          continue;
++        }
++
++        const start = Date.now();
++        let status = 'PASSED';
++        let error = null;
++        let timerId = null;
++
++        try {
++          const timeoutPromise = new Promise((_, reject) => {
++            timerId = setTimeout(
++              () => reject(new Error(`Timeout: Pengujian melebihi batas waktu ${this.options.timeout}ms`)),
++              this.options.timeout
++            );
++          });
++
++          await Promise.race([
++            item.fn(),
++            timeoutPromise
++          ]);
++        } catch (err) {
++          status = 'FAILED';
++          error = err;
++        } finally {
++          if (timerId) {
++            clearTimeout(timerId);
++          }
++        }
++
++        const duration = Date.now() - start;
++        const resultItem = {
++          suite: name,
++          name: item.name,
++          status,
++          duration,
++          error: error ? error.message : null,
++          stack: error ? error.stack : null
++        };
++
++        this.results.push(resultItem);
++
++        if (!this.options.json) {
++          if (status === 'PASSED') {
++            console.log(`  ✔ ${item.name} (${duration}ms)`);
++          } else {
++            console.error(`  ✖ ${item.name} (${duration}ms)`);
++            console.error(`    ↳ Kesalahan: ${error.message}`);
++          }
++        }
++
++        if (status === 'FAILED' && this.options.bail) {
++          throw new Error(`Eksekusi dihentikan (--bail) karena kegagalan pada: ${item.name}`);
++        }
++      }
++    } finally {
++      // Jalankan after hooks (pastikan selalu dipanggil bahkan jika terjadi kegagalan atau --bail)
++      for (const hook of afterHooks) {
++        try {
++          await hook();
++        } catch (e) {
++          // ignore teardown errors
++        }
++      }
++    }
+   }
+ }
+@@ -213,4 +225,5 @@ async function main() {
+     } else {
++      hasErrors = true;
+       if (!options.json) {
+-        console.log(`  ⚠ Catatan: File suite Tier ${tier} (${tierMeta ? tierMeta.path : 'N/A'}) belum ditemukan.`);
++        console.error(`  ✖ Kesalahan: File suite Tier ${tier} (${tierMeta ? tierMeta.path : 'N/A'}) tidak ditemukan.`);
+       }
+     }
+@@ -224,2 +237,4 @@ async function main() {
+ 
++  const isSuccess = failed === 0 && total > 0 && !hasErrors;
++
+   if (options.json) {
+@@ -231,5 +246,6 @@ async function main() {
+             passed,
+             failed,
++            hasErrors: Boolean(hasErrors),
+             durationSeconds: parseFloat(totalDuration),
+-            status: failed === 0 && total > 0 ? 'PASSED' : 'FAILED'
++            status: isSuccess ? 'PASSED' : 'FAILED'
+           },
+@@ -253,3 +269,3 @@ async function main() {
+       `Status Akhir    : ${
+-        failed === 0 && total > 0
++        isSuccess
+           ? 'SEMUA SUITE LULUS 100% (PASSED) 🎉'

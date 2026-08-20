@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Chunk Matrix — grid zoomable seluruh kolom blok yang sudah dibaca bot, dengan ketinggian, biaya A*, dan jalur yang benar-benar dilewati.">
+  <title>🗺️ Chunk Matrix — AI Companion Minecraft</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="stylesheet" href="css/decision-inspector.css">
+  <link rel="stylesheet" href="css/chunk-matrix.css">
+</head>
+<body>
+  <header id="app-header">
+    <div class="header-content">
+      <h1>🗺️ Chunk Matrix — Peta Blok yang Dibaca Bot</h1>
+      <div style="display:flex; align-items:center; gap:16px;">
+        <a href="decision-inspector.html" style="color:var(--text-sub); font-size:0.85rem; text-decoration:none;">🧭 Decision Inspector</a>
+        <a href="index.html" style="color:var(--text-sub); font-size:0.85rem; text-decoration:none;">← Dashboard Utama</a>
+        <div class="connection-status" id="connection-status">
+          <span class="status-dot" id="status-dot"></span>
+          <span id="status-text">Menghubungkan...</span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main id="dashboard">
+    <section class="row">
+      <div class="card full-width" id="matrix-toolbar-card">
+        <div class="matrix-toolbar">
+          <div class="mt-group">
+            <button class="btn btn-action" id="btn-zoom-in">➕ Zoom</button>
+            <button class="btn btn-action" id="btn-zoom-out">➖ Zoom</button>
+            <button class="btn btn-action" id="btn-fit">⛶ Muat Semua</button>
+            <button class="btn btn-action" id="btn-follow">🎯 Ikuti Bot</button>
+          </div>
+          <div class="mt-group">
+            <button class="btn btn-action" id="btn-sweep-start">🛰️ Sapu 1000x1000</button>
+            <button class="btn btn-action" id="btn-sweep-stop">⏹️ Hentikan Sapuan</button>
+            <span id="sweep-status" style="font-size:0.85rem; color:var(--text-sub);"></span>
+          </div>
+          <div class="mt-group" id="matrix-stats"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="row main-grid">
+      <div class="card" id="matrix-card" style="min-width:0;">
+        <h2>📐 Grid Kolom Blok (klik/hover sel untuk detail)</h2>
+        <div class="matrixwrap">
+          <canvas id="matrixcanvas"></canvas>
+          <div class="matrix-legend" id="matrix-legend"></div>
+        </div>
+      </div>
+
+      <div class="card" id="cell-detail-card">
+        <h2>🔍 Detail Sel</h2>
+        <div class="celldetail" id="celldetail">
+          <div class="bc-label">Arahkan kursor ke sebuah sel di grid.</div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="js/chunkMatrix.js"></script>
+</body>
+</html>

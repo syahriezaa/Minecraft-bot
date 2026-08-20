@@ -1,0 +1,264 @@
+--- test/helpers/wsTestHelper.js
++++ test/helpers/wsTestHelper.js
+@@ -6,14 +6,37 @@
+  * Mengimplementasikan protokol WebSocket native Node.js tanpa dependensi eksternal.
++ * Dilengkapi dengan pelacakan soket aktif (socket tracking), penghancuran koneksi saat teardown,
++ * dukungan port dinamis (port: 0 / ephemeral), serta mekanisme auto-retry / port increment jika EADDRINUSE.
+  */
+ 
+ const http = require('node:http');
+ const EventEmitter = require('node:events');
+ const crypto = require('node:crypto');
+ 
+ class MockWebServer {
+-  constructor(port = 8080) {
++  /**
++   * @param {number} [port=8080] - Port target (gunakan 0 untuk port dinamis ephemeral)
++   * @param {Object} [options={}] - Opsi konfigurasi
++   * @param {boolean} [options.autoRetry=false] - Otomatis mencoba port berikutnya jika EADDRINUSE
++   * @param {number} [options.maxRetries=10] - Jumlah maksimal percobaan kenaikan port
++   * @param {boolean} [options.fallbackToDynamic=false] - Fallback ke port 0 jika terjadi konflik
++   */
++  constructor(port = 8080, options = {}) {
++    this.initialPort = port;
+     this.port = port;
++    this.options = {
++      autoRetry: false,
++      maxRetries: 10,
++      fallbackToDynamic: false,
++      ...options
++    };
+     this.server = null;
++    this.sockets = new Set();
+     this.clients = new Set();
+     this.auditLogs = [];
+     this.lastState = {
+       status: 'SIAP',
+       level: 1,
+       botPos: { x: 0, y: 64, z: 0 }
+     };
+   }
+ 
++  getHttpUrl() {
++    return `http://localhost:${this.port}`;
++  }
++
++  getWsUrl() {
++    return `ws://localhost:${this.port}`;
++  }
++
++  getPort() {
++    return this.port;
++  }
++
+-  async start() {
++  async start(overrideOptions = {}) {
++    const opts = { ...this.options, ...overrideOptions };
++    let attempt = 0;
++
++    const tryListen = (portToTry) => {
+       return new Promise((resolve, reject) => {
+-        this.server = http.createServer((req, res) => {
++        const server = http.createServer((req, res) => {
++          this._handleHttpRequest(req, res);
++        });
++
++        server.on('connection', (socket) => {
++          this.sockets.add(socket);
++          socket.on('close', () => {
++            this.sockets.delete(socket);
++          });
++          socket.on('error', () => {
++            this.sockets.delete(socket);
++          });
++        });
++
++        server.on('upgrade', (req, socket, head) => {
++          this._handleWsUpgrade(req, socket, head);
++        });
++
++        server.once('error', async (err) => {
++          try {
++            server.close();
++          } catch (e) {}
++
++          if (err.code === 'EADDRINUSE') {
++            if (opts.autoRetry && attempt < opts.maxRetries) {
++              attempt++;
++              const nextPort = portToTry === 0 ? 0 : portToTry + 1;
++              try {
++                const res = await tryListen(nextPort);
++                resolve(res);
++              } catch (retryErr) {
++                reject(retryErr);
++              }
++              return;
++            } else if (opts.fallbackToDynamic && portToTry !== 0) {
++              try {
++                const res = await tryListen(0);
++                resolve(res);
++              } catch (dynamicErr) {
++                reject(dynamicErr);
++              }
++              return;
++            }
++            reject(new Error(`Port ${portToTry} sudah digunakan oleh proses lain (EADDRINUSE).`));
++          } else {
++            reject(err);
++          }
++        });
++
++        server.listen(portToTry, () => {
++          this.server = server;
++          const addr = server.address();
++          if (addr && typeof addr === 'object') {
++            this.port = addr.port;
++          } else {
++            this.port = portToTry;
++          }
++          resolve(this);
++        });
++      });
++    };
++
++    return tryListen(this.port);
++  }
++
++  _handleHttpRequest(req, res) {
+           const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
+           
+           res.setHeader('Access-Control-Allow-Origin', '*');
+@@ -140,7 +163,9 @@
+-        });
+-
+-        this.server.on('upgrade', (req, socket, head) => {
++  }
++
++  _handleWsUpgrade(req, socket, head) {
+           const key = req.headers['sec-websocket-key'];
+           if (!key) {
+             socket.destroy();
+             return;
+@@ -183,7 +208,9 @@
+             try {
+-              socket.write(Buffer.concat([header, payload]));
++              if (!socket.destroyed) {
++                socket.write(Buffer.concat([header, payload]));
++              }
+             } catch (e) {
+               // ignore
+             }
+@@ -204,18 +231,6 @@
+-        });
+-
+-        this.server.on('error', (err) => {
+-          if (err.code === 'EADDRINUSE') {
+-            reject(new Error(`Port ${this.port} sudah digunakan oleh proses lain (EADDRINUSE).`));
+-          } else {
+-            reject(err);
+-          }
+-        });
+-
+-        this.server.listen(this.port, () => {
+-          resolve(this);
+-        });
+-      });
+-    }
++  }
+ 
+   async stop() {
+     for (const client of this.clients) {
+       try { client.socket.destroy(); } catch (e) {}
+     }
+     this.clients.clear();
+ 
++    for (const socket of this.sockets) {
++      try {
++        if (!socket.destroyed) {
++          socket.destroy();
++        }
++      } catch (e) {}
++    }
++    this.sockets.clear();
++
+     if (this.server) {
++      if (typeof this.server.closeAllConnections === 'function') {
++        try {
++          this.server.closeAllConnections();
++        } catch (e) {}
++      }
+       await new Promise(r => this.server.close(r));
+       this.server = null;
+     }
+   }
+ }
+ 
+ class WsTestClient extends EventEmitter {
+-  constructor(url = 'ws://localhost:8080') {
++  constructor(target = 'ws://localhost:8080') {
+     super();
+-    this.url = url;
++    this.setUrl(target);
+     this.ws = null;
+     this.receivedEvents = [];
+     // Default error listener agar tidak melempar ERR_UNHANDLED_ERROR
+     this.on('error', () => {});
+   }
+ 
++  setUrl(target) {
++    if (typeof target === 'string') {
++      this.url = target.startsWith('ws://') || target.startsWith('wss://')
++        ? target
++        : `ws://${target}`;
++    } else if (typeof target === 'number') {
++      this.url = `ws://localhost:${target}`;
++    } else if (target && typeof target.getWsUrl === 'function') {
++      this.url = target.getWsUrl();
++    } else if (target && typeof target.port === 'number') {
++      this.url = `ws://localhost:${target.port}`;
++    } else {
++      this.url = 'ws://localhost:8080';
++    }
++    return this.url;
++  }
++
+   async waitForEvent(type, timeoutMs = 5000) {
+     const existing = this.receivedEvents.find(e => e.type === type);
+     if (existing) return existing;
+ 
+     return new Promise((resolve, reject) => {
++      let timer = null;
++      const onEvent = (data) => {
++        if (timer) clearTimeout(timer);
++        resolve({ type, data });
++      };
++
+-      const timer = setTimeout(() => {
++      timer = setTimeout(() => {
+         this.removeListener(type, onEvent);
+         reject(new Error(`Timeout: Event "${type}" tidak diterima dalam ${timeoutMs}ms.`));
+       }, timeoutMs);
+ 
+-      const onEvent = (data) => {
+-        clearTimeout(timer);
+-        resolve({ type, data });
+-      };
+-
+       this.once(type, onEvent);
+     });
+   }
+ 
+   async disconnect() {
+     if (this.ws) {
+       try {
++        if (typeof this.ws.terminate === 'function') {
++          this.ws.terminate();
++        } else if (typeof this.ws.close === 'function') {
+           this.ws.close();
++        }
+       } catch (e) {}
+       this.ws = null;
+     }
+     this.removeAllListeners();
+     this.on('error', () => {});
+   }

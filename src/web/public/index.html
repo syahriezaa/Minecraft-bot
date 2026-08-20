@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Dashboard AI Companion Minecraft — Kontrol Browser Penuh, Navigasi Otonom, Multi-Instance Swarm, dan DeepSeek AI">
+  <title>🧠 AI Companion Minecraft — Dashboard & Browser Controller</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <!-- Header -->
+  <header id="app-header">
+    <div class="header-content">
+      <h1>🧠 AI Companion Minecraft — Browser Controller</h1>
+      <div style="display:flex; align-items:center; gap:16px;">
+        <a href="decision-inspector.html" style="color:var(--text-sub); font-size:0.85rem; text-decoration:none;">🧭 Decision Inspector</a>
+        <a href="chunk-matrix.html" style="color:var(--text-sub); font-size:0.85rem; text-decoration:none;">🗺️ Chunk Matrix →</a>
+        <div class="connection-status" id="connection-status">
+          <span class="status-dot" id="status-dot"></span>
+          <span id="status-text">Menghubungkan...</span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main id="dashboard">
+    <!-- Baris 1: Status Bot + Metrik Real-Time -->
+    <section class="row">
+      <div class="card" id="bot-status-card">
+        <h2>📍 Status Karakter / Bot</h2>
+        <div class="stat-grid">
+          <div class="stat-item">
+            <span class="stat-label">Posisi X</span>
+            <span class="stat-value" id="pos-x">0.0</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">Posisi Y</span>
+            <span class="stat-value" id="pos-y">64.0</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">Posisi Z</span>
+            <span class="stat-value" id="pos-z">0.0</span>
+          </div>
+          <div class="stat-item highlight success">
+            <span class="stat-label">XP / Level</span>
+            <span class="stat-value" id="bot-xp">0 XP (Lv.0)</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">Mode AI</span>
+            <span class="stat-value mode-badge" id="bot-mode">IDLE</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">Kecepatan</span>
+            <span class="stat-value" id="bot-velocity">0.0</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" id="metrics-card">
+        <h2>📊 Metrik Operasi Otonom</h2>
+        <div class="stat-grid">
+          <div class="stat-item highlight">
+            <span class="stat-label">Total Uji</span>
+            <span class="stat-value" id="total-runs">0</span>
+          </div>
+          <div class="stat-item highlight success">
+            <span class="stat-label">Berhasil</span>
+            <span class="stat-value" id="total-success">0</span>
+          </div>
+          <div class="stat-item highlight danger">
+            <span class="stat-label">Gagal</span>
+            <span class="stat-value" id="total-failed">0</span>
+          </div>
+          <div class="stat-item">
+            <span class="stat-label">Rata-Rata Waktu</span>
+            <span class="stat-value" id="avg-duration">0ms</span>
+          </div>
+        </div>
+      </div>
+    </section>
+    <!-- Baris 1.5: Panel Koordinat Real-Time Seluruh Bot Armada (Live Swarm) -->
+    <section class="row">
+      <div class="card full-width" id="swarm-coordinates-card">
+        <div class="card-header-flex">
+          <h2>🤖 Koordinat Real-Time Armada Bot Live (atoms-girl.tun.ply.gg)</h2>
+          <span class="badge live-badge">🟢 5 Bot Aktif di Server</span>
+        </div>
+        <div class="swarm-grid" id="swarm-bots-container">
+          <!-- Kartu bot di-render otomatis secara real-time via JavaScript -->
+        </div>
+      </div>
+    </section>
+
+    <!-- Baris 2: Panel Kontrol Langsung dari Browser -->
+    <section class="row">
+      <div class="card full-width" id="direct-action-panel">
+        <h2>🎮 Panel Kontrol Aksi Langsung (Klik untuk Menjalankan)</h2>
+        <div class="benchmark-controls action-grid">
+          <button class="btn btn-action btn-farm" id="btn-action-farm">
+            <span class="btn-icon">⚔️</span>
+            <span class="btn-text">Bantai Zombie & XP<br><small>Menuju Spawner [-256,-20,-432]</small></span>
+          </button>
+          <button class="btn btn-action btn-sort" id="btn-action-sort">
+            <span class="btn-icon">📦</span>
+            <span class="btn-text">Sortir 4 Unit Peti<br><small>Weapons, Drops, Armor, Trash</small></span>
+          </button>
+          <button class="btn btn-action btn-trash" id="btn-action-trash">
+            <span class="btn-icon">🔥</span>
+            <span class="btn-text">Bakar Sampah ke Lava<br><small>Perimeter Aman 2.0m</small></span>
+          </button>
+          <button class="btn btn-action btn-walk" id="btn-action-walk">
+            <span class="btn-icon">🚶</span>
+            <span class="btn-text">Auto Walk / Maju<br><small>Eksplorasi Voxel Terbuka</small></span>
+          </button>
+          <button class="btn btn-action btn-fleet" id="btn-action-fleet">
+            <span class="btn-icon">🤖</span>
+            <span class="btn-text">Multi-Instance Fleet<br><small>Jalankan 3 Bot Simultan</small></span>
+          </button>
+          <button class="btn btn-action btn-live-swarm" id="btn-action-live-swarm" style="background:#5B52E6;color:#fff;">
+            <span class="btn-icon">🌐</span>
+            <span class="btn-text">Swarm ke Live Server<br><small>Gabung atoms-girl (2 Bot)</small></span>
+          </button>
+          <button class="btn btn-action btn-stop" id="btn-action-stop">
+            <span class="btn-icon">⏹️</span>
+            <span class="btn-text">Emergency Stop<br><small>Hentikan Semua Aksi</small></span>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Baris 3: Panel Benchmark Kurikulum -->
+    <section class="row">
+      <div class="card full-width" id="benchmark-panel">
+        <h2>🏟️ Panel Uji Kurikulum Bertingkat (Benchmark Level 1–4)</h2>
+        <div class="benchmark-controls">
+          <button class="btn btn-level" data-level="1" id="btn-level-1">
+            <span class="btn-icon">🟢</span>
+            <span class="btn-text">Level 1<br><small>Medan Datar (30m)</small></span>
+          </button>
+          <button class="btn btn-level" data-level="2" id="btn-level-2">
+            <span class="btn-icon">🟡</span>
+            <span class="btn-text">Level 2<br><small>Rintangan & Elevasi</small></span>
+          </button>
+          <button class="btn btn-level" data-level="3" id="btn-level-3">
+            <span class="btn-icon">🟠</span>
+            <span class="btn-text">Level 3<br><small>Tangga & Jembatan</small></span>
+          </button>
+          <button class="btn btn-level" data-level="4" id="btn-level-4">
+            <span class="btn-icon">🔴</span>
+            <span class="btn-text">Level 4<br><small>Farm Spawner Bawah Tanah</small></span>
+          </button>
+          <button class="btn btn-all" id="btn-all-levels">
+            <span class="btn-icon">⚡</span>
+            <span class="btn-text">Jalankan Semua<br><small>Level 1 → 4</small></span>
+          </button>
+        </div>
+        <div class="progress-container" id="progress-container" style="display:none;">
+          <div class="progress-bar" id="progress-bar"></div>
+          <span class="progress-text" id="progress-text">Menunggu...</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- Baris 4: Visualizer Peta 2D (Click-to-Move) + Terminal Log -->
+    <section class="row">
+      <div class="card" id="visualizer-card">
+        <h2>🗺️ Visualizer Peta 2D Real-Time (Klik Peta untuk Menggerakkan Bot)</h2>
+        <canvas id="path-canvas" width="500" height="360"></canvas>
+      </div>
+
+      <div class="card" id="terminal-card">
+        <h2>📜 Konsol Audit Pergerakan & Aksi</h2>
+        <div class="terminal" id="terminal-logs">
+          <div class="terminal-line system">[ Sistem ] Dashboard siap. Menunggu perintah dari browser...</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Baris 5: AI Chat Terminal -->
+    <section class="row">
+      <div class="card full-width" id="ai-chat-card">
+        <h2>🤖 Terminal DeepSeek AI (Ketik Perintah Bahasa Indonesia)</h2>
+        <div class="chat-container" id="chat-container">
+          <div class="chat-message system">
+            <span class="chat-role">Sistem</span>
+            <span class="chat-text">AI Brain aktif. Ketik perintah seperti: "bantai zombie", "sortir peti", atau "buang sampah ke lava".</span>
+          </div>
+        </div>
+        <div class="chat-input-row">
+          <input type="text" id="ai-input" placeholder="Ketik perintah AI (misal: 'pergi ke spawner dan kumpulkan 30 XP')..." autocomplete="off">
+          <button class="btn btn-send" id="btn-send-ai">Kirim</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Baris 6: Hasil Benchmark -->
+    <section class="row">
+      <div class="card full-width" id="results-card">
+        <h2>📋 Riwayat Hasil Operasi & Database PostgreSQL</h2>
+        <div class="results-table-container">
+          <table id="results-table">
+            <thead>
+              <tr>
+                <th>Operasi / Level</th>
+                <th>Status</th>
+                <th>Durasi</th>
+                <th>Delta Koordinat</th>
+                <th>Pemulihan</th>
+                <th>Waktu</th>
+              </tr>
+            </thead>
+            <tbody id="results-body">
+              <tr class="empty-row"><td colspan="6">Belum ada hasil operasi</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="js/app.js"></script>
+  <script src="js/visualizer2d.js"></script>
+  <script src="js/aiTerminal.js"></script>
+</body>
+</html>
