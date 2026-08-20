@@ -90,9 +90,13 @@ const CANONICAL_ORE_INGOT_ASSIGNMENTS = {
 // yang sebelumnya tidak kebagian slot sendiri.
 const NETHER_MATERIALS_CHEST = '-181,71,-353';
 const STONE_COBBLE_CHEST = '-181,71,-352';
-const ARMOR_CHEST = '-181,71,-350';
+// Armor, buku, dan perkakas SENGAJA disimpan di BARREL, bukan chest - permintaan nyata pemilik
+// ("i think tools armor and book shoud be store in barel"). Posisi barel diambil dari barel
+// sungguhan yang ditemukan di antara kolom chest (y71-73, z -351/-348).
+const ARMOR_CHEST = '-181,71,-351'; // barrel
 const MOB_DROPS_CHEST = '-181,71,-349';
-const BOOKS_CHEST = '-181,71,-347';
+const BOOKS_CHEST = '-181,72,-351'; // barrel
+const TOOLS_CHEST = '-181,71,-348'; // barrel
 const FOOD_CHEST = '-181,71,-345';
 
 const RAILS_MINECART_CHEST = '-181,72,-353';
@@ -136,13 +140,13 @@ const CANONICAL_GEAR_ASSIGNMENTS = {
   wooden_sword: WEAPONS_CHEST, stone_sword: WEAPONS_CHEST, golden_sword: WEAPONS_CHEST, iron_sword: WEAPONS_CHEST, diamond_sword: WEAPONS_CHEST, netherite_sword: WEAPONS_CHEST,
   bow: WEAPONS_CHEST, crossbow: WEAPONS_CHEST, trident: WEAPONS_CHEST, arrow: WEAPONS_CHEST, spectral_arrow: WEAPONS_CHEST, tipped_arrow: WEAPONS_CHEST,
 
-  // Perkakas (kapak/sekop/beliung/cangkul) - digabung dengan senjata (sama-sama alat yang dipegang
-  // di tangan), tidak dapat chest sendiri supaya tidak perlu slot ke-25 yang tidak ada.
-  wooden_axe: WEAPONS_CHEST, stone_axe: WEAPONS_CHEST, golden_axe: WEAPONS_CHEST, iron_axe: WEAPONS_CHEST, diamond_axe: WEAPONS_CHEST, netherite_axe: WEAPONS_CHEST,
-  wooden_shovel: WEAPONS_CHEST, stone_shovel: WEAPONS_CHEST, golden_shovel: WEAPONS_CHEST, iron_shovel: WEAPONS_CHEST, diamond_shovel: WEAPONS_CHEST, netherite_shovel: WEAPONS_CHEST,
-  wooden_pickaxe: WEAPONS_CHEST, stone_pickaxe: WEAPONS_CHEST, golden_pickaxe: WEAPONS_CHEST, iron_pickaxe: WEAPONS_CHEST, diamond_pickaxe: WEAPONS_CHEST, netherite_pickaxe: WEAPONS_CHEST,
-  wooden_hoe: WEAPONS_CHEST, stone_hoe: WEAPONS_CHEST, golden_hoe: WEAPONS_CHEST, iron_hoe: WEAPONS_CHEST, diamond_hoe: WEAPONS_CHEST, netherite_hoe: WEAPONS_CHEST,
-  fishing_rod: WEAPONS_CHEST, shears: WEAPONS_CHEST, flint_and_steel: WEAPONS_CHEST,
+  // Perkakas (kapak/sekop/beliung/cangkul) - kategori SENDIRI di barrel, dipisah dari senjata
+  // (permintaan nyata pemilik: "tools armor and book shoud be store in barel").
+  wooden_axe: TOOLS_CHEST, stone_axe: TOOLS_CHEST, golden_axe: TOOLS_CHEST, iron_axe: TOOLS_CHEST, diamond_axe: TOOLS_CHEST, netherite_axe: TOOLS_CHEST,
+  wooden_shovel: TOOLS_CHEST, stone_shovel: TOOLS_CHEST, golden_shovel: TOOLS_CHEST, iron_shovel: TOOLS_CHEST, diamond_shovel: TOOLS_CHEST, netherite_shovel: TOOLS_CHEST,
+  wooden_pickaxe: TOOLS_CHEST, stone_pickaxe: TOOLS_CHEST, golden_pickaxe: TOOLS_CHEST, iron_pickaxe: TOOLS_CHEST, diamond_pickaxe: TOOLS_CHEST, netherite_pickaxe: TOOLS_CHEST,
+  wooden_hoe: TOOLS_CHEST, stone_hoe: TOOLS_CHEST, golden_hoe: TOOLS_CHEST, iron_hoe: TOOLS_CHEST, diamond_hoe: TOOLS_CHEST, netherite_hoe: TOOLS_CHEST,
+  fishing_rod: TOOLS_CHEST, shears: TOOLS_CHEST, flint_and_steel: TOOLS_CHEST,
 
   // Makanan
   cooked_chicken: FOOD_CHEST, chicken: FOOD_CHEST, cooked_beef: FOOD_CHEST, beef: FOOD_CHEST,
