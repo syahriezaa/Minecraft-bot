@@ -37,10 +37,59 @@ class StorageManagerEngine extends EventEmitter {
     this.collectedPositions = new Set();
     this.inspectedPositions = new Set();
     // Chest gudang yang diketahui PENUH (deposit ke sana gagal/ditolak) - dikecualikan dari
-    // findDeliveryChest supaya tidak terus mengulang chest yang sama sampai bekukan progres
+    // resolveChestForItem supaya tidak terus mengulang chest yang sama sampai bekukan progres
     // pengantaran - ditemukan dari bug live nyata: StorageWorker terjebak "destination full"
     // berulang-ulang tanpa kemajuan karena selalu memilih chest penuh yang sama persis.
     this.fullChestPositions = new Set();
+    // Memori "jenis item ini pergi ke chest itu" (posKey string) - dipertahankan SELAMA proses ini
+    // berjalan, dan bisa dimuat ulang lewat initialAssignments (disimpan/dipulihkan pemanggil lewat
+    // getChestAssignments()) supaya sortir tetap KONSISTEN lintas restart worker, bukan pilih
+    // sembarangan tiap kali chest kebetulan sedang kosong saat dicek isinya - ditemukan dari
+    // keluhan nyata pemilik: kuartermaster "does not have any memory about storage chest" dan
+    // "did not short the item well" (barang tercampur karena semua jenis ditumpuk ke satu chest).
+    this.chestAssignments = new Map(Object.entries(options.initialAssignments || {}));
+  }
+
+  getChestAssignments() {
+    return Object.fromEntries(this.chestAssignments);
+  }
+
+  // Tentukan chest gudang untuk SATU jenis item: (1) ikuti assignment yang sudah diingat kalau
+  // masih valid (chest itu masih ada & tidak penuh), (2) kalau belum ada assignment, cari chest
+  // yang SUDAH berisi jenis ini, (3) kalau tidak ada yang cocok, pakai chest KOSONG pertama yang
+  // belum ditugaskan ke jenis lain (supaya tidak tercampur), (4) kalau tidak ada yang kosong,
+  // pakai chest tak-penuh pertama sebagai jalan terakhir. Assignment yang terpakai/ditemukan
+  // disimpan supaya panggilan berikutnya untuk jenis yang sama konsisten ke chest yang sama.
+  async resolveChestForItem(insideChests, itemName) {
+    const candidates = insideChests.filter((pos) => !this.fullChestPositions.has(posKey(pos)));
+    if (candidates.length === 0) return null;
+
+    const assignedKey = this.chestAssignments.get(itemName);
+    if (assignedKey) {
+      const stillValid = candidates.find((pos) => posKey(pos) === assignedKey);
+      if (stillValid) return stillValid;
+    }
+
+    for (const pos of candidates) {
+      const items = await this.adapter.getChestContents(pos);
+      if (items.some((it) => it.name === itemName)) {
+        this.chestAssignments.set(itemName, posKey(pos));
+        return pos;
+      }
+    }
+
+    const assignedElsewhere = new Set(this.chestAssignments.values());
+    for (const pos of candidates) {
+      if (assignedElsewhere.has(posKey(pos))) continue;
+      const items = await this.adapter.getChestContents(pos);
+      if (items.length === 0) {
+        this.chestAssignments.set(itemName, posKey(pos));
+        return pos;
+      }
+    }
+
+    this.chestAssignments.set(itemName, posKey(candidates[0]));
+    return candidates[0];
   }
 
   getOutsideChestPositions() {
@@ -53,43 +102,48 @@ class StorageManagerEngine extends EventEmitter {
       .filter((pos) => isInsideArea(pos, this.options.houseBounds));
   }
 
-  // Cari chest gudang DI DALAM rumah yang isinya sudah cocok dengan nama item terbawa - supaya
-  // barang masuk ke chest yang memang sudah terorganisir per jenis, bukan ditumpuk sembarangan.
-  // Kalau tidak ada yang cocok, pakai chest dalam rumah PERTAMA sebagai tujuan cadangan.
-  async findDeliveryChest(insideChests, carriedItemName) {
-    const candidates = insideChests.filter((pos) => !this.fullChestPositions.has(posKey(pos)));
-    for (const pos of candidates) {
-      const items = await this.adapter.getChestContents(pos);
-      if (items.some((it) => it.name === carriedItemName)) return pos;
-    }
-    return candidates[0];
-  }
-
   async tick() {
     const carried = this.adapter.getInventoryItems();
     if (carried.length > 0) {
       const insideChests = this.getInsideChestPositions();
       if (insideChests.length === 0) return { action: 'idle', reason: 'no_house_chest' };
-      const target = await this.findDeliveryChest(insideChests, carried[0].name);
-      if (!target) {
-        // Semua chest gudang diketahui penuh - reset catatan supaya dicoba lagi nanti (barangkali
-        // sudah dikosongkan manual sejak dicatat) daripada macet permanen tanpa target sama sekali.
-        this.fullChestPositions.clear();
-        return { action: 'idle', reason: 'all_house_chests_full' };
+
+      // Antar TIAP JENIS item ke chest MASING-MASING yang cocok - bukan tumpuk semua jenis ke satu
+      // chest berdasarkan jenis item pertama saja (bug nyata yang dilaporkan pemilik: barang
+      // tercampur, "did not short the item well").
+      const distinctNames = [...new Set(carried.map((item) => item.name))];
+      const deliveries = [];
+      let totalDelivered = 0;
+      let attemptedAny = false;
+      for (const name of distinctNames) {
+        const target = await this.resolveChestForItem(insideChests, name);
+        if (!target) continue;
+        attemptedAny = true;
+        await this.adapter.navigateNear(target, 3);
+        try {
+          const result = await this.adapter.depositToChest(target, (item) => item.name === name);
+          totalDelivered += result.deposited;
+          deliveries.push({ position: target, name, count: result.deposited });
+          this.emit('delivered', { position: target, count: result.deposited, name });
+        } catch (e) {
+          // Chest penuh (atau gagal lain) - ingat chest ini supaya tick BERIKUTNYA memilih chest
+          // gudang LAIN untuk jenis ini, bukan mengulang chest yang sama tanpa kemajuan selamanya.
+          this.fullChestPositions.add(posKey(target));
+          this.emit('deliverFailed', { position: target, error: e.message, name });
+        }
       }
-      await this.adapter.navigateNear(target, 3);
-      try {
-        const result = await this.adapter.depositToChest(target, () => true);
-        this.metrics.delivered += result.deposited;
-        this.emit('delivered', { position: target, count: result.deposited });
-        return { action: 'deliver', position: target, count: result.deposited };
-      } catch (e) {
-        // Chest penuh (atau gagal lain) - ingat chest ini supaya tick BERIKUTNYA memilih chest
-        // gudang LAIN, bukan mengulang chest yang sama tanpa kemajuan selamanya.
-        this.fullChestPositions.add(posKey(target));
-        this.emit('deliverFailed', { position: target, error: e.message });
-        return { action: 'deliver_failed', position: target, error: e.message };
+
+      if (deliveries.length === 0) {
+        if (!attemptedAny) {
+          // Semua chest gudang diketahui penuh - reset catatan supaya dicoba lagi nanti
+          // (barangkali sudah dikosongkan manual sejak dicatat) daripada macet permanen.
+          this.fullChestPositions.clear();
+          return { action: 'idle', reason: 'all_house_chests_full' };
+        }
+        return { action: 'deliver_failed', reason: 'no_delivery_succeeded' };
       }
+      this.metrics.delivered += totalDelivered;
+      return { action: 'deliver', count: totalDelivered, deliveries };
     }
 
     const outsideChests = this.getOutsideChestPositions();

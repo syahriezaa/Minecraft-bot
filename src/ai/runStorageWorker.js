@@ -16,11 +16,37 @@ patchMineflayerVersionGate(SERVER_VERSION);
 
 const mineflayer = require('mineflayer');
 const { pathfinder, Movements } = require('mineflayer-pathfinder');
+const fs = require('fs');
+const path = require('path');
 const { MineflayerRoleAdapter } = require('./mineflayerRoleAdapter');
 const { StorageManagerEngine } = require('./storageManagerEngine');
 const { walkToBase } = require('./walkToBase');
 
 const TICK_INTERVAL_MS = Number(process.env.STORAGE_TICK_MS) || 2000;
+// Memori "jenis item ini pergi ke chest itu" DISIMPAN KE DISK - supaya sortir tetap konsisten
+// lintas restart worker (tanpa ini, StorageManagerEngine cuma ingat assignment SELAMA proses ini
+// hidup - begitu dashboard di-restart, semua memori hilang dan chest bisa dipilih beda-beda lagi
+// tiap kali) - ditemukan dari keluhan nyata pemilik: "does not have any memory about storage chest".
+const ASSIGNMENTS_FILE = process.env.STORAGE_ASSIGNMENTS_FILE || path.join(__dirname, '..', '..', 'data', 'storageChestAssignments.json');
+
+function loadAssignments(log) {
+  try {
+    if (!fs.existsSync(ASSIGNMENTS_FILE)) return {};
+    return JSON.parse(fs.readFileSync(ASSIGNMENTS_FILE, 'utf8'));
+  } catch (e) {
+    log(`PERINGATAN: gagal memuat memori sortir gudang dari disk (${e.message}) - mulai dari kosong.`);
+    return {};
+  }
+}
+
+function saveAssignments(assignments, log) {
+  try {
+    fs.mkdirSync(path.dirname(ASSIGNMENTS_FILE), { recursive: true });
+    fs.writeFileSync(ASSIGNMENTS_FILE, JSON.stringify(assignments, null, 2));
+  } catch (e) {
+    log(`PERINGATAN: gagal menyimpan memori sortir gudang ke disk (${e.message})`);
+  }
+}
 const DEFAULT_BASE_GOAL = { x: -185, y: 71, z: -352 };
 // Ruang penyimpanan di dalam rumah - dipakai StorageManagerEngine untuk membedakan chest gudang
 // (tujuan pengantaran/rapi-rapi) dari chest lain di luar rumah (sumber koleksi). Perkiraan awal di
@@ -73,11 +99,18 @@ function startStorageWorker({ host, port, botName, scanRadius = 48, baseGoal = D
     const bedResult = await adapter.setSpawnAtNearestBed();
     log(bedResult ? 'Spawn point diset di bed dekat base.' : 'Tidak ada bed dalam jangkauan - spawn point tidak diubah.');
 
-    engine = new StorageManagerEngine({ adapter, scanRadius, houseBounds });
+    const initialAssignments = loadAssignments(log);
+    if (Object.keys(initialAssignments).length > 0) {
+      log(`Muat memori sortir gudang dari sesi sebelumnya: ${Object.keys(initialAssignments).length} jenis item sudah punya chest langganan.`);
+    }
+    engine = new StorageManagerEngine({ adapter, scanRadius, houseBounds, initialAssignments });
     engine.on('collected', ({ position, count }) => log(`Ambil ${count} item dari chest luar di (${position.x},${position.y},${position.z})`));
-    engine.on('delivered', ({ position, count }) => log(`Antar ${count} item ke chest gudang di (${position.x},${position.y},${position.z})`));
+    engine.on('delivered', ({ position, count, name }) => {
+      log(`Antar ${count}x ${name} ke chest gudang di (${position.x},${position.y},${position.z})`);
+      saveAssignments(engine.getChestAssignments(), log);
+    });
     engine.on('inspected', ({ position, items }) => log(`Periksa chest gudang di (${position.x},${position.y},${position.z}) - isi: ${items.map((i) => `${i.name}x${i.count}`).join(', ') || '(kosong)'}`));
-    engine.on('deliverFailed', ({ position, error }) => log(`Gagal antar ke chest gudang di (${position.x},${position.y},${position.z}) - ${error} - coba chest lain di tick berikutnya.`));
+    engine.on('deliverFailed', ({ position, error, name }) => log(`Gagal antar ${name} ke chest gudang di (${position.x},${position.y},${position.z}) - ${error} - coba chest lain di tick berikutnya.`));
 
     log('Pekerja gudang mulai bekerja.');
     lastAction = 'WORKING';
