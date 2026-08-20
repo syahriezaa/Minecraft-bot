@@ -231,6 +231,48 @@ describe('MineflayerRoleAdapter.setSpawnAtNearestBed - klik bed terdekat untuk s
     assert.equal(gotoCalls.length, 1, 'harus mendekat ke bed dulu sebelum klik');
   });
 
+  it('kalau klik bed di malam hari BENAR-BENAR membuat bot tidur (bot.isSleeping jadi true), harus LANGSUNG bangun lagi - klik bed di sini cuma untuk set titik spawn, BUKAN untuk benar-benar tidur (bisa membuat bot terjebak diam di ranjang tanpa batas waktu). Harus tulis paket entity_action LANGSUNG dengan actionId:0 ("leave_bed") - ditemukan dari bug nyata: bot.wake() bawaan mineflayer masih kirim actionId:2, padahal di skema protokol server ini actionId:2 artinya "stop_sprinting", BUKAN "leave_bed" (yang benar actionId:0) - bot yang terlanjur tidur tidak akan pernah bangun lagi kalau pakai bot.wake() bawaan', async () => {
+    const writeCalls = [];
+    const bedPos = { x: 5, y: 64, z: 5 };
+    const bot = {
+      entity: { id: 99, position: { x: 0, y: 64, z: 0 } },
+      pathfinder: { goto: async () => {} },
+      findBlock: () => ({ position: bedPos, name: 'red_bed' }),
+      blockAt: () => ({ name: 'red_bed', position: bedPos }),
+      activateBlock: async () => { bot.isSleeping = true; }, // server memutuskan bot jadi tidur (malam hari)
+      isSleeping: false,
+      wake: () => { throw new Error('bot.wake() bawaan TIDAK BOLEH dipanggil - actionId-nya salah di protokol ini'); },
+      _client: { write: (name, data) => writeCalls.push({ name, data }) }
+    };
+    const adapter = new MineflayerRoleAdapter(bot);
+
+    await adapter.setSpawnAtNearestBed();
+
+    assert.equal(writeCalls.length, 1);
+    assert.equal(writeCalls[0].name, 'entity_action');
+    assert.equal(writeCalls[0].data.entityId, 99);
+    assert.equal(writeCalls[0].data.actionId, 0, 'actionId 0 = leave_bed di protokol ini, BUKAN 2');
+  });
+
+  it('kalau klik bed TIDAK membuat bot tidur (siang hari, wajar - hanya set titik spawn), TIDAK BOLEH menulis paket entity_action sama sekali', async () => {
+    const writeCalls = [];
+    const bedPos = { x: 5, y: 64, z: 5 };
+    const bot = {
+      entity: { id: 99, position: { x: 0, y: 64, z: 0 } },
+      pathfinder: { goto: async () => {} },
+      findBlock: () => ({ position: bedPos, name: 'red_bed' }),
+      blockAt: () => ({ name: 'red_bed', position: bedPos }),
+      activateBlock: async () => {}, // tidak ada perubahan isSleeping
+      isSleeping: false,
+      _client: { write: (name, data) => writeCalls.push({ name, data }) }
+    };
+    const adapter = new MineflayerRoleAdapter(bot);
+
+    await adapter.setSpawnAtNearestBed();
+
+    assert.equal(writeCalls.length, 0);
+  });
+
   it('kalau tidak ada bed dalam jangkauan, harus mengembalikan false tanpa error - jangan macet menunggu bed yang tidak ada', async () => {
     const bot = {
       entity: { position: { x: 0, y: 64, z: 0 } },

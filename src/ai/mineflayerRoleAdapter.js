@@ -325,6 +325,19 @@ class MineflayerRoleAdapter {
     const block = this.blockAt(bedBlock.position);
     if (typeof this.bot?.activateBlock !== 'function') return false;
     await this.bot.activateBlock(block);
+    // Beri jeda singkat - status isSleeping baru sungguh-sungguh terkonfirmasi lewat paket metadata
+    // ASINKRON dari server (bukan langsung begitu paket klik kita TERKIRIM), jadi cek langsung
+    // tanpa jeda berisiko race condition (belum sempat diperbarui saat dicek).
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    // Klik bed di sini SEMATA untuk set titik spawn - kalau kebetulan malam hari, server bisa
+    // benar-benar menidurkan bot (bukan cuma set spawn), yang bisa membuatnya terjebak diam di
+    // ranjang tanpa batas waktu kalau tidak dibangunkan. Tulis paket entity_action LANGSUNG dengan
+    // actionId:0 ("leave_bed") - bot.wake() bawaan mineflayer masih kirim actionId:2, yang di
+    // skema protokol server ini berarti "stop_sprinting", BUKAN "leave_bed" - bot tidak akan
+    // pernah bangun lagi kalau pakai fungsi bawaan itu.
+    if (this.bot.isSleeping && this.bot?._client?.write) {
+      this.bot._client.write('entity_action', { entityId: this.bot.entity.id, actionId: 0, jumpBoost: 0 });
+    }
     return true;
   }
 
