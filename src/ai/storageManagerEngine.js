@@ -17,6 +17,13 @@ function posKey(pos) {
   return `${Math.floor(pos.x)},${Math.floor(pos.y)},${Math.floor(pos.z)}`;
 }
 
+// Titik dekat SISI BARAT sebuah chest (x lebih kecil) - pemilik mengonfirmasi live: akses ruang
+// penyimpanan lega dari sisi barat, jadi navigasi ke chest gudang SENGAJA diarahkan ke sana dulu
+// (bukan biarkan pathfinder pilih sisi sembarangan yang kebetulan terdekat).
+function westOf(pos, distance = 2) {
+  return { x: pos.x - distance, y: pos.y, z: pos.z };
+}
+
 class StorageManagerEngine extends EventEmitter {
   constructor(options = {}) {
     super();
@@ -119,7 +126,7 @@ class StorageManagerEngine extends EventEmitter {
         const target = await this.resolveChestForItem(insideChests, name);
         if (!target) continue;
         attemptedAny = true;
-        await this.adapter.navigateNear(target, 3);
+        await this.adapter.navigateNear(westOf(target), 1);
         try {
           const result = await this.adapter.depositToChest(target, (item) => item.name === name);
           totalDelivered += result.deposited;
@@ -161,7 +168,7 @@ class StorageManagerEngine extends EventEmitter {
     const insideChests = this.getInsideChestPositions();
     const nextToInspect = insideChests.find((pos) => !this.inspectedPositions.has(posKey(pos)));
     if (nextToInspect) {
-      await this.adapter.navigateNear(nextToInspect, 3);
+      await this.adapter.navigateNear(westOf(nextToInspect), 1);
       const items = await this.adapter.getChestContents(nextToInspect);
       this.inspectedPositions.add(posKey(nextToInspect));
       this.metrics.inspected += 1;

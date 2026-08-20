@@ -269,4 +269,33 @@ describe('StorageManagerEngine', () => {
     assert.equal(second.deliveries[0].position.x, -186);
     assert.equal(second.count, 5);
   });
+
+  it('saat mengantar ke chest gudang, harus mendekat dari sisi BARAT chest itu (x lebih kecil) - permintaan nyata pemilik: sisi barat itu yang aksesnya lega, bukan mendekat dari sisi sembarangan yang pathfinder kebetulan pilih', async () => {
+    const adapter = new FakeStorageAdapter({
+      chests: { '-185,72,-352': { position: { x: -185, y: 72, z: -352 }, items: [] } },
+      inventory: { cobblestone: 5 }
+    });
+    const engine = new StorageManagerEngine({ adapter, houseBounds: HOUSE_BOUNDS });
+
+    await engine.tick();
+
+    const navigateAction = adapter.actions.find((a) => a.type === 'navigate');
+    assert.ok(navigateAction, 'harus navigasi sebelum mengantar');
+    assert.ok(navigateAction.position.x < -185, 'harus mendekat dari sisi BARAT (x LEBIH KECIL dari posisi chest), bukan dari x yang sama/lebih besar');
+    assert.equal(navigateAction.position.y, 72);
+    assert.equal(navigateAction.position.z, -352);
+  });
+
+  it('saat memeriksa (inspect) chest gudang, harus juga mendekat dari sisi BARAT chest itu', async () => {
+    const adapter = new FakeStorageAdapter({
+      chests: { '-185,72,-352': { position: { x: -185, y: 72, z: -352 }, items: [{ name: 'iron_ingot', count: 1 }] } }
+    });
+    const engine = new StorageManagerEngine({ adapter, houseBounds: HOUSE_BOUNDS });
+
+    await engine.tick();
+
+    const navigateAction = adapter.actions.find((a) => a.type === 'navigate');
+    assert.ok(navigateAction);
+    assert.ok(navigateAction.position.x < -185, 'harus mendekat dari sisi BARAT juga saat memeriksa, bukan cuma saat mengantar');
+  });
 });
