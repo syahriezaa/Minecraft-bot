@@ -24,11 +24,14 @@ const TICK_INTERVAL_MS = Number(process.env.STORAGE_TICK_MS) || 2000;
 const DEFAULT_BASE_GOAL = { x: -185, y: 71, z: -352 };
 // Ruang penyimpanan di dalam rumah - dipakai StorageManagerEngine untuk membedakan chest gudang
 // (tujuan pengantaran/rapi-rapi) dari chest lain di luar rumah (sumber koleksi). Perkiraan awal di
-// sekitar base (-185,71,-352) berdasarkan stack chest gudang yang sudah ditemukan sesi sebelumnya
-// (kolom -181/-180, y 72-75, z -349..-353) - bisa disetel lewat env kalau ternyata meleset.
+// sekitar base (-185,71,-352). Pemilik mengonfirmasi live: SEMUA chest pada RENTANG KETINGGIAN
+// (y) ini adalah gudang, apapun posisi x/z-nya - bukan kotak x/z sempit seperti dugaan awal (yang
+// justru salah mengira sebagian chest gudang sungguhan sebagai chest "di luar rumah", membuat
+// isinya diambil & dipindah - bug nyata yang dilaporkan pemilik). x/z sengaja DIBIARKAN SANGAT
+// LEBAR (praktis tak terbatas) - cuma y yang benar-benar membedakan gudang dari chest luar.
 const DEFAULT_HOUSE_BOUNDS = {
-  min: { x: Number(process.env.STORAGE_HOUSE_MIN_X) || -195, y: Number(process.env.STORAGE_HOUSE_MIN_Y) || 68, z: Number(process.env.STORAGE_HOUSE_MIN_Z) || -358 },
-  max: { x: Number(process.env.STORAGE_HOUSE_MAX_X) || -175, y: Number(process.env.STORAGE_HOUSE_MAX_Y) || 78, z: Number(process.env.STORAGE_HOUSE_MAX_Z) || -346 }
+  min: { x: Number(process.env.STORAGE_HOUSE_MIN_X) || -1000000, y: Number(process.env.STORAGE_HOUSE_MIN_Y) || 70, z: Number(process.env.STORAGE_HOUSE_MIN_Z) || -1000000 },
+  max: { x: Number(process.env.STORAGE_HOUSE_MAX_X) || 1000000, y: Number(process.env.STORAGE_HOUSE_MAX_Y) || 76, z: Number(process.env.STORAGE_HOUSE_MAX_Z) || 1000000 }
 };
 
 function buildMovements(bot) {
