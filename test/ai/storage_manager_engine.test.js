@@ -470,4 +470,51 @@ describe('StorageManagerEngine', () => {
       assert.ok(!result.deliveries.some((d) => d.position.z === -350), 'leather_chestplate TIDAK BOLEH diantar ke chest buku');
     }
   });
+
+  it('kalau membuka chest LUAR gagal total (mis. windowOpen timeout - bukan "penuh", genuinely tidak bisa dibuka), harus tandai chest itu SUDAH DICOBA dan lanjut ke chest lain - JANGAN ulangi chest yang sama selamanya - ditemukan dari bug live nyata: StorageWorker macet 5+ menit mengulang chest luar yang sama gara-gara error saat buka chest tidak pernah menandai posisi itu "selesai", jadi tick berikutnya memilih chest yang PERSIS SAMA lagi', async () => {
+    const brokenPos = { x: -200, y: 64, z: -360 };
+    const workingChest = { position: { x: -201, y: 64, z: -360 }, items: [{ name: 'oak_log', count: 5 }] };
+    const adapter = new FakeStorageAdapter({
+      chests: { '-201,64,-360': workingChest }
+    });
+    adapter.findChestPositions = () => [brokenPos, workingChest.position];
+    const originalWithdrawAll = adapter.withdrawAllFromChest.bind(adapter);
+    adapter.withdrawAllFromChest = async (pos) => {
+      if (pos.x === -200) throw new Error('Event windowOpen did not fire within timeout of 20000ms');
+      return originalWithdrawAll(pos);
+    };
+    const engine = new StorageManagerEngine({ adapter, houseBounds: HOUSE_BOUNDS });
+
+    const first = await engine.tick();
+    assert.equal(first.action, 'error');
+    assert.equal(first.position.x, -200);
+
+    // Tick berikutnya HARUS pindah ke chest lain, BUKAN mencoba chest -200 yang sama lagi.
+    const second = await engine.tick();
+    assert.equal(second.action, 'collect');
+    assert.equal(second.position.x, -201);
+  });
+
+  it('kalau membuka chest DALAM (gudang) gagal total saat inspect/reorganize, harus tandai sudah dicoba dan lanjut ke chest lain juga', async () => {
+    const brokenPos = { x: -181, y: 72, z: -352 };
+    const workingChest = { position: { x: -181, y: 71, z: -352 }, items: [{ name: 'stone', count: 5 }] };
+    const adapter = new FakeStorageAdapter({
+      chests: { '-181,71,-352': workingChest }
+    });
+    adapter.findChestPositions = () => [brokenPos, workingChest.position];
+    const originalGetContents = adapter.getChestContents.bind(adapter);
+    adapter.getChestContents = async (pos) => {
+      if (pos.y === 72) throw new Error('Event windowOpen did not fire within timeout of 20000ms');
+      return originalGetContents(pos);
+    };
+    const engine = new StorageManagerEngine({ adapter, houseBounds: HOUSE_BOUNDS });
+
+    const first = await engine.tick();
+    assert.equal(first.action, 'error');
+    assert.equal(first.position.y, 72);
+
+    const second = await engine.tick();
+    assert.notEqual(second.action, 'error');
+    assert.equal(second.position.y, 71);
+  });
 });

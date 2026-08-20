@@ -212,19 +212,38 @@ class StorageManagerEngine extends EventEmitter {
     const outsideChests = this.getOutsideChestPositions();
     const nextToCollect = outsideChests.find((pos) => !this.collectedPositions.has(posKey(pos)));
     if (nextToCollect) {
-      await this.adapter.navigateNear(nextToCollect, 3);
-      const result = await this.adapter.withdrawAllFromChest(nextToCollect);
+      // Chest yang GAGAL DIBUKA SAMA SEKALI (mis. "windowOpen" tidak pernah merespons - beda dari
+      // "penuh", ini genuinely tidak bisa diakses) tetap harus ditandai "sudah dicoba" SEBELUM
+      // melempar error lagi ke atas - kalau tidak, tick berikutnya memilih posisi yang PERSIS SAMA
+      // lagi (karena belum pernah masuk collectedPositions), macet mengulang chest yang sama
+      // selamanya - bug live nyata: StorageWorker diam di tempat 5+ menit gara-gara ini.
       this.collectedPositions.add(posKey(nextToCollect));
-      this.metrics.collected += 1;
-      this.metrics.itemsCollected += result.totalCount;
-      this.emit('collected', { position: nextToCollect, count: result.totalCount });
-      return { action: 'collect', position: nextToCollect, count: result.totalCount };
+      try {
+        await this.adapter.navigateNear(nextToCollect, 3);
+        const result = await this.adapter.withdrawAllFromChest(nextToCollect);
+        this.metrics.collected += 1;
+        this.metrics.itemsCollected += result.totalCount;
+        this.emit('collected', { position: nextToCollect, count: result.totalCount });
+        return { action: 'collect', position: nextToCollect, count: result.totalCount };
+      } catch (e) {
+        this.emit('chestError', { position: nextToCollect, error: e.message });
+        return { action: 'error', position: nextToCollect, error: e.message };
+      }
     }
 
     const insideChests = this.getInsideChestPositions();
     const nextToInspect = insideChests.find((pos) => !this.inspectedPositions.has(posKey(pos)));
     if (nextToInspect) {
-      const items = await this.adapter.getChestContents(nextToInspect);
+      let items;
+      try {
+        items = await this.adapter.getChestContents(nextToInspect);
+      } catch (e) {
+        // Sama seperti chest luar - tandai "sudah dicoba" dulu supaya tidak mengulang posisi
+        // yang persis sama selamanya kalau chest ini genuinely tidak bisa dibuka.
+        this.inspectedPositions.add(posKey(nextToInspect));
+        this.emit('chestError', { position: nextToInspect, error: e.message });
+        return { action: 'error', position: nextToInspect, error: e.message };
+      }
 
       // Item SALAH TEMPAT: assignment yang sudah diketahui menunjuk ke chest LAIN (dinormalkan
       // lewat canonicalKeyFor supaya separuh double-chest yang sama tidak dianggap "lain"). Cuma
