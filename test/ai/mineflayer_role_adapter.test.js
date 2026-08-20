@@ -491,3 +491,31 @@ describe('MineflayerRoleAdapter.withdrawAllFromChest - ambil SEMUA isi chest apa
     assert.equal(result.totalCount, 0);
   });
 });
+
+describe('MineflayerRoleAdapter.navigateNear - harus PUNYA BATAS WAKTU, jangan pernah menggantung selamanya - ditemukan dari bug live nyata: StorageWorker berhenti total (diam di tempat, tidak ada tick/error/log SAMA SEKALI selama menit-menitan) karena bot.pathfinder.goto() ke chest yang TIDAK TERJANGKAU tidak pernah resolve maupun reject - satu chest tak terjangkau membekukan SELURUH worker permanen, bukan cuma gagal aman untuk chest itu', () => {
+  it('kalau pathfinder.goto() menggantung (tidak pernah resolve), navigateNear harus tetap resolve ke false setelah navigateTimeoutMs, bukan menggantung ikut-ikutan selamanya', async () => {
+    const bot = {
+      entity: { position: { x: 0, y: 64, z: 0 } },
+      // Simulasikan chest tak terjangkau: goto() dipanggil tapi promise-nya TIDAK PERNAH resolve
+      // ataupun reject - persis seperti pathfinder yang terus mencoba tanpa pernah menyerah.
+      pathfinder: { goto: () => new Promise(() => {}) }
+    };
+    const adapter = new MineflayerRoleAdapter(bot, { navigateTimeoutMs: 50 });
+
+    const result = await adapter.navigateNear({ x: 10, y: 64, z: 10 }, 3);
+
+    assert.equal(result, false, 'harus menyerah dan lanjut (false), bukan menggantung selamanya menunggu goto() yang tidak pernah selesai');
+  });
+
+  it('kalau pathfinder.goto() berhasil sebelum batas waktu, tetap harus mengembalikan true seperti biasa', async () => {
+    const bot = {
+      entity: { position: { x: 0, y: 64, z: 0 } },
+      pathfinder: { goto: async () => {} }
+    };
+    const adapter = new MineflayerRoleAdapter(bot, { navigateTimeoutMs: 50 });
+
+    const result = await adapter.navigateNear({ x: 10, y: 64, z: 10 }, 3);
+
+    assert.equal(result, true);
+  });
+});

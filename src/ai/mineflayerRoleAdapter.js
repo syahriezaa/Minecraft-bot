@@ -39,6 +39,12 @@ class MineflayerRoleAdapter {
     this.bot = bot;
     this.options = {
       defaultGoalRange: 1,
+      // Batas waktu goto() pathfinder - ditemukan dari bug live nyata (StorageWorker berhenti
+      // total, tidak ada tick/error sama sekali selama menit-menitan): bot.pathfinder.goto() ke
+      // target yang TIDAK TERJANGKAU (mis. chest terkubur di tumpukan padat) tidak pernah resolve
+      // maupun reject - satu target tak terjangkau membekukan SELURUH worker (semua tick berikutnya)
+      // permanen, bukan cuma gagal aman untuk target itu saja.
+      navigateTimeoutMs: 15000,
       ...options
     };
     this.worldAwareness = options.worldAwareness || null;
@@ -84,8 +90,20 @@ class MineflayerRoleAdapter {
   async navigateNear(pos, range = this.options.defaultGoalRange) {
     if (!pos) return false;
     if (this.bot?.pathfinder?.goto) {
-      await this.bot.pathfinder.goto(new goals.GoalNear(pos.x, pos.y, pos.z, range));
-      return true;
+      // Balapan goto() melawan batas waktu - lihat catatan navigateTimeoutMs di constructor.
+      // Timeout SENGAJA resolve (bukan reject) ke false: caller (findMatchingChest,
+      // withdrawAllFromChest, dst) sudah menganggap false/gagal sebagai sinyal "lewati saja,
+      // lanjut ke target berikutnya", bukan error yang perlu ditangani khusus.
+      let timeoutHandle;
+      const timeout = new Promise((resolve) => {
+        timeoutHandle = setTimeout(() => resolve(false), this.options.navigateTimeoutMs);
+      });
+      const result = await Promise.race([
+        this.bot.pathfinder.goto(new goals.GoalNear(pos.x, pos.y, pos.z, range)).then(() => true),
+        timeout
+      ]);
+      clearTimeout(timeoutHandle);
+      return result;
     }
     return distance(this.getPosition(), pos) <= range;
   }
