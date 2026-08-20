@@ -11,6 +11,7 @@ const { WebSocketServer } = require('ws');
 const path = require('path');
 const { BenchmarkRunner } = require('../benchmark/benchmarkRunner');
 const { DeepSeekClient } = require('../ai/deepseekClient');
+const { startFarmerWorker } = require('../ai/runFarmerWorker');
 
 const app = express();
 const server = http.createServer(app);
@@ -250,6 +251,48 @@ app.post('/api/ai/chat', async (req, res) => {
   } catch (e) {
     res.status(500).json({ success: false, error: { code: 'AI_ERROR', message: e.message } });
   }
+});
+
+// Pekerja pertanian+peternakan otonom (lihat runFarmerWorker.js) - satu instance saja pada satu
+// waktu, dikontrol lewat dashboard (tombol Mulai/Hentikan di panel kontrol).
+let farmerWorkerHandle = null;
+
+app.post('/api/farmer/start', (req, res) => {
+  if (farmerWorkerHandle) {
+    return res.status(409).json({ success: false, error: { code: 'ALREADY_RUNNING', message: 'Pekerja pertanian sudah berjalan' } });
+  }
+  const { host, port, botName, scanRadius } = req.body || {};
+  broadcast({ type: 'AI_ACTION_EVENT', data: { task: 'FARMER_WORKER', step: 'Memulai pekerja pertanian+peternakan...', status: 'RUNNING' } });
+
+  farmerWorkerHandle = startFarmerWorker({
+    host: host || 'atoms-girl.tun.ply.gg',
+    port: port || 25565,
+    botName: botName || 'FarmerWorker',
+    scanRadius: scanRadius || 32,
+    log: (msg) => broadcast({ type: 'AI_ACTION_EVENT', data: { task: 'FARMER_WORKER', step: msg, status: 'RUNNING' } })
+  });
+
+  res.json({ success: true, data: { message: 'Pekerja pertanian+peternakan dimulai' } });
+});
+
+app.post('/api/farmer/stop', (req, res) => {
+  if (!farmerWorkerHandle) {
+    return res.status(409).json({ success: false, error: { code: 'NOT_RUNNING', message: 'Tidak ada pekerja pertanian yang berjalan' } });
+  }
+  farmerWorkerHandle.stop();
+  farmerWorkerHandle = null;
+  broadcast({ type: 'AI_ACTION_EVENT', data: { task: 'FARMER_WORKER', step: 'Pekerja pertanian dihentikan dari dashboard.', status: 'STOPPED' } });
+  res.json({ success: true, data: { message: 'Pekerja pertanian dihentikan' } });
+});
+
+app.get('/api/farmer/status', (req, res) => {
+  res.json({
+    success: true,
+    data: {
+      running: Boolean(farmerWorkerHandle),
+      metrics: farmerWorkerHandle ? farmerWorkerHandle.getMetrics() : null
+    }
+  });
 });
 
 // WebSocket handler

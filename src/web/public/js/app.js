@@ -262,6 +262,24 @@
     }).catch(e => addTerminalLog(`[ Error ] ${e.message}`, 'error'));
   });
 
+  document.getElementById('btn-action-farmer-start')?.addEventListener('click', () => {
+    addTerminalLog('[ Browser Control ] Memulai pekerja pertanian+peternakan...', 'warning');
+    fetch('/api/farmer/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({})
+    }).then(r => r.json()).then(data => {
+      addTerminalLog(`[ Respon Server ] ${data.data?.message || data.error?.message || 'Pekerja tani dimulai'}`, 'system');
+    }).catch(e => addTerminalLog(`[ Error ] ${e.message}`, 'error'));
+  });
+
+  document.getElementById('btn-action-farmer-stop')?.addEventListener('click', () => {
+    addTerminalLog('[ Browser Control ] Menghentikan pekerja pertanian...', 'warning');
+    fetch('/api/farmer/stop', { method: 'POST' }).then(r => r.json()).then(data => {
+      addTerminalLog(`[ Respon Server ] ${data.data?.message || data.error?.message || 'Pekerja tani dihentikan'}`, 'system');
+    }).catch(e => addTerminalLog(`[ Error ] ${e.message}`, 'error'));
+  });
+
   // ── Benchmark Button Handlers ───────────────────────────
   document.querySelectorAll('.btn-level').forEach(btn => {
     btn.addEventListener('click', () => {
