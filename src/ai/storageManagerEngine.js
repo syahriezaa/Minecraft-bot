@@ -97,13 +97,19 @@ class StorageManagerEngine extends EventEmitter {
   // disimpan supaya panggilan berikutnya untuk jenis yang sama konsisten ke chest yang sama.
   async resolveChestForItem(insideChests, itemName) {
     const candidates = insideChests.filter((pos) => !this.fullChestPositions.has(posKey(pos)));
-    if (candidates.length === 0) return null;
 
     const assignedKey = this.chestAssignments.get(itemName);
+    const hasExistingAssignment = Boolean(assignedKey);
     if (assignedKey) {
       const stillValid = candidates.find((pos) => posKey(pos) === assignedKey);
       if (stillValid) return stillValid;
+      // Rumah yang sudah diketahui BENAR untuk item ini kebetulan sedang penuh - lanjut cari
+      // ALTERNATIF AMAN di bawah (chest lain yang sudah berisi jenis sama, atau yang benar-benar
+      // kosong) SEBELUM menyerah - tapi kalau tidak ada alternatif aman, JANGAN paksa ke chest
+      // sembarangan (lihat penjelasan di bawah kenapa itu berbahaya).
     }
+
+    if (candidates.length === 0) return null;
 
     for (const pos of candidates) {
       const items = await this.adapter.getChestContents(pos);
@@ -123,6 +129,19 @@ class StorageManagerEngine extends EventEmitter {
       }
     }
 
+    if (hasExistingAssignment) {
+      // Sudah punya rumah yang diketahui BENAR, tapi sekarang penuh DAN tidak ada alternatif
+      // aman (tidak ada chest lain yang sudah cocok isinya atau benar-benar kosong) - JANGAN
+      // paksa ke sembarang chest tak-penuh (itu penyebab bug live nyata: dirt yang sudah benar
+      // ke chest dirt malah ke-timpa jadi menunjuk ke chest buku, hanya karena chest dirt-nya
+      // kebetulan penuh saat itu). Menyerah untuk tick ini - assignment lama tetap dipertahankan,
+      // coba lagi nanti setelah fullChestPositions di-reset (lihat akhir tick()).
+      return null;
+    }
+
+    // Item BENAR-BENAR belum pernah punya rumah sama sekali (bukan kasus "rumahnya lagi penuh")
+    // - pakai chest tak-penuh pertama sebagai jalan terakhir supaya barang tidak menumpuk
+    // selamanya di inventaris tanpa tujuan sama sekali.
     this.chestAssignments.set(itemName, posKey(candidates[0]));
     return candidates[0];
   }

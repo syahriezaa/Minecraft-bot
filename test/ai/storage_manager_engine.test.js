@@ -369,4 +369,42 @@ describe('StorageManagerEngine', () => {
 
     assert.notEqual(result.action, 'reorganize', 'separuh chest yang lain BUKAN "chest lain" - itu wadah fisik yang SAMA, jangan dipindah-pindah sia-sia');
   });
+
+  it('kalau item SUDAH punya assignment tapi chest rumahnya kebetulan lagi PENUH, dan TIDAK ADA chest lain yang cocok isinya atau benar-benar kosong (semua chest lain sudah berisi kategori LAIN) - JANGAN paksa ke chest sembarangan, biarkan menunggu (skip tick ini), bukan MENIMPA memori sortir yang sudah benar - ditemukan dari bug live nyata: dirt yang sudah benar terdaftar ke chest dirt malah ke-timpa jadi menunjuk ke chest buku (yang BUKAN kosong, sudah berisi enchanted_book) hanya karena chest dirt-nya kebetulan lagi penuh saat itu', async () => {
+    const dirtHomeChest = { position: { x: -181, y: 74, z: -352 }, items: [] };
+    // Chest buku BUKAN kosong (sudah berisi kategori lain) - jalur "chest kosong aman" TIDAK
+    // berlaku di sini, persis situasi nyata yang menyebabkan bug (fallback "asal-asalan" dipakai).
+    const booksChest = { position: { x: -181, y: 71, z: -350 }, items: [{ name: 'enchanted_book', count: 3 }] };
+    const adapter = new FakeStorageAdapter({
+      chests: { '-181,74,-352': dirtHomeChest, '-181,71,-350': booksChest },
+      inventory: { dirt: 10 }
+    });
+    const engine = new StorageManagerEngine({ adapter, houseBounds: HOUSE_BOUNDS, initialAssignments: { dirt: '-181,74,-352' } });
+    // Simulasikan chest rumah dirt kebetulan lagi penuh SAAT INI (mis. gara-gara item lain gagal
+    // disetor ke sana barusan) - bukan berarti dirt tidak boleh pulang ke sana lagi SELAMANYA.
+    engine.fullChestPositions.add('-181,74,-352');
+
+    const result = await engine.tick();
+
+    assert.equal(result.action, 'idle', 'harus menyerah untuk tick ini (bukan malah dorong ke chest buku)');
+    assert.equal(engine.getChestAssignments().dirt, '-181,74,-352', 'memori sortir dirt HARUS TETAP ke chest yang benar, tidak boleh tertimpa jadi chest buku');
+    assert.ok(!booksChest.items.some((i) => i.name === 'dirt'), 'dirt tidak boleh nyasar ke chest buku');
+  });
+
+  it('kalau item SUDAH punya assignment tapi rumahnya penuh, dan ADA chest lain yang genuinely kosong (bukan kategori lain) - boleh dipakai sebagai tujuan sementara (ini beda dari fallback "asal-asalan" - chest kosong aman dipakai siapapun)', async () => {
+    const homeChest = { position: { x: -181, y: 74, z: -352 }, items: [] };
+    const emptyChest = { position: { x: -181, y: 71, z: -350 }, items: [] };
+    const adapter = new FakeStorageAdapter({
+      chests: { '-181,74,-352': homeChest, '-181,71,-350': emptyChest },
+      inventory: { dirt: 10 }
+    });
+    const engine = new StorageManagerEngine({ adapter, houseBounds: HOUSE_BOUNDS, initialAssignments: { dirt: '-181,74,-352' } });
+    engine.fullChestPositions.add('-181,74,-352');
+
+    const result = await engine.tick();
+
+    assert.equal(result.action, 'deliver');
+    assert.equal(result.deliveries[0].position.x, -181);
+    assert.equal(result.deliveries[0].position.z, -350);
+  });
 });
