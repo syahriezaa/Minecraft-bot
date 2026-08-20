@@ -136,6 +136,14 @@ const CANONICAL_GEAR_ASSIGNMENTS = {
   wooden_sword: WEAPONS_CHEST, stone_sword: WEAPONS_CHEST, golden_sword: WEAPONS_CHEST, iron_sword: WEAPONS_CHEST, diamond_sword: WEAPONS_CHEST, netherite_sword: WEAPONS_CHEST,
   bow: WEAPONS_CHEST, crossbow: WEAPONS_CHEST, trident: WEAPONS_CHEST, arrow: WEAPONS_CHEST, spectral_arrow: WEAPONS_CHEST, tipped_arrow: WEAPONS_CHEST,
 
+  // Perkakas (kapak/sekop/beliung/cangkul) - digabung dengan senjata (sama-sama alat yang dipegang
+  // di tangan), tidak dapat chest sendiri supaya tidak perlu slot ke-25 yang tidak ada.
+  wooden_axe: WEAPONS_CHEST, stone_axe: WEAPONS_CHEST, golden_axe: WEAPONS_CHEST, iron_axe: WEAPONS_CHEST, diamond_axe: WEAPONS_CHEST, netherite_axe: WEAPONS_CHEST,
+  wooden_shovel: WEAPONS_CHEST, stone_shovel: WEAPONS_CHEST, golden_shovel: WEAPONS_CHEST, iron_shovel: WEAPONS_CHEST, diamond_shovel: WEAPONS_CHEST, netherite_shovel: WEAPONS_CHEST,
+  wooden_pickaxe: WEAPONS_CHEST, stone_pickaxe: WEAPONS_CHEST, golden_pickaxe: WEAPONS_CHEST, iron_pickaxe: WEAPONS_CHEST, diamond_pickaxe: WEAPONS_CHEST, netherite_pickaxe: WEAPONS_CHEST,
+  wooden_hoe: WEAPONS_CHEST, stone_hoe: WEAPONS_CHEST, golden_hoe: WEAPONS_CHEST, iron_hoe: WEAPONS_CHEST, diamond_hoe: WEAPONS_CHEST, netherite_hoe: WEAPONS_CHEST,
+  fishing_rod: WEAPONS_CHEST, shears: WEAPONS_CHEST, flint_and_steel: WEAPONS_CHEST,
+
   // Makanan
   cooked_chicken: FOOD_CHEST, chicken: FOOD_CHEST, cooked_beef: FOOD_CHEST, beef: FOOD_CHEST,
   cooked_porkchop: FOOD_CHEST, porkchop: FOOD_CHEST, mutton: FOOD_CHEST, cooked_mutton: FOOD_CHEST,
