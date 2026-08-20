@@ -38,7 +38,7 @@ function buildMovements(bot) {
   return movements;
 }
 
-function startGuardWorker({ host, port, botName, scanRadius = 16, baseGoal = DEFAULT_BASE_GOAL, avoidArea = DEFAULT_AVOID_AREA, log = (m) => console.log(m) }) {
+function startGuardWorker({ host, port, botName, scanRadius = 16, baseGoal = DEFAULT_BASE_GOAL, avoidArea = DEFAULT_AVOID_AREA, log = (m) => console.log(m), onDisconnect = () => {} }) {
   const bot = mineflayer.createBot({
     host, port,
     username: botName || 'GuardWorker',
@@ -126,6 +126,15 @@ function startGuardWorker({ host, port, botName, scanRadius = 16, baseGoal = DEF
 
   bot.on('error', (e) => log(`ERROR: ${e.message}`));
   bot.on('kicked', (r) => log(`DIKICK: ${JSON.stringify(r)}`));
+  // Sama seperti runFarmerWorker.js - tanpa ini, handle worker tetap "hidup" di Map dashboard
+  // SELAMANYA dengan data basi walau koneksi sungguhan sudah lama putus.
+  bot.on('end', (reason) => {
+    if (stopped) return;
+    log(`Koneksi terputus tak terduga (${reason || 'tidak diketahui'}) - worker berhenti.`);
+    stopped = true;
+    if (timer) clearTimeout(timer);
+    onDisconnect();
+  });
 
   return {
     stop() {

@@ -287,7 +287,14 @@ app.post('/api/farmer/start', (req, res) => {
     port: port || 25565,
     botName: name,
     scanRadius: scanRadius || 32,
-    log: (msg) => broadcast({ type: 'AI_ACTION_EVENT', data: { task: 'FARMER_WORKER', step: `[${name}] ${msg}`, status: 'RUNNING' } })
+    log: (msg) => broadcast({ type: 'AI_ACTION_EVENT', data: { task: 'FARMER_WORKER', step: `[${name}] ${msg}`, status: 'RUNNING' } }),
+    // Tanpa ini, entri Map tetap "hidup" selamanya di dashboard walau koneksi sungguhan sudah
+    // putus (bug nyata: dashboard terus lapor "running: true" dengan data basi) - hapus dari Map
+    // begitu bot benar-benar terputus tak terduga, supaya status dashboard jujur.
+    onDisconnect: () => {
+      farmerWorkers.delete(name);
+      broadcast({ type: 'AI_ACTION_EVENT', data: { task: 'FARMER_WORKER', step: `[${name}] Koneksi terputus - dihapus dari daftar armada.`, status: 'STOPPED' } });
+    }
   });
   farmerWorkers.set(name, handle);
 
@@ -350,7 +357,11 @@ app.post('/api/guard/start', (req, res) => {
     port: port || 25565,
     botName: name,
     scanRadius: scanRadius || 16,
-    log: (msg) => broadcast({ type: 'AI_ACTION_EVENT', data: { task: 'GUARD_WORKER', step: `[${name}] ${msg}`, status: 'RUNNING' } })
+    log: (msg) => broadcast({ type: 'AI_ACTION_EVENT', data: { task: 'GUARD_WORKER', step: `[${name}] ${msg}`, status: 'RUNNING' } }),
+    onDisconnect: () => {
+      guardWorkers.delete(name);
+      broadcast({ type: 'AI_ACTION_EVENT', data: { task: 'GUARD_WORKER', step: `[${name}] Koneksi terputus - dihapus dari daftar armada.`, status: 'STOPPED' } });
+    }
   });
   guardWorkers.set(name, handle);
 

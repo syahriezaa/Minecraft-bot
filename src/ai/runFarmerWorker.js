@@ -49,7 +49,7 @@ function buildMovements(bot) {
   return movements;
 }
 
-function startFarmerWorker({ host, port, botName, scanRadius = 32, baseGoal = DEFAULT_BASE_GOAL, avoidArea = DEFAULT_AVOID_AREA, log = (m) => console.log(m) }) {
+function startFarmerWorker({ host, port, botName, scanRadius = 32, baseGoal = DEFAULT_BASE_GOAL, avoidArea = DEFAULT_AVOID_AREA, log = (m) => console.log(m), onDisconnect = () => {} }) {
   const bot = mineflayer.createBot({
     host, port,
     username: botName || 'FarmerWorker',
@@ -144,6 +144,18 @@ function startFarmerWorker({ host, port, botName, scanRadius = 32, baseGoal = DE
 
   bot.on('error', (e) => log(`ERROR: ${e.message}`));
   bot.on('kicked', (r) => log(`DIKICK: ${JSON.stringify(r)}`));
+  // Koneksi terputus (kick, timeout, atau server drop) - tanpa ini, handle worker tetap "hidup" di
+  // Map dashboard SELAMANYA dengan data metrik basi, walau bot sungguhan sudah lama offline (bug
+  // nyata: dashboard terus melaporkan "running: true" untuk bot yang sebenarnya sudah disconnect).
+  // Cek `stopped` supaya TIDAK memicu onDisconnect kalau memang KITA yang menghentikannya lewat
+  // stop() (event 'end' juga terpicu saat bot.quit() dipanggil sendiri).
+  bot.on('end', (reason) => {
+    if (stopped) return;
+    log(`Koneksi terputus tak terduga (${reason || 'tidak diketahui'}) - worker berhenti.`);
+    stopped = true;
+    if (timer) clearTimeout(timer);
+    onDisconnect();
+  });
 
   return {
     stop() {
