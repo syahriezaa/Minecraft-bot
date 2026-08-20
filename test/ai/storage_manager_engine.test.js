@@ -171,4 +171,33 @@ describe('StorageManagerEngine', () => {
 
     assert.equal(result.action, 'idle');
   });
+
+  it('kalau chest tujuan pengantaran PENUH (depositToChest gagal/menolak), harus mengingat chest itu penuh dan coba chest gudang LAIN di tick berikutnya, bukan mengulang chest penuh yang sama selamanya - ditemukan dari bug live nyata: StorageWorker terjebak log "destination full" berulang-ulang tanpa progres karena selalu memilih chest penuh yang sama', async () => {
+    const fullChest = { position: { x: -185, y: 72, z: -352 }, items: [{ name: 'iron_ingot', count: 64 }] };
+    const otherChest = { position: { x: -186, y: 72, z: -352 }, items: [] };
+    const adapter = new FakeStorageAdapter({
+      chests: {
+        '-185,72,-352': fullChest,
+        '-186,72,-352': otherChest
+      },
+      inventory: { iron_ingot: 5 }
+    });
+    // depositToChest KE chest penuh menolak (persis seperti chest.deposit() mineflayer nyata yang
+    // reject dengan Error('destination full') saat slot chest habis).
+    const originalDeposit = adapter.depositToChest.bind(adapter);
+    adapter.depositToChest = async (pos, predicate) => {
+      if (pos.x === -185) throw new Error('destination full');
+      return originalDeposit(pos, predicate);
+    };
+    const engine = new StorageManagerEngine({ adapter, houseBounds: HOUSE_BOUNDS });
+
+    const first = await engine.tick();
+    assert.equal(first.action, 'deliver_failed');
+    assert.equal(first.position.x, -185);
+
+    const second = await engine.tick();
+    assert.equal(second.action, 'deliver', 'tick kedua harus pilih chest LAIN (bukan chest penuh yang sama)');
+    assert.equal(second.position.x, -186);
+    assert.equal(second.count, 5);
+  });
 });

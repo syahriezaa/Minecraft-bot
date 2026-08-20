@@ -36,6 +36,11 @@ class StorageManagerEngine extends EventEmitter {
     // yang sama berulang-ulang tiap tick (mis. chest kosong tetap ditandai "sudah dikunjungi").
     this.collectedPositions = new Set();
     this.inspectedPositions = new Set();
+    // Chest gudang yang diketahui PENUH (deposit ke sana gagal/ditolak) - dikecualikan dari
+    // findDeliveryChest supaya tidak terus mengulang chest yang sama sampai bekukan progres
+    // pengantaran - ditemukan dari bug live nyata: StorageWorker terjebak "destination full"
+    // berulang-ulang tanpa kemajuan karena selalu memilih chest penuh yang sama persis.
+    this.fullChestPositions = new Set();
   }
 
   getOutsideChestPositions() {
@@ -52,11 +57,12 @@ class StorageManagerEngine extends EventEmitter {
   // barang masuk ke chest yang memang sudah terorganisir per jenis, bukan ditumpuk sembarangan.
   // Kalau tidak ada yang cocok, pakai chest dalam rumah PERTAMA sebagai tujuan cadangan.
   async findDeliveryChest(insideChests, carriedItemName) {
-    for (const pos of insideChests) {
+    const candidates = insideChests.filter((pos) => !this.fullChestPositions.has(posKey(pos)));
+    for (const pos of candidates) {
       const items = await this.adapter.getChestContents(pos);
       if (items.some((it) => it.name === carriedItemName)) return pos;
     }
-    return insideChests[0];
+    return candidates[0];
   }
 
   async tick() {
@@ -65,11 +71,25 @@ class StorageManagerEngine extends EventEmitter {
       const insideChests = this.getInsideChestPositions();
       if (insideChests.length === 0) return { action: 'idle', reason: 'no_house_chest' };
       const target = await this.findDeliveryChest(insideChests, carried[0].name);
+      if (!target) {
+        // Semua chest gudang diketahui penuh - reset catatan supaya dicoba lagi nanti (barangkali
+        // sudah dikosongkan manual sejak dicatat) daripada macet permanen tanpa target sama sekali.
+        this.fullChestPositions.clear();
+        return { action: 'idle', reason: 'all_house_chests_full' };
+      }
       await this.adapter.navigateNear(target, 3);
-      const result = await this.adapter.depositToChest(target, () => true);
-      this.metrics.delivered += result.deposited;
-      this.emit('delivered', { position: target, count: result.deposited });
-      return { action: 'deliver', position: target, count: result.deposited };
+      try {
+        const result = await this.adapter.depositToChest(target, () => true);
+        this.metrics.delivered += result.deposited;
+        this.emit('delivered', { position: target, count: result.deposited });
+        return { action: 'deliver', position: target, count: result.deposited };
+      } catch (e) {
+        // Chest penuh (atau gagal lain) - ingat chest ini supaya tick BERIKUTNYA memilih chest
+        // gudang LAIN, bukan mengulang chest yang sama tanpa kemajuan selamanya.
+        this.fullChestPositions.add(posKey(target));
+        this.emit('deliverFailed', { position: target, error: e.message });
+        return { action: 'deliver_failed', position: target, error: e.message };
+      }
     }
 
     const outsideChests = this.getOutsideChestPositions();
