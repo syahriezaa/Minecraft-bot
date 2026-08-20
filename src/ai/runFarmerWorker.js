@@ -45,6 +45,12 @@ function buildMovements(bot) {
   movements.canOpenDoors = true;
   movements.allowParkour = true;
   movements.allowSprinting = true;
+  // Jangan pernah menaruh blok (mis. dirt/cobblestone) untuk membangun jalan/tower - kebun dan
+  // chest gudang semuanya sudah terjangkau jalan kaki biasa, taruh blok cuma buang-buang bahan
+  // dan bisa merusak tampilan base - ditemukan dari keluhan nyata pemilik ("kenapa dia selalu
+  // menaruh block padahal cest bisa di jangkau") - berlaku sama seperti StorageWorker.
+  movements.scafoldingBlocks = [];
+  movements.allow1by1towers = false;
   return movements;
 }
 

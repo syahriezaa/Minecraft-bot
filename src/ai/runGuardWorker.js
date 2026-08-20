@@ -35,6 +35,10 @@ function buildMovements(bot) {
   movements.canOpenDoors = true;
   movements.allowParkour = true;
   movements.allowSprinting = true;
+  // Jangan pernah menaruh blok untuk membangun jalan/tower - ditemukan dari keluhan nyata pemilik
+  // ("kenapa dia selalu menaruh block padahal cest bisa di jangkau") - berlaku sama di semua worker.
+  movements.scafoldingBlocks = [];
+  movements.allow1by1towers = false;
   return movements;
 }
 
