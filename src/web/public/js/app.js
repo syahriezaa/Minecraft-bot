@@ -386,6 +386,22 @@
     }
   });
 
+  createFleetController({
+    apiPrefix: 'storage',
+    label: 'kuartermaster',
+    listElId: 'storage-fleet-list',
+    countElId: 'storage-fleet-count',
+    startBtnId: 'btn-storage-fleet-start',
+    stopAllBtnId: 'btn-storage-fleet-stop-all',
+    defaultName: 'StorageWorker',
+    namePrefix: 'Storage',
+    emptyText: 'Tidak ada kuartermaster yang berjalan.',
+    statsRenderer: (m) => {
+      const storage = m.storage || {};
+      return `kumpul <b>${storage.collected || 0}</b> chest (${storage.itemsCollected || 0} item) · antar <b>${storage.delivered || 0}</b> · periksa <b>${storage.inspected || 0}</b> chest`;
+    }
+  });
+
   // ── Benchmark Button Handlers ───────────────────────────
   document.querySelectorAll('.btn-level').forEach(btn => {
     btn.addEventListener('click', () => {

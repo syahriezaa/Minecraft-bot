@@ -27,6 +27,7 @@ const { DeepSeekClient } = require('../ai/deepseekClient');
 const { startFarmerWorker } = require('../ai/runFarmerWorker');
 const { startGuardWorker } = require('../ai/runGuardWorker');
 const { startRancherWorker } = require('../ai/runRancherWorker');
+const { startStorageWorker } = require('../ai/runStorageWorker');
 
 const app = express();
 const server = http.createServer(app);
@@ -85,10 +86,10 @@ function distance3d(a, b) {
 
 function buildRealSwarmList() {
   const bots = [];
-  // rancherWorkers dideklarasikan lebih bawah di file ini (const) - aman diakses di sini karena
-  // fungsi ini cuma benar-benar DIPANGGIL belakangan (lewat setInterval/endpoint), bukan saat baris
-  // ini pertama dieksekusi.
-  for (const workerMap of [farmerWorkers, guardWorkers, rancherWorkers]) {
+  // rancherWorkers/storageWorkers dideklarasikan lebih bawah di file ini (const) - aman diakses di
+  // sini karena fungsi ini cuma benar-benar DIPANGGIL belakangan (lewat setInterval/endpoint),
+  // bukan saat baris ini pertama dieksekusi.
+  for (const workerMap of [farmerWorkers, guardWorkers, rancherWorkers, storageWorkers]) {
     for (const [name, handle] of workerMap) {
       const status = typeof handle.getStatus === 'function' ? handle.getStatus() : null;
       if (!status?.position) continue;
@@ -461,6 +462,72 @@ app.get('/api/rancher/status', (req, res) => {
       running: rancherWorkers.size > 0,
       count: rancherWorkers.size,
       workers: Array.from(rancherWorkers.entries()).map(([name, handle]) => ({
+        botName: name,
+        metrics: handle.getMetrics()
+      }))
+    }
+  });
+});
+
+// Pekerja gudang otonom (lihat runStorageWorker.js) - kumpulkan chest di luar rumah, antar ke
+// gudang, rapikan dengan memeriksa tiap chest di dalamnya. Sama pola armada seperti worker lain.
+const storageWorkers = new Map(); // botName -> handle
+
+app.post('/api/storage/start', (req, res) => {
+  const { host, port, botName, scanRadius } = req.body || {};
+  const name = botName || 'StorageWorker';
+  if (storageWorkers.has(name)) {
+    return res.status(409).json({ success: false, error: { code: 'ALREADY_RUNNING', message: `Kuartermaster '${name}' sudah berjalan` } });
+  }
+  broadcast({ type: 'AI_ACTION_EVENT', data: { task: 'STORAGE_WORKER', step: `Memulai kuartermaster '${name}'...`, status: 'RUNNING' } });
+
+  const handle = startStorageWorker({
+    host: host || 'atoms-girl.tun.ply.gg',
+    port: port || 25565,
+    botName: name,
+    scanRadius: scanRadius || 48,
+    log: (msg) => broadcast({ type: 'AI_ACTION_EVENT', data: { task: 'STORAGE_WORKER', step: `[${name}] ${msg}`, status: 'RUNNING' } }),
+    onDisconnect: () => {
+      storageWorkers.delete(name);
+      broadcast({ type: 'AI_ACTION_EVENT', data: { task: 'STORAGE_WORKER', step: `[${name}] Koneksi terputus - dihapus dari daftar armada.`, status: 'STOPPED' } });
+    }
+  });
+  storageWorkers.set(name, handle);
+
+  res.json({ success: true, data: { message: `Kuartermaster '${name}' dimulai` } });
+});
+
+app.post('/api/storage/stop', (req, res) => {
+  const { botName } = req.body || {};
+  if (!botName) {
+    const count = storageWorkers.size;
+    if (count === 0) {
+      return res.status(409).json({ success: false, error: { code: 'NOT_RUNNING', message: 'Tidak ada kuartermaster yang berjalan' } });
+    }
+    for (const [name, handle] of storageWorkers) {
+      handle.stop();
+      broadcast({ type: 'AI_ACTION_EVENT', data: { task: 'STORAGE_WORKER', step: `[${name}] Dihentikan dari dashboard.`, status: 'STOPPED' } });
+    }
+    storageWorkers.clear();
+    return res.json({ success: true, data: { message: `${count} kuartermaster dihentikan` } });
+  }
+  const handle = storageWorkers.get(botName);
+  if (!handle) {
+    return res.status(409).json({ success: false, error: { code: 'NOT_RUNNING', message: `Kuartermaster '${botName}' tidak ditemukan` } });
+  }
+  handle.stop();
+  storageWorkers.delete(botName);
+  broadcast({ type: 'AI_ACTION_EVENT', data: { task: 'STORAGE_WORKER', step: `[${botName}] Dihentikan dari dashboard.`, status: 'STOPPED' } });
+  res.json({ success: true, data: { message: `Kuartermaster '${botName}' dihentikan` } });
+});
+
+app.get('/api/storage/status', (req, res) => {
+  res.json({
+    success: true,
+    data: {
+      running: storageWorkers.size > 0,
+      count: storageWorkers.size,
+      workers: Array.from(storageWorkers.entries()).map(([name, handle]) => ({
         botName: name,
         metrics: handle.getMetrics()
       }))

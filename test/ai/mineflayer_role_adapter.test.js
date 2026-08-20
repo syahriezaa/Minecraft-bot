@@ -398,3 +398,96 @@ describe('MineflayerRoleAdapter.dig - harus mengambil barang yang jatuh, bukan c
     assert.equal(pickupGoal.z, 5);
   });
 });
+
+describe('MineflayerRoleAdapter.findChestPositions - daftar mentah semua posisi chest di sekitar, tanpa filter isi - dipakai StorageManagerEngine untuk membedakan chest DI DALAM vs DI LUAR rumah (isi diperiksa belakangan oleh engine, bukan oleh adapter)', () => {
+  it('harus mengembalikan semua posisi chest dalam jangkauan tanpa membuka satupun (murni geometri blok, bukan isi)', () => {
+    const bot = fakeBot({
+      chestBlocks: [
+        { position: { x: -181, y: 73, z: -350 } },
+        { position: { x: 10, y: 64, z: 10 } }
+      ]
+    });
+    const adapter = new MineflayerRoleAdapter(bot);
+
+    const positions = adapter.findChestPositions();
+
+    assert.deepEqual(positions, [
+      { x: -181, y: 73, z: -350 },
+      { x: 10, y: 64, z: 10 }
+    ]);
+  });
+
+  it('harus mengembalikan array kosong kalau tidak ada chest sama sekali', () => {
+    const bot = fakeBot({ chestBlocks: [] });
+    const adapter = new MineflayerRoleAdapter(bot);
+
+    assert.deepEqual(adapter.findChestPositions(), []);
+  });
+});
+
+describe('MineflayerRoleAdapter.getChestContents - buka satu chest, baca isinya, tutup lagi - dipakai StorageManagerEngine untuk audit "buka semua chest dan cek barang" saat merapikan gudang', () => {
+  it('harus membuka chest, mengembalikan daftar item di dalamnya, lalu menutup chest itu lagi', async () => {
+    const closeCalls = [];
+    const bot = fakeBot({
+      chestBlocks: [{ position: { x: -181, y: 73, z: -350 } }],
+      chestContentsByKey: { '-181,73,-350': [{ name: 'iron_ingot', count: 4 }, { name: 'stone', count: 64 }] }
+    });
+    const originalOpenChest = bot.openChest;
+    bot.openChest = async (block) => {
+      const chest = await originalOpenChest(block);
+      const originalClose = chest.close;
+      chest.close = () => { closeCalls.push(true); originalClose(); };
+      return chest;
+    };
+    const adapter = new MineflayerRoleAdapter(bot);
+
+    const items = await adapter.getChestContents({ x: -181, y: 73, z: -350 });
+
+    assert.deepEqual(items, [{ name: 'iron_ingot', count: 4 }, { name: 'stone', count: 64 }]);
+    assert.equal(closeCalls.length, 1, 'chest harus ditutup lagi setelah dibaca - jangan tinggalkan window terbuka');
+  });
+
+  it('harus mengembalikan array kosong kalau chest tidak bisa dibuka (mis. bukan blok chest di posisi itu)', async () => {
+    const bot = fakeBot({ chestBlocks: [] });
+    const adapter = new MineflayerRoleAdapter(bot);
+
+    const items = await adapter.getChestContents({ x: 0, y: 64, z: 0 });
+
+    assert.deepEqual(items, []);
+  });
+});
+
+describe('MineflayerRoleAdapter.withdrawAllFromChest - ambil SEMUA isi chest apapun jenisnya - dipakai StorageManagerEngine untuk "kumpulkan semua chest di luar rumah", beda dari withdrawFromChest yang butuh filter nama item spesifik', () => {
+  it('harus menarik setiap stack item di chest ke inventaris, mengembalikan total jenis dan jumlah barang yang diambil', async () => {
+    const withdrawCalls = [];
+    const bot = fakeBot({
+      chestBlocks: [{ position: { x: 5, y: 64, z: 5 } }],
+      chestContentsByKey: { '5,64,5': [{ name: 'iron_ingot', type: 1, metadata: null, count: 4 }, { name: 'stone', type: 2, metadata: null, count: 64 }] }
+    });
+    const originalOpenChest = bot.openChest;
+    bot.openChest = async (block) => {
+      const chest = await originalOpenChest(block);
+      chest.withdraw = async (type, metadata, count) => { withdrawCalls.push({ type, metadata, count }); };
+      return chest;
+    };
+    const adapter = new MineflayerRoleAdapter(bot);
+
+    const result = await adapter.withdrawAllFromChest({ x: 5, y: 64, z: 5 });
+
+    assert.equal(result.itemsWithdrawn, 2, 'harus menghitung 2 JENIS item yang ditarik');
+    assert.equal(result.totalCount, 68, 'harus menjumlahkan total barang (4+64) dari semua jenis');
+    assert.equal(withdrawCalls.length, 2);
+    assert.deepEqual(withdrawCalls[0], { type: 1, metadata: null, count: 4 });
+    assert.deepEqual(withdrawCalls[1], { type: 2, metadata: null, count: 64 });
+  });
+
+  it('harus mengembalikan nol kalau chest kosong atau tidak bisa dibuka', async () => {
+    const bot = fakeBot({ chestBlocks: [{ position: { x: 5, y: 64, z: 5 } }] });
+    const adapter = new MineflayerRoleAdapter(bot);
+
+    const result = await adapter.withdrawAllFromChest({ x: 5, y: 64, z: 5 });
+
+    assert.equal(result.itemsWithdrawn, 0);
+    assert.equal(result.totalCount, 0);
+  });
+});

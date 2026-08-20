@@ -169,6 +169,20 @@
       </div>
     </section>
 
+    <!-- Armada Kuartermaster - kumpulkan chest di luar rumah, antar ke gudang, rapikan isi gudang -->
+    <section class="row">
+      <div class="card full-width" id="storage-fleet-panel">
+        <h2>Armada Kuartermaster — kumpulkan & rapikan gudang</h2>
+        <div class="fleet-controls">
+          <label for="storage-fleet-count">Jumlah bot</label>
+          <input type="number" id="storage-fleet-count" class="fleet-count-input" min="1" max="10" value="1">
+          <button class="btn btn-fleet-start" id="btn-storage-fleet-start">Mulai Armada</button>
+          <button class="btn btn-fleet-stop-all" id="btn-storage-fleet-stop-all">Hentikan Semua</button>
+        </div>
+        <div id="storage-fleet-list"></div>
+      </div>
+    </section>
+
     <!-- Baris 3: Panel Benchmark Kurikulum -->
     <section class="row">
       <div class="card full-width" id="benchmark-panel">

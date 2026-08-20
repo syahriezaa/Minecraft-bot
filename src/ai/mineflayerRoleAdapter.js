@@ -258,6 +258,51 @@ class MineflayerRoleAdapter {
     return null;
   }
 
+  // Daftar MENTAH semua posisi chest di sekitar, tanpa buka/filter isi apapun - dipakai
+  // StorageManagerEngine untuk membedakan chest DI DALAM vs DI LUAR area rumah (murni geometri
+  // posisi blok, jauh lebih cepat daripada findMatchingChest yang harus buka tiap chest satu-satu).
+  findChestPositions(maxDistance = 32, count = 64) {
+    if (typeof this.bot?.findBlocks !== 'function') return [];
+    return this.bot.findBlocks({
+      matching: (b) => b && b.name === 'chest',
+      maxDistance,
+      count
+    });
+  }
+
+  // Buka satu chest, baca isinya, tutup lagi - dipakai StorageManagerEngine untuk audit "buka
+  // semua chest dan cek barang" saat merapikan gudang. Beda dari findMatchingChest (yang berhenti
+  // di chest PERTAMA yang cocok) - ini baca isi SATU chest tertentu secara lengkap.
+  async getChestContents(pos) {
+    const chest = await this.openChestAt(pos);
+    if (!chest) return [];
+    const items = typeof chest.containerItems === 'function' ? chest.containerItems() : [];
+    if (typeof chest.close === 'function') chest.close();
+    return items;
+  }
+
+  // Tarik SEMUA isi chest apapun jenisnya - dipakai StorageManagerEngine untuk "kumpulkan semua
+  // chest di luar rumah" (beda dari withdrawFromChest yang butuh filter nama item spesifik, sengaja
+  // dipakai FarmerEngine untuk ambil benih tertentu saja).
+  async withdrawAllFromChest(pos) {
+    const chest = await this.openChestAt(pos);
+    if (!chest) return { itemsWithdrawn: 0, totalCount: 0 };
+    let itemsWithdrawn = 0;
+    let totalCount = 0;
+    try {
+      const items = chest.containerItems();
+      for (const item of items) {
+        if (typeof chest.withdraw !== 'function') continue;
+        await chest.withdraw(item.type, item.metadata ?? null, item.count);
+        itemsWithdrawn += 1;
+        totalCount += item.count || 1;
+      }
+    } finally {
+      if (typeof chest.close === 'function') chest.close();
+    }
+    return { itemsWithdrawn, totalCount };
+  }
+
   // Slot armor mineflayer TETAP di indeks 5-8 (head/torso/legs/feet) di semua versi protokol
   // vanilla - bagian dunia yang jauh lebih stabil daripada field paket yang berubah-ubah (lihat
   // bug use_entity). Slot kosong berarti gear hilang/rusak TOTAL - di Minecraft, durabilitas habis
