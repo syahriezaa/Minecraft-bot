@@ -108,7 +108,8 @@ function startRancherWorker({ host, port, botName, scanRadius = 24, baseGoal = D
         role: 'Peternak',
         position: bot.entity ? { x: bot.entity.position.x, y: bot.entity.position.y, z: bot.entity.position.z } : null,
         health: bot.health ?? null,
-        status: lastAction
+        status: lastAction,
+        inventory: bot.inventory ? bot.inventory.items().map((item) => ({ name: item.name, count: item.count })) : []
       };
     }
   };

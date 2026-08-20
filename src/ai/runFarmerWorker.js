@@ -168,7 +168,9 @@ function startFarmerWorker({ host, port, botName, scanRadius = 32, baseGoal = DE
         role: 'Pekerja Tani',
         position: bot.entity ? { x: bot.entity.position.x, y: bot.entity.position.y, z: bot.entity.position.z } : null,
         health: bot.health ?? null,
-        status: lastAction
+        status: lastAction,
+        // Isi tas sungguhan bot ini SAAT INI - dipakai panel "Koordinat Armada Live" di dashboard.
+        inventory: bot.inventory ? bot.inventory.items().map((item) => ({ name: item.name, count: item.count })) : []
       };
     }
   };

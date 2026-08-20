@@ -409,7 +409,7 @@ body {
 }
 .swarm-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
   gap: 0.7rem;
 }
 .bot-coord-card {
@@ -447,6 +447,45 @@ body {
 .badge-nav { background: var(--accent-dim); color: var(--accent); }
 .badge-sort { background: var(--good-dim); color: var(--good); }
 .badge-idle { background: var(--warn-dim); color: var(--warn); }
+
+.bot-inventory {
+  border-top: 1px solid var(--border-soft);
+  padding-top: 0.4rem;
+}
+.bot-inventory-label {
+  font-size: 0.62rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+  margin-bottom: 0.3rem;
+}
+.bot-inventory-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  max-height: 6.2rem;
+  overflow-y: auto;
+}
+.bot-inventory-item {
+  font-family: var(--mono);
+  font-size: 0.68rem;
+  background: #08090C;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  padding: 2px 6px;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
+.bot-inventory-count {
+  color: var(--accent);
+  margin-left: 3px;
+  font-weight: 600;
+}
+.bot-inventory-empty {
+  font-size: 0.7rem;
+  color: var(--text-faint);
+  font-style: italic;
+}
 
 /* ── Farmer Fleet Panel ────────────────────────────────────── */
 .fleet-controls {

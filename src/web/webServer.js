@@ -97,7 +97,8 @@ function buildRealSwarmList() {
         id: name, name, role: status.role,
         x: status.position.x, y: status.position.y, z: status.position.z,
         status: status.status, health: status.health,
-        distToBase: distance3d(status.position, REAL_BASE_POSITION)
+        distToBase: distance3d(status.position, REAL_BASE_POSITION),
+        inventory: status.inventory || []
       });
     }
   }

@@ -116,6 +116,11 @@
         : ['HARVEST', 'PLANT', 'DEPOSIT', 'FEED', 'REPAIR'].includes(s) ? 'badge-sort'
         : 'badge-idle';
       
+      const inv = Array.isArray(bot.inventory) ? bot.inventory : [];
+      const invHtml = inv.length === 0
+        ? '<span class="bot-inventory-empty">Tas kosong</span>'
+        : inv.map(i => `<span class="bot-inventory-item">${i.name}<span class="bot-inventory-count">x${i.count}</span></span>`).join('');
+
       card.innerHTML = `
         <div class="bot-header">
           <span class="bot-name">${bot.name}</span>
@@ -127,8 +132,12 @@
           <span>Z: <strong>${bot.z.toFixed(1)}</strong></span>
         </div>
         <div class="bot-sub">
-          Jarak ke Base: <strong>${bot.distToBase || '?'}m</strong> | 
+          Jarak ke Base: <strong>${bot.distToBase || '?'}m</strong> |
           Status: <span class="badge-status ${statusBadgeClass}">${bot.status}</span>
+        </div>
+        <div class="bot-inventory">
+          <div class="bot-inventory-label">Isi Tas (${inv.length})</div>
+          <div class="bot-inventory-list">${invHtml}</div>
         </div>
       `;
       swarmContainer.appendChild(card);

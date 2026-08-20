@@ -353,7 +353,8 @@ function startStorageWorker({ host, port, botName, scanRadius = 48, baseGoal = D
         role: 'Kuartermaster',
         position: bot.entity ? { x: bot.entity.position.x, y: bot.entity.position.y, z: bot.entity.position.z } : null,
         health: bot.health ?? null,
-        status: lastAction
+        status: lastAction,
+        inventory: bot.inventory ? bot.inventory.items().map((item) => ({ name: item.name, count: item.count })) : []
       };
     }
   };
