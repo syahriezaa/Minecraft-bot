@@ -104,6 +104,12 @@ const WEAPONS_CHEST = '-181,72,-352';
 const SEEDS_CHEST = '-181,72,-350';
 const FARMING_BYPRODUCTS_CHEST = '-181,72,-349';
 const SAPLINGS_PLANTS_CHEST = '-181,72,-347';
+// Kolom z=-347 (SEMUA level y) SENGAJA dijadikan SATU tema besar "kayu & hasil olahannya" -
+// permintaan nyata pemilik: "-347 dari atas ke bawah isi dengan wood dan hasilnya misal log
+// sapling planks, pindahkan yang lainnya". y72(sapling)/y73(planks)/y74(log) sudah kayu; y71 baru
+// bebas (dipindah dari buku ke barrel) - dipakai untuk kayu batang bercorak/olahan lain (stripped
+// log, trapdoor kayu, dst) supaya seluruh kolom murni kayu.
+const WOOD_BLOCKS_CHEST = '-181,71,-347';
 const TRINKETS_CHEST = '-181,72,-345';
 
 const BUILDING_MATERIALS_CHEST = '-181,73,-352';
@@ -162,13 +168,12 @@ const CANONICAL_GEAR_ASSIGNMENTS = {
   ender_eye: MOB_DROPS_CHEST, glow_ink_sac: MOB_DROPS_CHEST, ink_sac: MOB_DROPS_CHEST, breeze_rod: MOB_DROPS_CHEST,
   white_carpet: MOB_DROPS_CHEST, wind_charge: MOB_DROPS_CHEST,
 
-  // Bibit & tanaman hias (SAPLINGS_PLANTS_CHEST)
+  // Bibit pohon (SAPLINGS_PLANTS_CHEST) - HANYA bibit pohon (bagian dari tema kayu kolom z=-347),
+  // jamur/tanaman nether/kaktus DIKELUARKAN (bukan "hasil kayu") - permintaan nyata pemilik: kolom
+  // -347 murni kayu saja, pindahkan yang lain.
   oak_sapling: SAPLINGS_PLANTS_CHEST, spruce_sapling: SAPLINGS_PLANTS_CHEST, birch_sapling: SAPLINGS_PLANTS_CHEST,
   jungle_sapling: SAPLINGS_PLANTS_CHEST, acacia_sapling: SAPLINGS_PLANTS_CHEST, dark_oak_sapling: SAPLINGS_PLANTS_CHEST,
-  cherry_sapling: SAPLINGS_PLANTS_CHEST, mangrove_propagule: SAPLINGS_PLANTS_CHEST, cactus: SAPLINGS_PLANTS_CHEST,
-  mushroom_stem: SAPLINGS_PLANTS_CHEST, brown_mushroom: SAPLINGS_PLANTS_CHEST, red_mushroom: SAPLINGS_PLANTS_CHEST,
-  red_mushroom_block: SAPLINGS_PLANTS_CHEST, weeping_vines: SAPLINGS_PLANTS_CHEST, crimson_roots: SAPLINGS_PLANTS_CHEST,
-  warped_roots: SAPLINGS_PLANTS_CHEST, crimson_fungus: SAPLINGS_PLANTS_CHEST, warped_fungus: SAPLINGS_PLANTS_CHEST,
+  cherry_sapling: SAPLINGS_PLANTS_CHEST, mangrove_propagule: SAPLINGS_PLANTS_CHEST,
 
   // Benih murni (SEEDS_CHEST) - beda dari hasil panen utama dan hasil sampingan panen
   wheat_seeds: SEEDS_CHEST, beetroot_seeds: SEEDS_CHEST, melon_seeds: SEEDS_CHEST, pumpkin_seeds: SEEDS_CHEST,
@@ -187,10 +192,24 @@ const CANONICAL_GEAR_ASSIGNMENTS = {
   // Bahan bangunan olahan (bata/tangga/lempeng/dinding/kaca)
   stone_bricks: BUILDING_MATERIALS_CHEST, deepslate: BUILDING_MATERIALS_CHEST, glowstone: NETHER_MATERIALS_CHEST,
   glowstone_dust: NETHER_MATERIALS_CHEST, blaze_rod: RARE_DROPS_CHEST,
-  netherite_upgrade_smithing_template: RARE_DROPS_CHEST, warped_wart_block: SAPLINGS_PLANTS_CHEST,
+  netherite_upgrade_smithing_template: RARE_DROPS_CHEST,
 
-  // Blok kayu batang/olahan yang nyasar (dipetakan ke chest kayu/papan yang benar)
-  spruce_log: LOGS_CHEST, stripped_spruce_log: LOGS_CHEST, spruce_planks: PLANKS_CHEST, oak_planks: PLANKS_CHEST,
+  // Kayu batang (log) - dikunci eksplisit ke LOGS_CHEST supaya tidak nyasar lagi
+  oak_log: LOGS_CHEST, spruce_log: LOGS_CHEST, birch_log: LOGS_CHEST, jungle_log: LOGS_CHEST,
+  acacia_log: LOGS_CHEST, dark_oak_log: LOGS_CHEST, cherry_log: LOGS_CHEST, mangrove_log: LOGS_CHEST,
+  crimson_stem: LOGS_CHEST, warped_stem: LOGS_CHEST,
+
+  // Papan kayu (planks) - dikunci eksplisit ke PLANKS_CHEST
+  oak_planks: PLANKS_CHEST, spruce_planks: PLANKS_CHEST, birch_planks: PLANKS_CHEST, jungle_planks: PLANKS_CHEST,
+  acacia_planks: PLANKS_CHEST, dark_oak_planks: PLANKS_CHEST, cherry_planks: PLANKS_CHEST, mangrove_planks: PLANKS_CHEST,
+
+  // Kayu olahan lain (WOOD_BLOCKS_CHEST) - log yang dikupas kulitnya (stripped) dan produk kayu
+  // lain di luar log/planks/sapling mentah - melengkapi kolom z=-347 supaya murni tema kayu.
+  stripped_oak_log: WOOD_BLOCKS_CHEST, stripped_spruce_log: WOOD_BLOCKS_CHEST, stripped_birch_log: WOOD_BLOCKS_CHEST,
+  stripped_jungle_log: WOOD_BLOCKS_CHEST, stripped_acacia_log: WOOD_BLOCKS_CHEST, stripped_dark_oak_log: WOOD_BLOCKS_CHEST,
+  stripped_cherry_log: WOOD_BLOCKS_CHEST, stripped_mangrove_log: WOOD_BLOCKS_CHEST,
+  spruce_trapdoor: WOOD_BLOCKS_CHEST, oak_trapdoor: WOOD_BLOCKS_CHEST, spruce_slab: WOOD_BLOCKS_CHEST,
+  oak_boat: WOOD_BLOCKS_CHEST, oak_stairs: WOOD_BLOCKS_CHEST,
 
   // Blok utilitas/workstation (konsolidasi dengan dispenser/observer/chest cadangan - membebaskan
   // 2 slot yang tadinya masing-masing cuma diisi satu jenis blok saja, dipakai untuk kategori baru
