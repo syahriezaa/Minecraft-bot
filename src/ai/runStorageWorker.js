@@ -74,6 +74,7 @@ function startStorageWorker({ host, port, botName, scanRadius = 48, baseGoal = D
     engine.on('collected', ({ position, count }) => log(`Ambil ${count} item dari chest luar di (${position.x},${position.y},${position.z})`));
     engine.on('delivered', ({ position, count }) => log(`Antar ${count} item ke chest gudang di (${position.x},${position.y},${position.z})`));
     engine.on('inspected', ({ position, items }) => log(`Periksa chest gudang di (${position.x},${position.y},${position.z}) - isi: ${items.map((i) => `${i.name}x${i.count}`).join(', ') || '(kosong)'}`));
+    engine.on('deliverFailed', ({ position, error }) => log(`Gagal antar ke chest gudang di (${position.x},${position.y},${position.z}) - ${error} - coba chest lain di tick berikutnya.`));
 
     log('Pekerja gudang mulai bekerja.');
     lastAction = 'WORKING';
