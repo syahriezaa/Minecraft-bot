@@ -517,4 +517,24 @@ describe('StorageManagerEngine', () => {
     assert.notEqual(second.action, 'error');
     assert.equal(second.position.y, 71);
   });
+
+  it('kalau chest gudang GAGAL DIBUKA saat resolveChestForItem sedang mencari tujuan pengantaran (pencocokan isi/chest kosong - BUKAN lewat jalur inspect/reorganize), harus lewati chest itu (bukan crash total) - ditemukan dari bug live nyata: worker tetap macet 5+ menit walau collect/inspect sudah dijaga, karena error yang SAMA juga bisa muncul dari dalam resolveChestForItem (dipanggil tiap kali mengantar barang, jauh lebih sering daripada collect/inspect) yang belum dijaga sama sekali', async () => {
+    const brokenChest = { position: { x: -181, y: 72, z: -352 }, items: [] };
+    const goodChest = { position: { x: -181, y: 71, z: -352 }, items: [] };
+    const adapter = new FakeStorageAdapter({
+      chests: { '-181,72,-352': brokenChest, '-181,71,-352': goodChest },
+      inventory: { dirt: 5 }
+    });
+    const originalGetContents = adapter.getChestContents.bind(adapter);
+    adapter.getChestContents = async (pos) => {
+      if (pos.y === 72) throw new Error('Event windowOpen did not fire within timeout of 20000ms');
+      return originalGetContents(pos);
+    };
+    const engine = new StorageManagerEngine({ adapter, houseBounds: HOUSE_BOUNDS });
+
+    const result = await engine.tick();
+
+    assert.equal(result.action, 'deliver', 'harus tetap berhasil mengantar ke chest yang BAIK, bukan crash gara-gara satu chest lain gagal dibuka');
+    assert.equal(result.deliveries[0].position.y, 71);
+  });
 });

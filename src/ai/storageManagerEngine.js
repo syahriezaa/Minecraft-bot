@@ -76,6 +76,11 @@ class StorageManagerEngine extends EventEmitter {
     // pengantaran - ditemukan dari bug live nyata: StorageWorker terjebak "destination full"
     // berulang-ulang tanpa kemajuan karena selalu memilih chest penuh yang sama persis.
     this.fullChestPositions = new Set();
+    // Chest yang GAGAL DIBUKA SAMA SEKALI (bukan "penuh" - genuinely tidak merespons, mis.
+    // "windowOpen" timeout) - dikecualikan dari resolveChestForItem juga, sama seperti
+    // fullChestPositions, supaya tiap kali mengantar barang tidak berulang kali mencoba membuka
+    // chest yang sudah diketahui rusak (masing-masing percobaan menunggu ~20 detik sebelum gagal).
+    this.brokenPositions = new Set();
     // Memori "jenis item ini pergi ke chest itu" (posKey string) - dipertahankan SELAMA proses ini
     // berjalan, dan bisa dimuat ulang lewat initialAssignments (disimpan/dipulihkan pemanggil lewat
     // getChestAssignments()) supaya sortir tetap KONSISTEN lintas restart worker, bukan pilih
@@ -95,8 +100,21 @@ class StorageManagerEngine extends EventEmitter {
   // belum ditugaskan ke jenis lain (supaya tidak tercampur), (4) kalau tidak ada yang kosong,
   // pakai chest tak-penuh pertama sebagai jalan terakhir. Assignment yang terpakai/ditemukan
   // disimpan supaya panggilan berikutnya untuk jenis yang sama konsisten ke chest yang sama.
+  // Bungkus getChestContents supaya chest yang gagal dibuka (windowOpen timeout dsb) tidak
+  // menjatuhkan seluruh tick - ditandai rusak (dilewati permanen) dan dilaporkan lewat event,
+  // bukan dilempar sebagai exception yang bisa merembet sampai ke luar tick() tanpa tertangani.
+  async safeGetChestContents(pos) {
+    try {
+      return await this.adapter.getChestContents(pos);
+    } catch (e) {
+      this.brokenPositions.add(posKey(pos));
+      this.emit('chestError', { position: pos, error: e.message });
+      return null;
+    }
+  }
+
   async resolveChestForItem(insideChests, itemName) {
-    const candidates = insideChests.filter((pos) => !this.fullChestPositions.has(posKey(pos)));
+    const candidates = insideChests.filter((pos) => !this.fullChestPositions.has(posKey(pos)) && !this.brokenPositions.has(posKey(pos)));
 
     const assignedKey = this.chestAssignments.get(itemName);
     const hasExistingAssignment = Boolean(assignedKey);
@@ -120,7 +138,8 @@ class StorageManagerEngine extends EventEmitter {
     // buku karena chest buku itu MASIH menyimpan leather_chestplate nyasar dari korupsi lama).
     if (!hasExistingAssignment) {
       for (const pos of candidates) {
-        const items = await this.adapter.getChestContents(pos);
+        const items = await this.safeGetChestContents(pos);
+        if (!items) continue;
         if (items.some((it) => it.name === itemName)) {
           this.chestAssignments.set(itemName, posKey(pos));
           return pos;
@@ -131,7 +150,8 @@ class StorageManagerEngine extends EventEmitter {
     const assignedElsewhere = new Set(this.chestAssignments.values());
     for (const pos of candidates) {
       if (assignedElsewhere.has(posKey(pos))) continue;
-      const items = await this.adapter.getChestContents(pos);
+      const items = await this.safeGetChestContents(pos);
+      if (!items) continue;
       if (items.length === 0) {
         this.chestAssignments.set(itemName, posKey(pos));
         return pos;
