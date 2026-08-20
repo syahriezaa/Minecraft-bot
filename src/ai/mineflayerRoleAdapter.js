@@ -161,11 +161,25 @@ class MineflayerRoleAdapter {
   async useOn(entity) {
     if (!entity) return false;
     await this.navigateNear(entity.position, 3);
-    // bot.activateEntity() (paket use_entity TANPA field x/y/z) crash di server ini (protokol 775) -
-    // "Cannot read properties of undefined (reading 'x')" saat serialisasi, karena protokol ini
-    // mensyaratkan field posisi SELALU ada walau untuk interact biasa. Paket itu gagal terkirim
-    // dengan cara yang merusak koneksi (tick berikutnya semua timeout sampai bot di-kick server) -
-    // bukan sekadar gagal aman. activateEntityAt() menyertakan x/y/z, aman dipakai di protokol ini.
+    // Server ini (protokol 775, skema versi baru Mojang) mengubah bentuk paket use_entity: field
+    // lama "mouse" (enum interact/attack/interact_at) DIHAPUS, diganti field "location" yang WAJIB
+    // ada (bertipe lpVec3 - objek {x,y,z}, BUKAN opsional). bot.activateEntity() DAN
+    // bot.activateEntityAt() bawaan mineflayer keduanya masih kirim skema LAMA (mouse+x/y/z terpisah,
+    // tanpa field location sama sekali) - paket gagal serialisasi persis di field location yang
+    // undefined ("Cannot read properties of undefined (reading 'x')"), dan kegagalan itu merusak
+    // koneksi (semua tick berikutnya timeout sampai bot di-kick server) - bukan sekadar gagal aman.
+    // Tulis paket LANGSUNG dengan skema yang benar untuk protokol ini, bypass fungsi bawaan
+    // mineflayer yang belum diperbarui untuk versi Minecraft ini.
+    if (this.bot?._client?.write) {
+      await this.lookAt(entity.position);
+      this.bot._client.write('use_entity', {
+        target: entity.id,
+        hand: 0, // main_hand
+        location: { x: 0, y: 0, z: 0 },
+        sneaking: false
+      });
+      return true;
+    }
     if (typeof this.bot?.activateEntityAt === 'function') {
       await this.bot.activateEntityAt(entity, entity.position);
       return true;

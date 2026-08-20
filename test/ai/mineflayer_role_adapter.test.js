@@ -68,22 +68,30 @@ describe('MineflayerRoleAdapter.findMatchingChest - cari chest gudang yang SUDAH
   });
 });
 
-describe('MineflayerRoleAdapter.useOn - harus pakai activateEntityAt, BUKAN activateEntity mentah', () => {
-  it('harus memanggil bot.activateEntityAt(entity, posisi) - ditemukan dari crash live nyata: bot.activateEntity() mengirim paket use_entity TANPA field x/y/z, tapi server ini (protokol 775) mensyaratkan field itu SELALU ada walau untuk interact biasa - serialisasi gagal ("Cannot read properties of undefined (reading \'x\')") dan merusak koneksi sampai bot di-kick timeout. activateEntityAt() menyertakan x/y/z, aman di protokol ini', async () => {
-    const activateEntityAtCalls = [];
+describe('MineflayerRoleAdapter.useOn - harus tulis paket use_entity LANGSUNG dengan skema BARU (field location wajib), bukan lewat fungsi bawaan mineflayer yang belum diperbarui', () => {
+  it('harus menulis paket use_entity dengan field target, hand, location (objek x/y/z, BUKAN undefined), dan sneaking - ditemukan dari crash live nyata: skema protokol server ini (775, versi Mojang terbaru) mengganti field lama "mouse" jadi field "location" WAJIB bertipe lpVec3 (objek {x,y,z}, bukan opsional) - baik bot.activateEntity() maupun bot.activateEntityAt() bawaan mineflayer masih kirim skema lama tanpa field location sama sekali, membuat serialisasi gagal ("Cannot read properties of undefined (reading \'x\')") dengan cara yang merusak koneksi sampai bot di-kick server (disconnect.timeout)', async () => {
+    const writeCalls = [];
     const bot = {
       entity: { position: { x: 0, y: 64, z: 0 } },
       pathfinder: { goto: async () => {} },
-      activateEntity: () => { throw new Error('activateEntity TIDAK BOLEH dipanggil - rusak di protokol server ini'); },
-      activateEntityAt: async (entity, pos) => { activateEntityAtCalls.push({ entity, pos }); }
+      lookAt: async () => {},
+      activateEntity: () => { throw new Error('activateEntity TIDAK BOLEH dipanggil - skema paketnya sudah usang di server ini'); },
+      activateEntityAt: () => { throw new Error('activateEntityAt TIDAK BOLEH dipanggil - skema paketnya juga sudah usang di server ini'); },
+      _client: { write: (name, data) => writeCalls.push({ name, data }) }
     };
     const adapter = new MineflayerRoleAdapter(bot);
     const cow = { id: 1, position: { x: 5, y: 64, z: 5 } };
 
     await adapter.useOn(cow);
 
-    assert.equal(activateEntityAtCalls.length, 1);
-    assert.equal(activateEntityAtCalls[0].entity, cow);
+    assert.equal(writeCalls.length, 1);
+    assert.equal(writeCalls[0].name, 'use_entity');
+    assert.equal(writeCalls[0].data.target, cow.id);
+    assert.ok(writeCalls[0].data.location, 'field location harus berupa objek, bukan undefined - itu penyebab crash aslinya');
+    assert.equal(typeof writeCalls[0].data.location.x, 'number');
+    assert.equal(typeof writeCalls[0].data.location.y, 'number');
+    assert.equal(typeof writeCalls[0].data.location.z, 'number');
+    assert.equal(typeof writeCalls[0].data.sneaking, 'boolean');
   });
 });
 
