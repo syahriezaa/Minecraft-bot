@@ -28,6 +28,12 @@ const TICK_INTERVAL_MS = Number(process.env.FARMER_TICK_MS) || 2000;
 // base) mulai bekerja, dia diam saja karena tidak ada apa-apa dalam jangkauan di posisi spawn/world
 // spawn. Jalan ke base dulu SEBELUM mulai tick pertanian/peternakan, apapun posisi awalnya.
 const DEFAULT_BASE_GOAL = { x: -185, y: 71, z: -352 };
+// Area peternakan villager, ditemukan live sesi ini (beds di sekitar -181..-185,64,-330..-331,
+// crop di ~-190,63,-327 dan -188,64,-326) - sebagian terhalang tembok kandang, dan berada dalam
+// scanRadius default dari base sehingga terus-menerus menarik bot ke sana untuk mencoba mencapai
+// target yang kadang tak terjangkau. Dikecualikan sama sekali dari pertimbangan farm/animal engine
+// (lihat avoidArea) - pemilik minta bot jangan pernah ke sana lagi.
+const DEFAULT_AVOID_AREA = { min: { x: -200, y: 0, z: -337 }, max: { x: -170, y: 100, z: -318 } };
 
 function buildMovements(bot) {
   const movements = new Movements(bot);
@@ -38,7 +44,7 @@ function buildMovements(bot) {
   return movements;
 }
 
-function startFarmerWorker({ host, port, botName, scanRadius = 32, baseGoal = DEFAULT_BASE_GOAL, log = (m) => console.log(m) }) {
+function startFarmerWorker({ host, port, botName, scanRadius = 32, baseGoal = DEFAULT_BASE_GOAL, avoidArea = DEFAULT_AVOID_AREA, log = (m) => console.log(m) }) {
   const bot = mineflayer.createBot({
     host, port,
     username: botName || 'FarmerWorker',
@@ -71,6 +77,7 @@ function startFarmerWorker({ host, port, botName, scanRadius = 32, baseGoal = DE
     engine = new FarmerEngine({
       adapter,
       scanRadius,
+      avoidArea,
       autoMatchStorage: true,
       harvestBatchSize: Number(process.env.FARM_HARVEST_BATCH) || 16,
       plantBatchSize: Number(process.env.FARM_PLANT_BATCH) || 16
@@ -87,7 +94,7 @@ function startFarmerWorker({ host, port, botName, scanRadius = 32, baseGoal = DE
     });
     engine.on('planted', ({ seed, position }) => log(`Tanam ${seed} di (${position.x},${position.y},${position.z})`));
 
-    animalEngine = new AnimalHusbandryEngine({ adapter, scanRadius });
+    animalEngine = new AnimalHusbandryEngine({ adapter, scanRadius, avoidArea });
     animalEngine.on('fed', ({ type, entity }) => log(`Beri makan ${type} (id ${entity.id})`));
     animalEngine.on('culled', ({ type, entity }) => log(`Panen surplus ${type} (id ${entity.id})`));
 

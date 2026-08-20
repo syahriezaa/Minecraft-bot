@@ -22,6 +22,14 @@ function blockAge(block) {
   return Number.isFinite(age) ? age : 0;
 }
 
+// Kebalikan dari isInsideArea - true kalau pos di LUAR area (atau tidak ada area sama sekali,
+// artinya tidak ada yang dikecualikan). Dipakai avoidArea: kolom/entitas di dalam area terlarang
+// (mis. area peternakan villager dekat base, sebagian terhalang tembok) dikecualikan sama sekali
+// dari pertimbangan, bukan dicoba lalu gagal berulang-ulang.
+function isOutsideArea(pos, area) {
+  return !area || !isInsideArea(pos, area);
+}
+
 function isInsideArea(pos, area) {
   if (!area || !pos) return true;
   const minX = Math.min(area.min.x, area.max.x);
@@ -39,6 +47,7 @@ class FarmerEngine extends EventEmitter {
     this.adapter = options.adapter || new MineflayerRoleAdapter(options.bot, options.adapterOptions);
     this.options = {
       farmArea: null,
+      avoidArea: null,
       scanRadius: 32,
       harvestBatchSize: 1,
       plantBatchSize: 1,
@@ -70,13 +79,15 @@ class FarmerEngine extends EventEmitter {
       .findBlocksByNames(Object.keys(CROP_RULES), { maxDistance: this.options.scanRadius })
       .filter(block => this.isMatureCrop(block))
       .filter(block => isInsideArea(block.position, this.options.farmArea))
+      .filter(block => isOutsideArea(block.position, this.options.avoidArea))
       .sort((a, b) => distance(this.adapter.getPosition(), a.position) - distance(this.adapter.getPosition(), b.position));
   }
 
   findPlantingSpots() {
     const farmland = this.adapter
       .findBlocksByNames(['farmland', 'soul_sand'], { maxDistance: this.options.scanRadius })
-      .filter(block => isInsideArea(block.position, this.options.farmArea));
+      .filter(block => isInsideArea(block.position, this.options.farmArea))
+      .filter(block => isOutsideArea(block.position, this.options.avoidArea));
 
     return farmland.filter(block => {
       const above = this.adapter.blockAt({
@@ -169,5 +180,6 @@ module.exports = {
   FarmerEngine,
   CROP_RULES,
   blockAge,
-  isInsideArea
+  isInsideArea,
+  isOutsideArea
 };

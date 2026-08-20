@@ -108,6 +108,24 @@ describe('FarmerEngine', () => {
     assert.equal(engine.metrics.harvested, 1);
   });
 
+  it('dengan avoidArea diset, crop matang DI DALAM area itu harus diabaikan sama sekali - ditemukan dari permintaan nyata pemilik: bot terus kembali ke area peternakan villager (dekat base) yang bukan bagian dari kebun sungguhan dan sebagian terhalang tembok, mencoba mencapainya berulang-ulang sia-sia', async () => {
+    const adapter = new FakeRoleAdapter({
+      blocks: [
+        { name: 'wheat', properties: { age: 7 }, position: { x: -190, y: 63, z: -327 } }, // di dalam area peternakan villager - HARUS diabaikan
+        { name: 'wheat', properties: { age: 7 }, position: { x: -190, y: 63, z: -390 } } // di kebun sungguhan - HARUS tetap dipanen
+      ]
+    });
+    const avoidArea = { min: { x: -200, y: 0, z: -337 }, max: { x: -170, y: 100, z: -318 } };
+    const engine = new FarmerEngine({ adapter, avoidArea });
+
+    const result = await engine.tick();
+
+    assert.equal(result.action, 'harvest');
+    assert.deepEqual(adapter.actions, [
+      { type: 'dig', name: 'wheat', position: { x: -190, y: 63, z: -390 } }
+    ]);
+  });
+
   it('harus menanam seed pada farmland kosong', async () => {
     const adapter = new FakeRoleAdapter({
       items: { wheat_seeds: 4 },
@@ -174,6 +192,24 @@ describe('AnimalHusbandryEngine', () => {
 
     assert.equal(result.action, 'feed');
     assert.deepEqual(adapter.actions.filter(a => a.type === 'useOn').map(a => a.id), [1, 2]);
+  });
+
+  it('dengan avoidArea diset, hewan DI DALAM area itu harus diabaikan sama sekali - ditemukan dari permintaan nyata pemilik: jangan kembali ke area peternakan villager dekat base', async () => {
+    const adapter = new FakeRoleAdapter({
+      items: { wheat: 8 },
+      entities: [
+        { id: 1, name: 'cow', isBaby: false, position: { x: 0, y: 64, z: 0 } }, // di dalam area terlarang
+        { id: 2, name: 'cow', isBaby: false, position: { x: 15, y: 64, z: 0 } }, // di luar area terlarang
+        { id: 3, name: 'cow', isBaby: false, position: { x: -15, y: 64, z: 0 } } // di luar area terlarang
+      ]
+    });
+    const avoidArea = { min: { x: -10, y: 0, z: -10 }, max: { x: 10, y: 100, z: 10 } };
+    const engine = new AnimalHusbandryEngine({ adapter, avoidArea });
+
+    const result = await engine.tick();
+
+    assert.equal(result.action, 'feed');
+    assert.deepEqual(adapter.actions.filter(a => a.type === 'useOn').map(a => a.id), [2, 3]);
   });
 
   it('harus memberi makan goat dengan wheat - ditemukan dari permintaan nyata pemilik: sapi, kambing (goat), ayam butuh diberi makan, tapi goat sebelumnya tidak ada di ANIMAL_RULES sama sekali', async () => {

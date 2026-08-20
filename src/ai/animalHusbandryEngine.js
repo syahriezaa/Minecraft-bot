@@ -7,6 +7,7 @@
 
 const EventEmitter = require('node:events');
 const { MineflayerRoleAdapter, distance } = require('./mineflayerRoleAdapter');
+const { isOutsideArea } = require('./farmerEngine');
 
 const ANIMAL_RULES = Object.freeze({
   cow: { feed: 'wheat', preserveAdults: 2, maxAdults: 8, drops: ['beef', 'leather'] },
@@ -32,6 +33,7 @@ class AnimalHusbandryEngine extends EventEmitter {
     this.adapter = options.adapter || new MineflayerRoleAdapter(options.bot, options.adapterOptions);
     this.options = {
       scanRadius: 24,
+      avoidArea: null,
       rules: ANIMAL_RULES,
       maxFeedPerTick: 2,
       maxCullPerTick: 1,
@@ -48,7 +50,10 @@ class AnimalHusbandryEngine extends EventEmitter {
     const allowed = new Set(Object.keys(this.options.rules));
     return this.adapter.getEntities()
       .filter(entity => allowed.has(entity.name || entity.type))
-      .filter(entity => distance(this.adapter.getPosition(), entity.position) <= this.options.scanRadius);
+      .filter(entity => distance(this.adapter.getPosition(), entity.position) <= this.options.scanRadius)
+      // Hewan di dalam area terlarang (mis. area peternakan villager dekat base, sebagian
+      // terhalang tembok) dikecualikan sama sekali - jangan terus mencoba mencapainya sia-sia.
+      .filter(entity => isOutsideArea(entity.position, this.options.avoidArea));
   }
 
   groupAdultsByType() {
