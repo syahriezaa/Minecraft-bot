@@ -60,4 +60,20 @@ describe('walkToBase - navigasi spawn->base memakai mineflayer-pathfinder langsu
       /pathfinder/i
     );
   });
+
+  it('harus menunggu settleMs SEBELUM memanggil goto - ditemukan dari bug live nyata: goto dipanggil persis saat spawn/reconnect, sebelum chunk sekitar sempat ter-load penuh, sehingga pathfinder cuma melihat 16 simpul (dunia nyaris kosong dari sudut pandangnya) dan langsung noPath - padahal beberapa saat kemudian chunk_loaded tiba dan dunianya sebenarnya utuh. settleMs kasih waktu chunk streaming menyusul sebelum pencarian rute dimulai', async () => {
+    const bot = fakeBot();
+    const start = Date.now();
+    await walkToBase({ bot, goal: { x: 0, y: 64, z: 0 }, settleMs: 50 });
+    const elapsed = Date.now() - start;
+    assert.ok(elapsed >= 50, `harus menunggu minimal 50ms sebelum goto, cuma ${elapsed}ms`);
+  });
+
+  it('settleMs default HARUS 0 (tidak menunggu) - supaya caller yang sudah tahu dunianya siap (mis. bot yang sudah lama tersambung) tidak dipaksa menunggu tanpa alasan', async () => {
+    const bot = fakeBot();
+    const start = Date.now();
+    await walkToBase({ bot, goal: { x: 0, y: 64, z: 0 } });
+    const elapsed = Date.now() - start;
+    assert.ok(elapsed < 50, `tidak seharusnya menunggu tanpa settleMs eksplisit, malah ${elapsed}ms`);
+  });
 });

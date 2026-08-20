@@ -40,12 +40,18 @@ function buildMovements(bot) {
  * @param {object} options.bot - Instance mineflayer bot dengan plugin pathfinder sudah dimuat.
  * @param {{x:number,y:number,z:number}} options.goal
  * @param {number} [options.range=2]
+ * @param {number} [options.settleMs=0] - Jeda sebelum mulai goto - dibutuhkan tepat setelah
+ *   spawn/reconnect, sebelum chunk sekitar sempat ter-load penuh (lihat komentar bug di test).
  * @param {(message: string) => void} [options.log]
  * @returns {Promise<{success:boolean, reason?:string}>}
  */
-async function walkToBase({ bot, goal, range = 2, log = () => {} }) {
+async function walkToBase({ bot, goal, range = 2, settleMs = 0, log = () => {} }) {
   if (!bot?.pathfinder) {
     throw new Error('Bot belum punya plugin pathfinder dimuat - panggil bot.loadPlugin(pathfinder) dulu.');
+  }
+  if (settleMs > 0) {
+    log(`Menunggu ${settleMs}ms supaya chunk sekitar sempat ter-load penuh sebelum mencari rute...`);
+    await new Promise((r) => setTimeout(r, settleMs));
   }
   bot.pathfinder.setMovements(buildMovements(bot));
   bot.pathfinder.thinkTimeout = 30000; // server lambat butuh waktu berpikir lebih lama dari default 5 detik
@@ -73,7 +79,9 @@ if (require.main === module) {
   const { pathfinder } = require('mineflayer-pathfinder');
 
   const goalArg = process.argv[2];
-  const [gx, gy, gz] = (goalArg || '-175,71,-325').split(',').map(Number);
+  // -175,71,-325 (default lama) ternyata mengarah ke area peternakan villager, BUKAN base
+  // sungguhan - base/bed pemain yang benar ada di -185,71,-352 (dikoreksi langsung oleh pemilik).
+  const [gx, gy, gz] = (goalArg || '-185,71,-352').split(',').map(Number);
 
   const bot = mineflayer.createBot({
     host: process.env.MC_HOST || 'atoms-girl.tun.ply.gg',
@@ -113,6 +121,7 @@ if (require.main === module) {
     const result = await walkToBase({
       bot,
       goal: { x: gx, y: gy, z: gz },
+      settleMs: 5000,
       log: (msg) => console.log(msg)
     });
     console.log(result.success ? 'BERHASIL sampai base.' : `GAGAL: ${result.reason}`);
