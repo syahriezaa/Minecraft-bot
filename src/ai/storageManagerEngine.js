@@ -111,11 +111,20 @@ class StorageManagerEngine extends EventEmitter {
 
     if (candidates.length === 0) return null;
 
-    for (const pos of candidates) {
-      const items = await this.adapter.getChestContents(pos);
-      if (items.some((it) => it.name === itemName)) {
-        this.chestAssignments.set(itemName, posKey(pos));
-        return pos;
+    // Pencocokan isi ("chest lain sudah berisi jenis ini juga, pakai itu") HANYA untuk item yang
+    // BELUM PERNAH punya rumah sama sekali - kalau item SUDAH punya assignment yang diketahui
+    // benar, JANGAN percaya begitu saja isi chest lain sebagai bukti "tujuan yang valid": chest
+    // itu bisa saja masih menyimpan stack NYASAR dari sesi lama (mis. sisa korupsi bug lama yang
+    // belum sempat dirapikan reorganize) - mempercayainya di sini MENGKONFIRMASI kesalahan itu
+    // dan menimpa assignment yang sudah benar, persis bug live nyata (leather_chestplate ke chest
+    // buku karena chest buku itu MASIH menyimpan leather_chestplate nyasar dari korupsi lama).
+    if (!hasExistingAssignment) {
+      for (const pos of candidates) {
+        const items = await this.adapter.getChestContents(pos);
+        if (items.some((it) => it.name === itemName)) {
+          this.chestAssignments.set(itemName, posKey(pos));
+          return pos;
+        }
       }
     }
 

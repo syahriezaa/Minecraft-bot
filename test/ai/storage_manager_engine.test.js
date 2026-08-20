@@ -450,4 +450,24 @@ describe('StorageManagerEngine', () => {
     assert.equal(result.deliveries[0].position.x, -181);
     assert.equal(result.deliveries[0].position.z, -350);
   });
+
+  it('kalau item SUDAH punya assignment tapi rumahnya penuh, JANGAN percaya chest LAIN yang KEBETULAN sudah berisi jenis yang sama (leftover salah tempat dari sesi lama) sebagai "sudah cocok" - itu jalur korupsi yang SAMA persis, cuma lewat pencocokan isi bukan fallback asal-asalan - ditemukan dari bug live nyata: leather_chestplate yang assignment-nya sudah benar ke chest armor malah diantar ke chest buku karena chest buku itu MASIH menyimpan leather_chestplate nyasar dari korupsi sebelumnya, dan pencocokan isi keliru menganggap itu tujuan yang valid', async () => {
+    const armorChest = { position: { x: -181, y: 71, z: -345 }, items: [] };
+    // Chest buku ini BUKAN kosong DAN kebetulan masih ada leftover leather_chestplate dari
+    // korupsi lama - godaan untuk pencocokan isi menganggapnya "sudah cocok, pakai saja".
+    const staleBooksChest = { position: { x: -181, y: 71, z: -350 }, items: [{ name: 'enchanted_book', count: 2 }, { name: 'leather_chestplate', count: 1 }] };
+    const adapter = new FakeStorageAdapter({
+      chests: { '-181,71,-345': armorChest, '-181,71,-350': staleBooksChest },
+      inventory: { leather_chestplate: 1 }
+    });
+    const engine = new StorageManagerEngine({ adapter, houseBounds: HOUSE_BOUNDS, initialAssignments: { leather_chestplate: '-181,71,-345' } });
+    engine.fullChestPositions.add('-181,71,-345');
+
+    const result = await engine.tick();
+
+    assert.notEqual(result.action, 'deliver', 'tidak boleh berhasil mengantar ke chest buku yang salah - harus menyerah (idle/deliver_failed) sampai chest armor tersedia lagi');
+    if (result.deliveries) {
+      assert.ok(!result.deliveries.some((d) => d.position.z === -350), 'leather_chestplate TIDAK BOLEH diantar ke chest buku');
+    }
+  });
 });
