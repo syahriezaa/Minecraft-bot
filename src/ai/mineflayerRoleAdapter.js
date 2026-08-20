@@ -244,6 +244,59 @@ class MineflayerRoleAdapter {
     return null;
   }
 
+  // Slot armor mineflayer TETAP di indeks 5-8 (head/torso/legs/feet) di semua versi protokol
+  // vanilla - bagian dunia yang jauh lebih stabil daripada field paket yang berubah-ubah (lihat
+  // bug use_entity). Slot kosong berarti gear hilang/rusak TOTAL - di Minecraft, durabilitas habis
+  // membuat item LENYAP dari slot, bukan cuma "rusak sebagian" - jadi ini sinyal paling andal untuk
+  // "perlu diganti", tanpa perlu mem-parsing NBT durabilitas yang rawan berubah antar versi.
+  getEquippedArmor() {
+    const slots = this.bot?.inventory?.slots || [];
+    return {
+      head: slots[5]?.name || null,
+      torso: slots[6]?.name || null,
+      legs: slots[7]?.name || null,
+      feet: slots[8]?.name || null
+    };
+  }
+
+  // Ambil item dari chest gudang ke inventaris - kebalikan dari depositToChest.
+  async withdrawFromChest(pos, itemNames, count) {
+    const chest = await this.openChestAt(pos);
+    if (!chest) return { withdrawn: 0 };
+    let withdrawn = 0;
+    try {
+      const items = chest.containerItems();
+      const match = items.find((it) => itemNames.includes(it.name));
+      if (match && typeof chest.withdraw === 'function') {
+        const take = Math.min(count, match.count);
+        await chest.withdraw(match.type, match.metadata ?? null, take);
+        withdrawn = take;
+      }
+    } finally {
+      if (typeof chest.close === 'function') chest.close();
+    }
+    return { withdrawn };
+  }
+
+  // Cari crafting_table terdekat, ambil resep yang sungguh bisa dibuat sekarang (bahan cukup -
+  // recipesFor cuma mengembalikan resep yang TERPENUHI), lalu craft. Gagal jelas (false) kalau
+  // tidak ada meja atau bahan kurang, bukan crash - caller (GuardEngine) yang putuskan langkah
+  // berikutnya (mis. ambil bahan dulu dari chest).
+  async craftItem(itemName, count = 1) {
+    const tablePos = typeof this.bot?.findBlock === 'function'
+      ? this.bot.findBlock({ matching: (b) => b && b.name === 'crafting_table', maxDistance: 16 })
+      : null;
+    if (!tablePos) return false;
+    await this.navigateNear(tablePos.position, 3);
+    const tableBlock = this.blockAt(tablePos.position);
+    // recipesFor butuh ID numerik item (via registry), bukan nama string.
+    const itemId = this.bot?.registry?.itemsByName?.[itemName]?.id ?? itemName;
+    const recipes = typeof this.bot?.recipesFor === 'function' ? this.bot.recipesFor(itemId, null, 1, tableBlock) : [];
+    if (!recipes || recipes.length === 0) return false;
+    await this.bot.craft(recipes[0], count, tableBlock);
+    return true;
+  }
+
   async depositToChest(pos, predicate = () => true) {
     const chest = await this.openChestAt(pos);
     if (!chest) return { deposited: 0 };

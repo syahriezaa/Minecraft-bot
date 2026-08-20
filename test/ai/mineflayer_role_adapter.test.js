@@ -95,6 +95,121 @@ describe('MineflayerRoleAdapter.useOn - harus tulis paket use_entity LANGSUNG de
   });
 });
 
+describe('MineflayerRoleAdapter.getEquippedArmor - baca 4 slot armor bot sekarang', () => {
+  it('harus mengembalikan nama item di tiap slot (head/torso/legs/feet), null kalau kosong - slot kosong berarti gear hilang/rusak total (di Minecraft, gear yang durabilitasnya habis LENYAP dari slot, bukan cuma "rusak sebagian") - sinyal paling andal untuk "perlu diganti"', () => {
+    const bot = {
+      inventory: {
+        slots: [
+          , , , , , // slot 0-4 tidak dipakai untuk armor
+          { name: 'iron_helmet' }, // slot 5 = head
+          null, // slot 6 = torso (kosong = rusak/hilang)
+          { name: 'iron_leggings' }, // slot 7 = legs
+          { name: 'iron_boots' } // slot 8 = feet
+        ]
+      }
+    };
+    const adapter = new MineflayerRoleAdapter(bot);
+
+    const armor = adapter.getEquippedArmor();
+
+    assert.deepEqual(armor, { head: 'iron_helmet', torso: null, legs: 'iron_leggings', feet: 'iron_boots' });
+  });
+});
+
+describe('MineflayerRoleAdapter.withdrawFromChest - ambil item dari chest gudang ke inventaris', () => {
+  it('harus membuka chest, menarik item yang cocok sejumlah count, lalu menutup chest', async () => {
+    const withdrawCalls = [];
+    const closeCalls = [];
+    const bot = {
+      entity: { position: { x: 0, y: 64, z: 0 } },
+      pathfinder: { goto: async () => {} },
+      blockAt: () => ({ name: 'chest', position: { x: 5, y: 64, z: 5 } }),
+      openChest: async () => ({
+        containerItems: () => [{ name: 'iron_ingot', type: 42, metadata: 0, count: 20 }],
+        withdraw: async (type, metadata, count) => { withdrawCalls.push({ type, metadata, count }); },
+        close: () => closeCalls.push(true)
+      })
+    };
+    const adapter = new MineflayerRoleAdapter(bot);
+
+    const result = await adapter.withdrawFromChest({ x: 5, y: 64, z: 5 }, ['iron_ingot'], 8);
+
+    assert.equal(withdrawCalls.length, 1);
+    assert.equal(withdrawCalls[0].type, 42);
+    assert.equal(withdrawCalls[0].count, 8);
+    assert.equal(closeCalls.length, 1);
+    assert.equal(result.withdrawn, 8);
+  });
+
+  it('kalau chest tidak punya item yang cocok, tidak boleh menarik apapun - hasil withdrawn:0', async () => {
+    const bot = {
+      entity: { position: { x: 0, y: 64, z: 0 } },
+      pathfinder: { goto: async () => {} },
+      blockAt: () => ({ name: 'chest', position: { x: 5, y: 64, z: 5 } }),
+      openChest: async () => ({
+        containerItems: () => [{ name: 'cobblestone', type: 1, metadata: 0, count: 64 }],
+        withdraw: async () => { throw new Error('TIDAK BOLEH dipanggil - tidak ada item yang cocok'); },
+        close: () => {}
+      })
+    };
+    const adapter = new MineflayerRoleAdapter(bot);
+
+    const result = await adapter.withdrawFromChest({ x: 5, y: 64, z: 5 }, ['iron_ingot'], 8);
+
+    assert.equal(result.withdrawn, 0);
+  });
+});
+
+describe('MineflayerRoleAdapter.craftItem - buat item lewat crafting table terdekat', () => {
+  it('harus mencari crafting_table terdekat, ambil resep pertama yang tersedia, lalu craft sejumlah count', async () => {
+    const craftCalls = [];
+    const recipe = { result: { name: 'iron_helmet' } };
+    const bot = {
+      entity: { position: { x: 0, y: 64, z: 0 } },
+      pathfinder: { goto: async () => {} },
+      findBlock: () => ({ position: { x: 3, y: 64, z: 3 } }),
+      blockAt: () => ({ name: 'crafting_table', position: { x: 3, y: 64, z: 3 } }),
+      recipesFor: () => [recipe],
+      craft: async (r, count, table) => { craftCalls.push({ recipe: r, count, table }); }
+    };
+    const adapter = new MineflayerRoleAdapter(bot);
+
+    const result = await adapter.craftItem('iron_helmet', 1);
+
+    assert.equal(craftCalls.length, 1);
+    assert.equal(craftCalls[0].recipe, recipe);
+    assert.equal(craftCalls[0].count, 1);
+    assert.equal(result, true);
+  });
+
+  it('kalau tidak ada crafting_table dalam jangkauan, harus mengembalikan false tanpa error - lebih baik gagal jelas daripada crash', async () => {
+    const bot = {
+      entity: { position: { x: 0, y: 64, z: 0 } },
+      findBlock: () => null
+    };
+    const adapter = new MineflayerRoleAdapter(bot);
+
+    const result = await adapter.craftItem('iron_helmet', 1);
+
+    assert.equal(result, false);
+  });
+
+  it('kalau tidak ada resep yang bisa dibuat (bahan kurang), harus mengembalikan false tanpa error', async () => {
+    const bot = {
+      entity: { position: { x: 0, y: 64, z: 0 } },
+      pathfinder: { goto: async () => {} },
+      findBlock: () => ({ position: { x: 3, y: 64, z: 3 } }),
+      blockAt: () => ({ name: 'crafting_table', position: { x: 3, y: 64, z: 3 } }),
+      recipesFor: () => []
+    };
+    const adapter = new MineflayerRoleAdapter(bot);
+
+    const result = await adapter.craftItem('iron_helmet', 1);
+
+    assert.equal(result, false);
+  });
+});
+
 describe('MineflayerRoleAdapter.dig - harus mengambil barang yang jatuh, bukan cuma menggali', () => {
   it('setelah menggali, harus mendekat SAMPAI BENAR-BENAR MENGINJAK posisi blok (range 0) supaya item yang jatuh ke tanah ikut terambil - ditemukan dari kekhawatiran nyata: menggali dari jarak 3 blok (cukup untuk gali) TIDAK cukup dekat untuk memicu pickup otomatis, item bisa tertinggal di tanah', async () => {
     const gotoCalls = [];

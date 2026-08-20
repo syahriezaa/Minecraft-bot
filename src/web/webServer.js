@@ -12,6 +12,7 @@ const path = require('path');
 const { BenchmarkRunner } = require('../benchmark/benchmarkRunner');
 const { DeepSeekClient } = require('../ai/deepseekClient');
 const { startFarmerWorker } = require('../ai/runFarmerWorker');
+const { startGuardWorker } = require('../ai/runGuardWorker');
 
 const app = express();
 const server = http.createServer(app);
@@ -310,6 +311,68 @@ app.get('/api/farmer/status', (req, res) => {
       running: farmerWorkers.size > 0,
       count: farmerWorkers.size,
       workers: Array.from(farmerWorkers.entries()).map(([name, handle]) => ({
+        botName: name,
+        metrics: handle.getMetrics()
+      }))
+    }
+  });
+});
+
+// Pekerja penjaga otonom (lihat runGuardWorker.js) - jaga base dari mob hostile, perbaiki gear
+// hilang/rusak dengan craft besi dari gudang. Sama pola armada seperti farmerWorkers di atas.
+const guardWorkers = new Map(); // botName -> handle
+
+app.post('/api/guard/start', (req, res) => {
+  const { host, port, botName, scanRadius } = req.body || {};
+  const name = botName || 'GuardWorker';
+  if (guardWorkers.has(name)) {
+    return res.status(409).json({ success: false, error: { code: 'ALREADY_RUNNING', message: `Penjaga '${name}' sudah berjalan` } });
+  }
+  broadcast({ type: 'AI_ACTION_EVENT', data: { task: 'GUARD_WORKER', step: `Memulai penjaga '${name}'...`, status: 'RUNNING' } });
+
+  const handle = startGuardWorker({
+    host: host || 'atoms-girl.tun.ply.gg',
+    port: port || 25565,
+    botName: name,
+    scanRadius: scanRadius || 16,
+    log: (msg) => broadcast({ type: 'AI_ACTION_EVENT', data: { task: 'GUARD_WORKER', step: `[${name}] ${msg}`, status: 'RUNNING' } })
+  });
+  guardWorkers.set(name, handle);
+
+  res.json({ success: true, data: { message: `Penjaga '${name}' dimulai` } });
+});
+
+app.post('/api/guard/stop', (req, res) => {
+  const { botName } = req.body || {};
+  if (!botName) {
+    const count = guardWorkers.size;
+    if (count === 0) {
+      return res.status(409).json({ success: false, error: { code: 'NOT_RUNNING', message: 'Tidak ada penjaga yang berjalan' } });
+    }
+    for (const [name, handle] of guardWorkers) {
+      handle.stop();
+      broadcast({ type: 'AI_ACTION_EVENT', data: { task: 'GUARD_WORKER', step: `[${name}] Dihentikan dari dashboard.`, status: 'STOPPED' } });
+    }
+    guardWorkers.clear();
+    return res.json({ success: true, data: { message: `${count} penjaga dihentikan` } });
+  }
+  const handle = guardWorkers.get(botName);
+  if (!handle) {
+    return res.status(409).json({ success: false, error: { code: 'NOT_RUNNING', message: `Penjaga '${botName}' tidak ditemukan` } });
+  }
+  handle.stop();
+  guardWorkers.delete(botName);
+  broadcast({ type: 'AI_ACTION_EVENT', data: { task: 'GUARD_WORKER', step: `[${botName}] Dihentikan dari dashboard.`, status: 'STOPPED' } });
+  res.json({ success: true, data: { message: `Penjaga '${botName}' dihentikan` } });
+});
+
+app.get('/api/guard/status', (req, res) => {
+  res.json({
+    success: true,
+    data: {
+      running: guardWorkers.size > 0,
+      count: guardWorkers.size,
+      workers: Array.from(guardWorkers.entries()).map(([name, handle]) => ({
         botName: name,
         metrics: handle.getMetrics()
       }))

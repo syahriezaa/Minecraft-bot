@@ -262,74 +262,103 @@
     }).catch(e => addTerminalLog(`[ Error ] ${e.message}`, 'error'));
   });
 
-  // ── Armada Pekerja Tani (banyak bot sekaligus) ──────────
-  function farmerStart(botName) {
-    return fetch('/api/farmer/start', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ botName })
-    }).then(r => r.json());
-  }
-
-  function farmerStop(botName) {
-    return fetch('/api/farmer/stop', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(botName ? { botName } : {})
-    }).then(r => r.json());
-  }
-
-  function renderFarmerFleet(workers) {
-    const list = document.getElementById('farmer-fleet-list');
-    if (!list) return;
-    if (!workers || workers.length === 0) {
-      list.innerHTML = '<div class="fleet-empty">Tidak ada pekerja tani yang berjalan.</div>';
-      return;
+  // ── Kontrol armada generik (dipakai pekerja tani & penjaga) ──
+  function createFleetController({ apiPrefix, label, listElId, countElId, startBtnId, stopAllBtnId, defaultName, namePrefix, emptyText, statsRenderer }) {
+    function apiStart(botName) {
+      return fetch(`/api/${apiPrefix}/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ botName })
+      }).then(r => r.json());
     }
-    list.innerHTML = workers.map(w => {
-      const farm = w.metrics?.farm || {};
-      const animals = w.metrics?.animals || {};
-      return `
+    function apiStop(botName) {
+      return fetch(`/api/${apiPrefix}/stop`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(botName ? { botName } : {})
+      }).then(r => r.json());
+    }
+    function render(workers) {
+      const list = document.getElementById(listElId);
+      if (!list) return;
+      if (!workers || workers.length === 0) {
+        list.innerHTML = `<div class="fleet-empty">${emptyText}</div>`;
+        return;
+      }
+      list.innerHTML = workers.map(w => `
         <div class="fleet-row">
           <span class="fleet-row-name">${w.botName}</span>
-          <span class="fleet-row-stats">panen <b>${farm.harvested || 0}</b> · tanam <b>${farm.planted || 0}</b> · simpan <b>${farm.deposited || 0}</b> · beri makan <b>${animals.fed || 0}</b></span>
+          <span class="fleet-row-stats">${statsRenderer(w.metrics || {})}</span>
           <button class="btn btn-fleet-stop-one" data-stop-bot="${w.botName}">Hentikan</button>
-        </div>`;
-    }).join('');
-    list.querySelectorAll('[data-stop-bot]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const name = btn.dataset.stopBot;
-        addTerminalLog(`[ Browser Control ] Menghentikan pekerja tani '${name}'...`, 'warning');
-        farmerStop(name).then(data => addTerminalLog(`[ Respon Server ] ${data.data?.message || data.error?.message}`, 'system'));
+        </div>`).join('');
+      list.querySelectorAll('[data-stop-bot]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const name = btn.dataset.stopBot;
+          addTerminalLog(`[ Browser Control ] Menghentikan ${label} '${name}'...`, 'warning');
+          apiStop(name).then(data => addTerminalLog(`[ Respon Server ] ${data.data?.message || data.error?.message}`, 'system'));
+        });
+      });
+    }
+    function poll() {
+      fetch(`/api/${apiPrefix}/status`).then(r => r.json()).then(data => render(data.data?.workers)).catch(() => {});
+    }
+
+    document.getElementById(startBtnId)?.addEventListener('click', async () => {
+      const count = Math.max(1, Math.min(10, Number(document.getElementById(countElId)?.value) || 1));
+      addTerminalLog(`[ Browser Control ] Memulai armada ${count} ${label}...`, 'warning');
+      for (let i = 1; i <= count; i++) {
+        const name = count === 1 ? defaultName : `${namePrefix}${i}`;
+        const data = await apiStart(name);
+        addTerminalLog(`[ Respon Server ] ${data.data?.message || data.error?.message}`, 'system');
+      }
+      poll();
+    });
+
+    document.getElementById(stopAllBtnId)?.addEventListener('click', () => {
+      addTerminalLog(`[ Browser Control ] Menghentikan seluruh armada ${label}...`, 'warning');
+      apiStop(null).then(data => {
+        addTerminalLog(`[ Respon Server ] ${data.data?.message || data.error?.message}`, 'system');
+        poll();
       });
     });
+
+    poll();
+    setInterval(poll, 5000);
   }
 
-  function pollFarmerStatus() {
-    fetch('/api/farmer/status').then(r => r.json()).then(data => renderFarmerFleet(data.data?.workers)).catch(() => {});
-  }
-
-  document.getElementById('btn-farmer-fleet-start')?.addEventListener('click', async () => {
-    const count = Math.max(1, Math.min(10, Number(document.getElementById('farmer-fleet-count')?.value) || 1));
-    addTerminalLog(`[ Browser Control ] Memulai armada ${count} pekerja tani...`, 'warning');
-    for (let i = 1; i <= count; i++) {
-      const name = count === 1 ? 'FarmerWorker' : `Farmer${i}`;
-      const data = await farmerStart(name);
-      addTerminalLog(`[ Respon Server ] ${data.data?.message || data.error?.message}`, 'system');
+  createFleetController({
+    apiPrefix: 'farmer',
+    label: 'pekerja tani',
+    listElId: 'farmer-fleet-list',
+    countElId: 'farmer-fleet-count',
+    startBtnId: 'btn-farmer-fleet-start',
+    stopAllBtnId: 'btn-farmer-fleet-stop-all',
+    defaultName: 'FarmerWorker',
+    namePrefix: 'Farmer',
+    emptyText: 'Tidak ada pekerja tani yang berjalan.',
+    statsRenderer: (m) => {
+      const farm = m.farm || {};
+      const animals = m.animals || {};
+      return `panen <b>${farm.harvested || 0}</b> · tanam <b>${farm.planted || 0}</b> · simpan <b>${farm.deposited || 0}</b> · beri makan <b>${animals.fed || 0}</b>`;
     }
-    pollFarmerStatus();
   });
 
-  document.getElementById('btn-farmer-fleet-stop-all')?.addEventListener('click', () => {
-    addTerminalLog('[ Browser Control ] Menghentikan seluruh armada pekerja tani...', 'warning');
-    farmerStop(null).then(data => {
-      addTerminalLog(`[ Respon Server ] ${data.data?.message || data.error?.message}`, 'system');
-      pollFarmerStatus();
-    });
+  createFleetController({
+    apiPrefix: 'guard',
+    label: 'penjaga',
+    listElId: 'guard-fleet-list',
+    countElId: 'guard-fleet-count',
+    startBtnId: 'btn-guard-fleet-start',
+    stopAllBtnId: 'btn-guard-fleet-stop-all',
+    defaultName: 'GuardWorker',
+    namePrefix: 'Guard',
+    emptyText: 'Tidak ada penjaga yang berjalan.',
+    statsRenderer: (m) => {
+      const combat = m.combat || {};
+      const repair = m.repair || {};
+      return `serang <b>${combat.attacks || 0}</b> · perbaikan <b>${repair.repaired || 0}</b> · besi diambil <b>${repair.gathered || 0}</b>`;
+    }
   });
-
-  pollFarmerStatus();
-  setInterval(pollFarmerStatus, 5000);
 
   // ── Benchmark Button Handlers ───────────────────────────
   document.querySelectorAll('.btn-level').forEach(btn => {
