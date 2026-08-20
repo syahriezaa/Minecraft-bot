@@ -161,6 +161,15 @@ class MineflayerRoleAdapter {
   async useOn(entity) {
     if (!entity) return false;
     await this.navigateNear(entity.position, 3);
+    // bot.activateEntity() (paket use_entity TANPA field x/y/z) crash di server ini (protokol 775) -
+    // "Cannot read properties of undefined (reading 'x')" saat serialisasi, karena protokol ini
+    // mensyaratkan field posisi SELALU ada walau untuk interact biasa. Paket itu gagal terkirim
+    // dengan cara yang merusak koneksi (tick berikutnya semua timeout sampai bot di-kick server) -
+    // bukan sekadar gagal aman. activateEntityAt() menyertakan x/y/z, aman dipakai di protokol ini.
+    if (typeof this.bot?.activateEntityAt === 'function') {
+      await this.bot.activateEntityAt(entity, entity.position);
+      return true;
+    }
     if (typeof this.bot?.activateEntity === 'function') {
       this.bot.activateEntity(entity);
       return true;

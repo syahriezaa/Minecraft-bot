@@ -68,6 +68,25 @@ describe('MineflayerRoleAdapter.findMatchingChest - cari chest gudang yang SUDAH
   });
 });
 
+describe('MineflayerRoleAdapter.useOn - harus pakai activateEntityAt, BUKAN activateEntity mentah', () => {
+  it('harus memanggil bot.activateEntityAt(entity, posisi) - ditemukan dari crash live nyata: bot.activateEntity() mengirim paket use_entity TANPA field x/y/z, tapi server ini (protokol 775) mensyaratkan field itu SELALU ada walau untuk interact biasa - serialisasi gagal ("Cannot read properties of undefined (reading \'x\')") dan merusak koneksi sampai bot di-kick timeout. activateEntityAt() menyertakan x/y/z, aman di protokol ini', async () => {
+    const activateEntityAtCalls = [];
+    const bot = {
+      entity: { position: { x: 0, y: 64, z: 0 } },
+      pathfinder: { goto: async () => {} },
+      activateEntity: () => { throw new Error('activateEntity TIDAK BOLEH dipanggil - rusak di protokol server ini'); },
+      activateEntityAt: async (entity, pos) => { activateEntityAtCalls.push({ entity, pos }); }
+    };
+    const adapter = new MineflayerRoleAdapter(bot);
+    const cow = { id: 1, position: { x: 5, y: 64, z: 5 } };
+
+    await adapter.useOn(cow);
+
+    assert.equal(activateEntityAtCalls.length, 1);
+    assert.equal(activateEntityAtCalls[0].entity, cow);
+  });
+});
+
 describe('MineflayerRoleAdapter.dig - harus mengambil barang yang jatuh, bukan cuma menggali', () => {
   it('setelah menggali, harus mendekat SAMPAI BENAR-BENAR MENGINJAK posisi blok (range 0) supaya item yang jatuh ke tanah ikut terambil - ditemukan dari kekhawatiran nyata: menggali dari jarak 3 blok (cukup untuk gali) TIDAK cukup dekat untuk memicu pickup otomatis, item bisa tertinggal di tanah', async () => {
     const gotoCalls = [];
