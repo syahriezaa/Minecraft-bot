@@ -519,3 +519,38 @@ describe('MineflayerRoleAdapter.navigateNear - harus PUNYA BATAS WAKTU, jangan p
     assert.equal(result, true);
   });
 });
+
+describe('MineflayerRoleAdapter.findChestPositions / findMatchingChest - juga harus mencocokkan blok "barrel", bukan cuma "chest" - permintaan nyata pemilik: barel di antara chest gudang juga boleh dipakai untuk menyimpan', () => {
+  it('findChestPositions harus mencocokkan blok chest MAUPUN barrel, tapi bukan blok lain (mis. furnace)', () => {
+    let capturedMatcher;
+    const bot = {
+      entity: { position: { x: 0, y: 64, z: 0 } },
+      findBlocks: (opts) => { capturedMatcher = opts.matching; return []; }
+    };
+    const adapter = new MineflayerRoleAdapter(bot);
+
+    adapter.findChestPositions();
+
+    assert.equal(typeof capturedMatcher, 'function');
+    assert.equal(capturedMatcher({ name: 'chest' }), true);
+    assert.equal(capturedMatcher({ name: 'barrel' }), true);
+    assert.equal(capturedMatcher({ name: 'furnace' }), false);
+  });
+
+  it('findMatchingChest harus mencocokkan blok chest MAUPUN barrel juga', async () => {
+    let capturedMatcher;
+    const bot = {
+      entity: { position: { x: 0, y: 64, z: 0 } },
+      pathfinder: { goto: async () => {} },
+      findBlocks: (opts) => { capturedMatcher = opts.matching; return []; }
+    };
+    const adapter = new MineflayerRoleAdapter(bot);
+
+    await adapter.findMatchingChest(['iron_ingot']);
+
+    assert.equal(typeof capturedMatcher, 'function');
+    assert.equal(capturedMatcher({ name: 'chest' }), true);
+    assert.equal(capturedMatcher({ name: 'barrel' }), true);
+    assert.equal(capturedMatcher({ name: 'furnace' }), false);
+  });
+});

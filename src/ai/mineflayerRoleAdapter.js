@@ -261,7 +261,7 @@ class MineflayerRoleAdapter {
   async findMatchingChest(itemNames, options = {}) {
     const positions = typeof this.bot?.findBlocks === 'function'
       ? this.bot.findBlocks({
-        matching: (b) => b && b.name === 'chest',
+        matching: (b) => b && (b.name === 'chest' || b.name === 'barrel'),
         maxDistance: options.maxDistance || 24,
         count: options.count || 40
       })
@@ -279,10 +279,13 @@ class MineflayerRoleAdapter {
   // Daftar MENTAH semua posisi chest di sekitar, tanpa buka/filter isi apapun - dipakai
   // StorageManagerEngine untuk membedakan chest DI DALAM vs DI LUAR area rumah (murni geometri
   // posisi blok, jauh lebih cepat daripada findMatchingChest yang harus buka tiap chest satu-satu).
+  // Cocokkan "chest" MAUPUN "barrel" - keduanya container penyimpanan biasa (bot.openChest bawaan
+  // mineflayer sudah generik, mendukung kedua jenis blok ini) - permintaan nyata pemilik: barel di
+  // antara chest gudang juga boleh dipakai untuk menyimpan, bukan cuma chest.
   findChestPositions(maxDistance = 32, count = 64) {
     if (typeof this.bot?.findBlocks !== 'function') return [];
     return this.bot.findBlocks({
-      matching: (b) => b && b.name === 'chest',
+      matching: (b) => b && (b.name === 'chest' || b.name === 'barrel'),
       maxDistance,
       count
     });

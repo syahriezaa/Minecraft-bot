@@ -76,6 +76,14 @@ class FakeStorageAdapter {
     chest.items = chest.items.filter((it) => it.count > 0);
     return { withdrawn: take };
   }
+
+  // blockType per posisi chest (default 'chest') - dipakai canonicalKeyFor untuk membedakan chest
+  // (bisa gabung jadi double-chest) dari barrel (SELALU wadah tunggal, tidak pernah gabung).
+  blockAt(pos) {
+    const chest = this.chests[`${pos.x},${pos.y},${pos.z}`];
+    if (!chest) return null;
+    return { name: chest.blockType || 'chest' };
+  }
 }
 
 describe('StorageManagerEngine', () => {
@@ -411,6 +419,31 @@ describe('StorageManagerEngine', () => {
     const result = await engine.tick();
 
     assert.notEqual(result.action, 'reorganize', 'separuh chest yang lain BUKAN "chest lain" - itu wadah fisik yang SAMA, jangan dipindah-pindah sia-sia');
+  });
+
+  it('BARREL: barel yang bersebelahan PERSIS 1 blok dengan chest ("barel di antara chest" - permintaan nyata pemilik) TIDAK BOLEH dianggap wadah yang sama seperti double-chest - barel SELALU wadah tunggal, tidak pernah gabung fisik dengan blok lain walau posisinya bersebelahan', async () => {
+    const chestPos = { x: -181, y: 71, z: -352 };
+    const barrelPos = { x: -181, y: 71, z: -351 }; // persis 1 blok bersebelahan (z beda 1)
+    const chest = { position: chestPos, items: [{ name: 'iron_ingot', count: 8 }], blockType: 'chest' };
+    const barrel = { position: barrelPos, items: [{ name: 'iron_ingot', count: 4 }], blockType: 'barrel' };
+    const adapter = new FakeStorageAdapter({
+      chests: { '-181,71,-352': chest, '-181,71,-351': barrel }
+    });
+    const HOUSE = { min: { x: -190, y: 70, z: -355 }, max: { x: -179, y: 76, z: -348 } };
+    // Assignment mencatat chest sebagai rumah iron_ingot yang benar - barel BUKAN bagian dari
+    // chest itu (walau bersebelahan persis), jadi iron_ingot di barel harus dianggap SALAH TEMPAT
+    // dan dipindahkan, BUKAN dianggap "sudah di rumah yang sama" seperti kasus double-chest.
+    const engine = new StorageManagerEngine({ adapter, houseBounds: HOUSE, initialAssignments: { iron_ingot: '-181,71,-352' } });
+
+    // Chest sungguhan (bukan barel) diperiksa dulu (posisi pertama di object) - tidak ada yang
+    // salah tempat di sana, jadi tick pertama harus 'inspect' biasa untuk chest itu.
+    const first = await engine.tick();
+    assert.equal(first.action, 'inspect');
+
+    // Tick kedua memeriksa barel - iron_ingot di dalamnya HARUS terdeteksi salah tempat (barel
+    // bukan bagian dari chest sebelahnya), bukan dilewati begitu saja.
+    const second = await engine.tick();
+    assert.equal(second.action, 'reorganize', 'barel bukan bagian dari chest sebelahnya - isinya yang salah tempat harus tetap dipindahkan');
   });
 
   it('kalau item SUDAH punya assignment tapi chest rumahnya kebetulan lagi PENUH, dan TIDAK ADA chest lain yang cocok isinya atau benar-benar kosong (semua chest lain sudah berisi kategori LAIN) - JANGAN paksa ke chest sembarangan, biarkan menunggu (skip tick ini), bukan MENIMPA memori sortir yang sudah benar - ditemukan dari bug live nyata: dirt yang sudah benar terdaftar ke chest dirt malah ke-timpa jadi menunjuk ke chest buku (yang BUKAN kosong, sudah berisi enchanted_book) hanya karena chest dirt-nya kebetulan lagi penuh saat itu', async () => {

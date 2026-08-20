@@ -36,16 +36,26 @@ function parseKey(key) {
 // reorganize sia-sia (pindah barang ke wadah yang sebenarnya SAMA). Selalu menormalkan ke
 // koordinat TERKECIL di antara pos itu sendiri dan tetangga sebelahnya (kalau ada) - baik pos itu
 // sendiri maupun pasangannya akan menghasilkan key kanonik yang SAMA persis.
-function canonicalKeyFor(pos, allPositions) {
+//
+// BARREL SELALU wadah tunggal (tidak pernah gabung fisik dengan blok lain di Minecraft, beda dari
+// chest) - tapi barel di gudang ini justru diletakkan PERSIS di antara dua kolom chest (permintaan
+// nyata pemilik: "the barel is in betwen cess"), artinya jarak 1 blok dari barel ke CHEST tetangga
+// SAMA PERSIS dengan jarak antar dua separuh chest yang sungguh berpasangan. Tanpa mengecek jenis
+// blok, penggabungan otomatis di atas akan SALAH mengira barel adalah bagian dari chest sebelahnya
+// - isChestFn (bergantung ke MineflayerRoleAdapter.blockAt) memastikan penggabungan HANYA terjadi
+// kalau KEDUA blok memang sama-sama chest.
+function canonicalKeyFor(pos, allPositions, isChestFn) {
   const set = new Set(allPositions.map(posKey));
   const candidates = [pos];
-  for (const neighbor of [
-    { x: pos.x - 1, y: pos.y, z: pos.z },
-    { x: pos.x + 1, y: pos.y, z: pos.z },
-    { x: pos.x, y: pos.y, z: pos.z - 1 },
-    { x: pos.x, y: pos.y, z: pos.z + 1 }
-  ]) {
-    if (set.has(posKey(neighbor))) candidates.push(neighbor);
+  if (isChestFn(pos)) {
+    for (const neighbor of [
+      { x: pos.x - 1, y: pos.y, z: pos.z },
+      { x: pos.x + 1, y: pos.y, z: pos.z },
+      { x: pos.x, y: pos.y, z: pos.z - 1 },
+      { x: pos.x, y: pos.y, z: pos.z + 1 }
+    ]) {
+      if (set.has(posKey(neighbor)) && isChestFn(neighbor)) candidates.push(neighbor);
+    }
   }
   candidates.sort((a, b) => a.x - b.x || a.y - b.y || a.z - b.z);
   return posKey(candidates[0]);
@@ -92,6 +102,12 @@ class StorageManagerEngine extends EventEmitter {
 
   getChestAssignments() {
     return Object.fromEntries(this.chestAssignments);
+  }
+
+  // true HANYA untuk blok "chest" - dipakai canonicalKeyFor supaya barrel (yang bisa saja tepat
+  // bersebelahan 1 blok dengan chest) tidak pernah ikut dianggap "separuh chest yang sama".
+  isChestBlock(pos) {
+    return this.adapter.blockAt(pos)?.name === 'chest';
   }
 
   // Tentukan chest gudang untuk SATU jenis item: (1) ikuti assignment yang sudah diingat kalau
@@ -269,11 +285,12 @@ class StorageManagerEngine extends EventEmitter {
       // lewat canonicalKeyFor supaya separuh double-chest yang sama tidak dianggap "lain"). Cuma
       // barang yang MEMANG punya assignment jelas yang dipindah - kalau belum ada info rumah yang
       // benar, jangan tebak (itu justru penyebab bug sortir tercampur sebelumnya).
-      const hereKey = canonicalKeyFor(nextToInspect, insideChests);
+      const isChest = (p) => this.isChestBlock(p);
+      const hereKey = canonicalKeyFor(nextToInspect, insideChests, isChest);
       const misplacedItems = items.filter((it) => {
         const assignedKey = this.chestAssignments.get(it.name);
         if (!assignedKey) return false;
-        return canonicalKeyFor(parseKey(assignedKey), insideChests) !== hereKey;
+        return canonicalKeyFor(parseKey(assignedKey), insideChests, isChest) !== hereKey;
       });
 
       if (misplacedItems.length > 0) {
