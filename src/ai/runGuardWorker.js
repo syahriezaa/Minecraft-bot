@@ -67,6 +67,10 @@ function startGuardWorker({ host, port, botName, scanRadius = 16, baseGoal = DEF
     if (!walkResult.success) {
       log(`PERINGATAN: gagal berjalan ke base (${walkResult.reason}) - tetap mulai berjaga di posisi sekarang.`);
     }
+    // walkToBase() menimpa movements bot dengan miliknya sendiri (scaffolding aktif untuk
+    // perjalanan awal dari spawn) - pulihkan lagi supaya patroli/pertarungan sesudahnya tidak ikut
+    // memasang blok yang tidak perlu.
+    bot.pathfinder.setMovements(buildMovements(bot));
 
     const adapter = new MineflayerRoleAdapter(bot);
 

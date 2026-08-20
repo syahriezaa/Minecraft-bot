@@ -95,6 +95,11 @@ function startFarmerWorker({ host, port, botName, scanRadius = 32, baseGoal = DE
     if (!walkResult.success) {
       log(`PERINGATAN: gagal berjalan ke base (${walkResult.reason}) - tetap mulai bekerja di posisi sekarang, mungkin tidak menemukan apa-apa.`);
     }
+    // walkToBase() menimpa movements bot dengan miliknya sendiri (scaffolding aktif untuk
+    // perjalanan awal dari spawn) - timpaan itu terus berlaku untuk navigasi SESUDAHNYA juga kalau
+    // tidak dipulihkan di sini - ditemukan dari keluhan nyata pemilik: bot tetap berusaha memasang
+    // blok padahal target (kebun/chest) sudah terjangkau jalan kaki biasa.
+    bot.pathfinder.setMovements(buildMovements(bot));
 
     const adapter = new MineflayerRoleAdapter(bot);
 

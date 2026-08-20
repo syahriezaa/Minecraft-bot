@@ -62,6 +62,9 @@ function startRancherWorker({ host, port, botName, scanRadius = 24, baseGoal = D
     if (!walkResult.success) {
       log(`PERINGATAN: gagal berjalan ke base (${walkResult.reason}) - tetap mulai bekerja di posisi sekarang.`);
     }
+    // walkToBase() menimpa movements bot dengan miliknya sendiri (scaffolding aktif untuk
+    // perjalanan awal dari spawn) - pulihkan lagi supaya kerja sesudahnya tidak ikut memasang blok.
+    bot.pathfinder.setMovements(buildMovements(bot));
 
     const adapter = new MineflayerRoleAdapter(bot);
 

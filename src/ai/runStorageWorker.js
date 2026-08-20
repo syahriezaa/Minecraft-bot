@@ -292,6 +292,14 @@ function startStorageWorker({ host, port, botName, scanRadius = 48, baseGoal = D
     if (!walkResult.success) {
       log(`PERINGATAN: gagal berjalan ke base (${walkResult.reason}) - tetap mulai bekerja di posisi sekarang.`);
     }
+    // walkToBase() MENIMPA movements bot dengan miliknya sendiri (allow1by1towers:true, scaffolding
+    // dirt/cobblestone default - sengaja, supaya perjalanan awal 350+ blok dari spawn bisa membangun
+    // jalan kalau benar-benar buntu) - tapi timpaan itu TERUS BERLAKU untuk semua navigasi
+    // SESUDAHNYA juga (termasuk ke chest gudang yang sebenarnya sudah terjangkau jalan kaki biasa)
+    // kalau tidak dipulihkan di sini. Pasang lagi movements TANPA taruh blok milik worker ini -
+    // ditemukan dari keluhan nyata pemilik: "storage worker tetap berusaha memasang block padahal
+    // cest terjangkau" - root cause-nya persis ini, bukan buildMovements() yang salah.
+    bot.pathfinder.setMovements(buildMovements(bot));
 
     const adapter = new MineflayerRoleAdapter(bot);
 
