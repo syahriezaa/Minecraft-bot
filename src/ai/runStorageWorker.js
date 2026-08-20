@@ -80,22 +80,48 @@ const CANONICAL_ORE_INGOT_ASSIGNMENTS = {
   crying_obsidian: RAW_ORE_CHEST
 };
 
-// Reorganisasi lanjutan (atas persetujuan pemilik): 4 chest di y71 sebelumnya jadi tempat sampah
-// campuran (armor, senjata, buku, makanan tercampur acak dengan bahan mentah lain). Dipetakan
-// ulang jadi satu kategori jelas per chest, dipilih dari chest yang SUDAH paling dominan berisi
-// kategori itu (supaya perpindahan minimal) - bukan slot baru, cuma menata ulang 4 slot yang sama.
-const BOOKS_CHEST = '-181,71,-350';
-const ARMOR_CHEST = '-181,71,-345';
-const WEAPONS_CHEST = '-181,71,-347';
-const FOOD_CHEST = '-181,71,-349';
-const CANONICAL_GEAR_ASSIGNMENTS = {
-  enchanted_book: BOOKS_CHEST,
-  book: BOOKS_CHEST,
-  bookshelf: BOOKS_CHEST,
-  writable_book: BOOKS_CHEST,
-  written_book: BOOKS_CHEST,
-  knowledge_book: BOOKS_CHEST,
+// Rancangan ulang MENYELURUH (permintaan nyata pemilik: "kategori nya lebih rapi terpisah pisah",
+// versi 4-kategori sebelumnya dinilai "masih terlalu campur campur"). Semua 24 double chest gudang
+// sekarang punya SATU kategori jelas, bukan cuma 4 chest gear yang dirapikan sebelumnya - kategori
+// lain (buku, mob drop, komponen redstone, bibit tanaman, benih, hasil sampingan panen, pernak-
+// pernik, drop langka) masing-masing dapat rumah sendiri, dipetakan dari isi sungguhan gudang saat
+// ini. 3 chest fungsi (dispenser/observer/chest cadangan) DIGABUNG jadi satu chest "blok utilitas"
+// supaya 2 slot yang kosong-longgar itu bisa dipakai untuk kategori baru (senjata & drop langka)
+// yang sebelumnya tidak kebagian slot sendiri.
+const NETHER_MATERIALS_CHEST = '-181,71,-353';
+const STONE_COBBLE_CHEST = '-181,71,-352';
+const ARMOR_CHEST = '-181,71,-350';
+const MOB_DROPS_CHEST = '-181,71,-349';
+const BOOKS_CHEST = '-181,71,-347';
+const FOOD_CHEST = '-181,71,-345';
 
+const RAILS_MINECART_CHEST = '-181,72,-353';
+const WEAPONS_CHEST = '-181,72,-352';
+const SEEDS_CHEST = '-181,72,-350';
+const FARMING_BYPRODUCTS_CHEST = '-181,72,-349';
+const SAPLINGS_PLANTS_CHEST = '-181,72,-347';
+const TRINKETS_CHEST = '-181,72,-345';
+
+const BUILDING_MATERIALS_CHEST = '-181,73,-352';
+const WHEAT_CHEST = '-181,73,-350';
+const CARROT_CHEST = '-181,73,-349';
+const PLANKS_CHEST = '-181,73,-347';
+const UTILITY_BLOCKS_CHEST = '-181,73,-345';
+
+const DIRT_SAND_CHEST = '-181,74,-352';
+const POTATO_CHEST = '-181,74,-350';
+// y74,-349 SENGAJA dibiarkan tanpa kategori baku - isinya kecil (cocoa_beans/melon_seeds/
+// red_mushroom) dan sudah ditangani kategori lain (SEEDS_CHEST/FARMING_BYPRODUCTS_CHEST), jadi
+// slot ini jadi ruang cadangan alami untuk kategori manapun yang kehabisan tempat.
+const LOGS_CHEST = '-181,74,-347';
+const RARE_DROPS_CHEST = '-181,74,-345';
+
+const CANONICAL_GEAR_ASSIGNMENTS = {
+  // Buku & catatan
+  enchanted_book: BOOKS_CHEST, book: BOOKS_CHEST, bookshelf: BOOKS_CHEST,
+  writable_book: BOOKS_CHEST, written_book: BOOKS_CHEST, knowledge_book: BOOKS_CHEST,
+
+  // Armor & perisai
   leather_helmet: ARMOR_CHEST, leather_chestplate: ARMOR_CHEST, leather_leggings: ARMOR_CHEST, leather_boots: ARMOR_CHEST,
   golden_helmet: ARMOR_CHEST, golden_chestplate: ARMOR_CHEST, golden_leggings: ARMOR_CHEST, golden_boots: ARMOR_CHEST,
   iron_helmet: ARMOR_CHEST, iron_chestplate: ARMOR_CHEST, iron_leggings: ARMOR_CHEST, iron_boots: ARMOR_CHEST,
@@ -106,14 +132,80 @@ const CANONICAL_GEAR_ASSIGNMENTS = {
   iron_horse_armor: ARMOR_CHEST, golden_horse_armor: ARMOR_CHEST, diamond_horse_armor: ARMOR_CHEST, leather_horse_armor: ARMOR_CHEST,
   elytra: ARMOR_CHEST,
 
+  // Senjata (dipisah dari armor - kategori sendiri, slot baru hasil konsolidasi blok utilitas)
   wooden_sword: WEAPONS_CHEST, stone_sword: WEAPONS_CHEST, golden_sword: WEAPONS_CHEST, iron_sword: WEAPONS_CHEST, diamond_sword: WEAPONS_CHEST, netherite_sword: WEAPONS_CHEST,
   bow: WEAPONS_CHEST, crossbow: WEAPONS_CHEST, trident: WEAPONS_CHEST, arrow: WEAPONS_CHEST, spectral_arrow: WEAPONS_CHEST, tipped_arrow: WEAPONS_CHEST,
 
+  // Makanan
   cooked_chicken: FOOD_CHEST, chicken: FOOD_CHEST, cooked_beef: FOOD_CHEST, beef: FOOD_CHEST,
   cooked_porkchop: FOOD_CHEST, porkchop: FOOD_CHEST, mutton: FOOD_CHEST, cooked_mutton: FOOD_CHEST,
   baked_potato: FOOD_CHEST, bread: FOOD_CHEST, apple: FOOD_CHEST, golden_apple: FOOD_CHEST,
   enchanted_golden_apple: FOOD_CHEST, cooked_salmon: FOOD_CHEST, salmon: FOOD_CHEST, cooked_cod: FOOD_CHEST,
-  cod: FOOD_CHEST, cake: FOOD_CHEST, cookie: FOOD_CHEST, pumpkin_pie: FOOD_CHEST, egg: FOOD_CHEST
+  cod: FOOD_CHEST, cake: FOOD_CHEST, cookie: FOOD_CHEST, pumpkin_pie: FOOD_CHEST, egg: FOOD_CHEST,
+
+  // Drop mob (bahan mentah dari membunuh/menjarah mob, BUKAN makanan/armor/senjata)
+  bone: MOB_DROPS_CHEST, string: MOB_DROPS_CHEST, spider_eye: MOB_DROPS_CHEST, slime_ball: MOB_DROPS_CHEST,
+  phantom_membrane: MOB_DROPS_CHEST, rotten_flesh: MOB_DROPS_CHEST, feather: MOB_DROPS_CHEST, gunpowder: MOB_DROPS_CHEST,
+  leather: MOB_DROPS_CHEST, white_wool: MOB_DROPS_CHEST, black_wool: MOB_DROPS_CHEST, gray_wool: MOB_DROPS_CHEST,
+  ender_eye: MOB_DROPS_CHEST, glow_ink_sac: MOB_DROPS_CHEST, ink_sac: MOB_DROPS_CHEST, breeze_rod: MOB_DROPS_CHEST,
+  white_carpet: MOB_DROPS_CHEST, wind_charge: MOB_DROPS_CHEST,
+
+  // Bibit & tanaman hias (SAPLINGS_PLANTS_CHEST)
+  oak_sapling: SAPLINGS_PLANTS_CHEST, spruce_sapling: SAPLINGS_PLANTS_CHEST, birch_sapling: SAPLINGS_PLANTS_CHEST,
+  jungle_sapling: SAPLINGS_PLANTS_CHEST, acacia_sapling: SAPLINGS_PLANTS_CHEST, dark_oak_sapling: SAPLINGS_PLANTS_CHEST,
+  cherry_sapling: SAPLINGS_PLANTS_CHEST, mangrove_propagule: SAPLINGS_PLANTS_CHEST, cactus: SAPLINGS_PLANTS_CHEST,
+  mushroom_stem: SAPLINGS_PLANTS_CHEST, brown_mushroom: SAPLINGS_PLANTS_CHEST, red_mushroom: SAPLINGS_PLANTS_CHEST,
+  red_mushroom_block: SAPLINGS_PLANTS_CHEST, weeping_vines: SAPLINGS_PLANTS_CHEST, crimson_roots: SAPLINGS_PLANTS_CHEST,
+  warped_roots: SAPLINGS_PLANTS_CHEST, crimson_fungus: SAPLINGS_PLANTS_CHEST, warped_fungus: SAPLINGS_PLANTS_CHEST,
+
+  // Benih murni (SEEDS_CHEST) - beda dari hasil panen utama dan hasil sampingan panen
+  wheat_seeds: SEEDS_CHEST, beetroot_seeds: SEEDS_CHEST, melon_seeds: SEEDS_CHEST, pumpkin_seeds: SEEDS_CHEST,
+  torchflower_seeds: SEEDS_CHEST, pitcher_pod: SEEDS_CHEST,
+
+  // Hasil sampingan bercocok tanam (bukan benih murni, bukan hasil panen utama wheat/carrot/potato)
+  sugar_cane: FARMING_BYPRODUCTS_CHEST, sugar: FARMING_BYPRODUCTS_CHEST, glow_berries: FARMING_BYPRODUCTS_CHEST,
+  melon_slice: FARMING_BYPRODUCTS_CHEST, nether_wart: FARMING_BYPRODUCTS_CHEST, cocoa_beans: FARMING_BYPRODUCTS_CHEST,
+  pumpkin: FARMING_BYPRODUCTS_CHEST, glistering_melon_slice: FARMING_BYPRODUCTS_CHEST, bamboo: FARMING_BYPRODUCTS_CHEST,
+  sand: DIRT_SAND_CHEST,
+
+  // Pernak-pernik/curio biasa (dekorasi umum, bukan drop langka)
+  dandelion: TRINKETS_CHEST, white_banner: TRINKETS_CHEST, glass_bottle: TRINKETS_CHEST, calcite: TRINKETS_CHEST,
+  ender_pearl: TRINKETS_CHEST, flint: TRINKETS_CHEST, iron_nugget: TRINKETS_CHEST,
+
+  // Bahan bangunan olahan (bata/tangga/lempeng/dinding/kaca)
+  stone_bricks: BUILDING_MATERIALS_CHEST, deepslate: BUILDING_MATERIALS_CHEST, glowstone: NETHER_MATERIALS_CHEST,
+  glowstone_dust: NETHER_MATERIALS_CHEST, blaze_rod: RARE_DROPS_CHEST,
+  netherite_upgrade_smithing_template: RARE_DROPS_CHEST, warped_wart_block: SAPLINGS_PLANTS_CHEST,
+
+  // Blok kayu batang/olahan yang nyasar (dipetakan ke chest kayu/papan yang benar)
+  spruce_log: LOGS_CHEST, stripped_spruce_log: LOGS_CHEST, spruce_planks: PLANKS_CHEST, oak_planks: PLANKS_CHEST,
+
+  // Blok utilitas/workstation (konsolidasi dengan dispenser/observer/chest cadangan - membebaskan
+  // 2 slot yang tadinya masing-masing cuma diisi satu jenis blok saja, dipakai untuk kategori baru
+  // senjata & drop langka di atas)
+  scaffolding: UTILITY_BLOCKS_CHEST, crafting_table: UTILITY_BLOCKS_CHEST, dispenser: UTILITY_BLOCKS_CHEST,
+  observer: UTILITY_BLOCKS_CHEST, chest: UTILITY_BLOCKS_CHEST, lantern: UTILITY_BLOCKS_CHEST,
+  sticky_piston: UTILITY_BLOCKS_CHEST, piston: UTILITY_BLOCKS_CHEST, redstone_torch: UTILITY_BLOCKS_CHEST,
+  repeater: UTILITY_BLOCKS_CHEST, hopper: UTILITY_BLOCKS_CHEST,
+
+  // Drop langka & curio bernilai (bukan pernak-pernik biasa)
+  totem_of_undying: RARE_DROPS_CHEST, music_disc_cat: RARE_DROPS_CHEST, music_disc_otherside: RARE_DROPS_CHEST,
+  name_tag: RARE_DROPS_CHEST, lead: RARE_DROPS_CHEST, saddle: RARE_DROPS_CHEST, emerald: RARE_DROPS_CHEST,
+
+  // Rel & minecart
+  rail: RAILS_MINECART_CHEST, powered_rail: RAILS_MINECART_CHEST, detector_rail: RAILS_MINECART_CHEST,
+  activator_rail: RAILS_MINECART_CHEST, chest_minecart: RAILS_MINECART_CHEST,
+
+  // Hasil panen utama - masing-masing chest sendiri, dikunci eksplisit supaya tidak nyasar lagi
+  wheat: WHEAT_CHEST, carrot: CARROT_CHEST, potato: POTATO_CHEST, poisonous_potato: POTATO_CHEST,
+
+  // Dirt/sand/gravel bulk
+  dirt: DIRT_SAND_CHEST, grass_block: DIRT_SAND_CHEST,
+
+  // Batu/cobble bulk
+  stone: STONE_COBBLE_CHEST, cobblestone: STONE_COBBLE_CHEST, mossy_cobblestone: STONE_COBBLE_CHEST,
+  cobbled_deepslate: STONE_COBBLE_CHEST, gravel: STONE_COBBLE_CHEST, tuff: STONE_COBBLE_CHEST,
+  granite: STONE_COBBLE_CHEST, diorite: STONE_COBBLE_CHEST, andesite: STONE_COBBLE_CHEST
 };
 
 const DEFAULT_BASE_GOAL = { x: -185, y: 71, z: -352 };
