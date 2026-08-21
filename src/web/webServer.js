@@ -515,6 +515,19 @@ app.post('/api/storage/start', (req, res) => {
     onChestSnapshot: (snapshot) => {
       storageChestMap.set(`${snapshot.position.x},${snapshot.position.y},${snapshot.position.z}`, snapshot);
       broadcast({ type: 'STORAGE_CHEST_MAP_UPDATE', data: { chests: Array.from(storageChestMap.values()) } });
+      // Log EKSPLISIT (bukan cuma data WS diam-diam) - permintaan nyata pemilik: "u should see
+      // under 5 second memory update logs" - supaya pembaruan peta gudang di memori/dashboard
+      // punya bukti waktu yang terlihat langsung di feed yang sama, sama seperti probe verifikasi.
+      const p = snapshot.position;
+      const elapsedMs = Date.now() - snapshot.timestamp;
+      broadcast({
+        type: 'AI_ACTION_EVENT',
+        data: {
+          task: 'STORAGE_WORKER',
+          step: `[Memori Gudang] Peta chest (${p.x},${p.y},${p.z}) diperbarui - ${snapshot.items.length} item, ${snapshot.misplaced.length} salah tempat (${elapsedMs}ms sejak data dibaca)`,
+          status: 'RUNNING'
+        }
+      });
     }
   });
   storageWorkers.set(name, handle);
