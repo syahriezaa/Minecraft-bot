@@ -282,12 +282,61 @@ class FarmerEngine extends EventEmitter {
     return repaired > 0 ? { action: 'repair', count: repaired } : null;
   }
 
+  // Setor semua hasil panen yang sudah dikenal ke chest masing-masing (autoMatchStorage) - diambil
+  // jadi method sendiri supaya bisa dipanggil LEBIH AWAL saat inventaris hampir penuh (lihat tick())
+  // MAUPUN sebagai langkah terakhir seperti biasa, tanpa duplikasi logika.
+  async runAutoMatchDeposit() {
+    const outputItems = this.adapter.getInventoryItems().filter(item => this.isFarmOutput(item.name));
+    const distinctNames = [...new Set(outputItems.map(item => item.name))];
+    let totalDeposited = 0;
+    for (const name of distinctNames) {
+      let chestPos = this.depositChestCache.get(name);
+      if (!chestPos) {
+        const sharedKey = this.options.sharedChestAssignments?.[name];
+        chestPos = sharedKey ? parseChestPositionKey(sharedKey) : await this.adapter.findMatchingChest([name]);
+        if (chestPos) this.depositChestCache.set(name, chestPos);
+      }
+      if (!chestPos) continue;
+      const isSeedItem = Object.values(CROP_RULES).some(rule => rule.seed === name);
+      const maxPerItem = isSeedItem ? { [name]: this.options.seedReserve } : {};
+      // Dibungkus try/catch PER JENIS ITEM - depositToChest sungguhan bisa MELEMPAR (mis.
+      // "destination full") kalau chest tujuan jenis ini genuinely penuh. Tanpa penjagaan ini
+      // SATU jenis yang kebetulan chest-nya penuh menjatuhkan SELURUH loop, membuat jenis lain
+      // yang chest-nya masih longgar ikut tidak pernah disetor - ditemukan dari bug live nyata:
+      // metrics.deposited tetap 0 selama bermenit-menit walau sudah panen ratusan item.
+      try {
+        const result = await this.adapter.depositToChest(chestPos, item => item.name === name, maxPerItem);
+        totalDeposited += result.deposited || 0;
+      } catch (e) {
+        this.emit('depositError', { name, position: chestPos, error: e.message });
+      }
+    }
+    this.metrics.deposited += totalDeposited;
+    return totalDeposited > 0 ? { action: 'deposit', count: totalDeposited } : null;
+  }
+
   async tick() {
     if (this.adapter.getFood() <= this.options.autoEatFoodThreshold) {
       const ate = await this.adapter.eatBestFood();
       if (ate) {
         this.metrics.eaten++;
         return { action: 'eat' };
+      }
+    }
+
+    // Setor DULUAN kalau inventaris sudah hampir penuh - permintaan nyata pemilik (SOP): "panen -
+    // tanam sampai full lahan - ke storage room kosongkan tas". Tanpa ini, di lahan yang cukup
+    // luas SELALU ada sesuatu untuk dipanen/ditanam di tick manapun, jadi giliran setor (dan
+    // giliran perbaikan lahan di baris kode di bawahnya) tidak PERNAH datang sama sekali - ditemukan
+    // dari bug live nyata: metrics.deposited tetap 0 walau sudah panen 60+ item dalam beberapa
+    // menit berturut-turut, karena panen/tanam terus-menerus ada giliran tanpa henti. Mengabaikan
+    // batas ini juga berisiko kehilangan hasil panen berikutnya (item jatuh tidak terambil kalau
+    // inventaris benar-benar penuh saat menggali).
+    if (this.options.autoMatchStorage) {
+      const freeSlots = this.adapter.getInventoryFreeSlotCount();
+      if (freeSlots < this.options.depositWhenSlotsFreeBelow) {
+        const depositResult = await this.runAutoMatchDeposit();
+        if (depositResult) return depositResult;
       }
     }
 
@@ -341,34 +390,8 @@ class FarmerEngine extends EventEmitter {
     // (depositChest lama). Kalau tidak ada chest yang cocok untuk suatu item, item itu dibiarkan di
     // inventaris (bukan ditaruh di chest sembarangan) sampai chest yang cocok ditemukan.
     if (this.options.autoMatchStorage) {
-      const outputItems = this.adapter.getInventoryItems().filter(item => this.isFarmOutput(item.name));
-      const distinctNames = [...new Set(outputItems.map(item => item.name))];
-      let totalDeposited = 0;
-      for (const name of distinctNames) {
-        let chestPos = this.depositChestCache.get(name);
-        if (!chestPos) {
-          const sharedKey = this.options.sharedChestAssignments?.[name];
-          chestPos = sharedKey ? parseChestPositionKey(sharedKey) : await this.adapter.findMatchingChest([name]);
-          if (chestPos) this.depositChestCache.set(name, chestPos);
-        }
-        if (!chestPos) continue;
-        const isSeedItem = Object.values(CROP_RULES).some(rule => rule.seed === name);
-        const maxPerItem = isSeedItem ? { [name]: this.options.seedReserve } : {};
-        // Dibungkus try/catch PER JENIS ITEM - depositToChest sungguhan bisa MELEMPAR (mis.
-        // "destination full") kalau chest tujuan jenis ini genuinely penuh. Tanpa penjagaan ini
-        // SATU jenis yang kebetulan chest-nya penuh menjatuhkan SELURUH loop, membuat jenis lain
-        // yang chest-nya masih longgar ikut tidak pernah disetor - ditemukan dari bug live nyata:
-        // metrics.deposited tetap 0 selama bermenit-menit walau sudah panen ratusan item.
-        try {
-          const result = await this.adapter.depositToChest(chestPos, item => item.name === name, maxPerItem);
-          totalDeposited += result.deposited || 0;
-        } catch (e) {
-          this.emit('depositError', { name, position: chestPos, error: e.message });
-        }
-      }
-      this.metrics.deposited += totalDeposited;
-      if (totalDeposited > 0) return { action: 'deposit', count: totalDeposited };
-      return { action: 'idle' };
+      const depositResult = await this.runAutoMatchDeposit();
+      return depositResult || { action: 'idle' };
     }
 
     if (this.options.depositChest) {

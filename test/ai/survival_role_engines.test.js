@@ -145,6 +145,39 @@ describe('FarmerEngine', () => {
     assert.equal(engine.metrics.harvested, 1);
   });
 
+  it('dengan autoMatchStorage aktif DAN inventaris sudah hampir penuh (di bawah depositWhenSlotsFreeBelow), harus SETOR DULUAN sebelum memanen - lahan luas SELALU punya sesuatu untuk dipanen/ditanam di tick manapun, jadi tanpa pemicu berbasis kepenuhan ini giliran setor tidak PERNAH datang sama sekali - ditemukan dari bug live nyata: metrics.deposited tetap 0 walau sudah panen 60+ item dalam beberapa menit berturut-turut, karena panen/tanam terus-menerus ada giliran tanpa henti', async () => {
+    const adapter = new FakeRoleAdapter({
+      items: { wheat: 20 },
+      blocks: [
+        { name: 'wheat', properties: { age: 7 }, position: { x: 1, y: 64, z: 0 } } // masih ada yang bisa dipanen
+      ]
+    });
+    adapter.chests = [{ position: { x: 0, y: 64, z: 0 }, contents: ['wheat'] }];
+    adapter.freeSlots = 2; // di bawah depositWhenSlotsFreeBelow (default 4)
+    const engine = new FarmerEngine({ adapter, autoMatchStorage: true });
+
+    const result = await engine.tick();
+
+    assert.equal(result.action, 'deposit', 'harus setor duluan, bukan memanen, walau ada crop matang menunggu - crop itu tetap aman dipanen tick berikutnya');
+    assert.ok(!adapter.actions.some((a) => a.type === 'dig'), 'jangan memanen dulu saat inventaris hampir penuh - resiko hasil panen jatuh tidak terambil kalau benar-benar penuh');
+  });
+
+  it('dengan autoMatchStorage aktif tapi inventaris MASIH LONGGAR (di atas depositWhenSlotsFreeBelow), urutan normal (panen dulu) tetap berlaku - pemicu setor-duluan HANYA aktif saat benar-benar mendesak', async () => {
+    const adapter = new FakeRoleAdapter({
+      items: { wheat: 20 },
+      blocks: [
+        { name: 'wheat', properties: { age: 7 }, position: { x: 1, y: 64, z: 0 } }
+      ]
+    });
+    adapter.chests = [{ position: { x: 0, y: 64, z: 0 }, contents: ['wheat'] }];
+    adapter.freeSlots = 20; // jauh di atas depositWhenSlotsFreeBelow
+    const engine = new FarmerEngine({ adapter, autoMatchStorage: true });
+
+    const result = await engine.tick();
+
+    assert.equal(result.action, 'harvest', 'inventaris masih longgar - urutan normal (panen dulu) tetap berlaku');
+  });
+
   it('dengan avoidArea diset, crop matang DI DALAM area itu harus diabaikan sama sekali - ditemukan dari permintaan nyata pemilik: bot terus kembali ke area peternakan villager (dekat base) yang bukan bagian dari kebun sungguhan dan sebagian terhalang tembok, mencoba mencapainya berulang-ulang sia-sia', async () => {
     const adapter = new FakeRoleAdapter({
       blocks: [
