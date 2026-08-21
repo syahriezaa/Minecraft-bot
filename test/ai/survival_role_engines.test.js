@@ -77,6 +77,7 @@ class FakeRoleAdapter {
   async depositToChest(pos, predicate = () => true, maxPerItem = {}) {
     const matched = this.getInventoryItems().filter(predicate);
     this.actions.push({ type: 'deposit', position: pos, items: matched.map((i) => i.name), maxPerItem });
+    if (matched.some((it) => this.depositFailsFor?.has(it.name))) throw new Error('destination full');
     let deposited = 0;
     for (const item of matched) {
       const reserve = maxPerItem[item.name];
@@ -283,6 +284,28 @@ describe('FarmerEngine', () => {
 
     assert.equal(result.action, 'deposit');
     assert.ok(adapter.actions.some((a) => a.type === 'findMatchingChest'), 'item yang tidak dikenal memori bersama harus tetap dicari lewat live-scan seperti biasa');
+  });
+
+  it('kalau setor SATU jenis item gagal (mis. "destination full" - chest sungguhan penuh), jenis LAIN dalam tas TETAP harus disetor ke chest masing-masing - ditemukan dari bug live nyata: FarmerEngine.metrics.deposited tetap 0 selama bermenit-menit walau sudah panen ratusan item, karena satu jenis crop yang chest-nya kebetulan penuh menjatuhkan SELURUH loop autoMatchStorage sebelum sempat mencoba jenis lain', async () => {
+    // carrot SENGAJA tidak dipakai di sini - carrot adalah benihnya sendiri (CROP_RULES.carrots),
+    // jadi kena batas seedReserve (default 32) dan tidak akan disetor sama sekali dengan stok
+    // kecil, mengaburkan tes ini. beetroot benihnya beetroot_seeds (item BEDA), jadi bebas
+    // disetor penuh tanpa batas cadangan.
+    const adapter = new FakeRoleAdapter({ items: { wheat: 5, beetroot: 3 } });
+    adapter.chests = [
+      { position: { x: 0, y: 64, z: 0 }, contents: ['wheat'] },
+      { position: { x: 1, y: 64, z: 0 }, contents: ['beetroot'] }
+    ];
+    adapter.depositFailsFor = new Set(['wheat']); // chest wheat kebetulan penuh
+    const engine = new FarmerEngine({ adapter, autoMatchStorage: true });
+
+    let result;
+    await assert.doesNotReject(async () => { result = await engine.tick(); }, 'satu jenis yang gagal setor TIDAK BOLEH menjatuhkan seluruh tick');
+
+    assert.equal(result.action, 'deposit');
+    const beetrootDeposit = adapter.actions.find((a) => a.type === 'deposit' && a.items.includes('beetroot'));
+    assert.ok(beetrootDeposit, 'beetroot tetap harus dicoba disetor walau wheat gagal duluan');
+    assert.equal(result.count, 3, 'cuma beetroot yang benar-benar berhasil dihitung');
   });
 
   it('dengan autoMatchStorage aktif tapi TIDAK ADA chest yang cocok untuk suatu item, item itu TIDAK BOLEH dibuang ke chest sembarangan - biarkan di inventaris sampai chest yang cocok ditemukan', async () => {

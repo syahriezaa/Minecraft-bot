@@ -439,6 +439,35 @@ describe('MineflayerRoleAdapter.depositToChest - dukung batas maksimum per jenis
     assert.equal(depositCalls.length, 0);
     assert.equal(result.deposited, 0);
   });
+
+  it('kalau chest.deposit() MELEMPAR untuk SATU jenis item (mis. "destination full" - chest sungguhan sudah tidak muat sama sekali untuk jenis itu), item jenis LAIN dalam kunjungan yang sama TETAP harus disetor - ditemukan dari bug live nyata: FarmerWorker.deposited tetap 0 SELAMA BERMENIT-MENIT walau sudah panen 200+ item, karena satu jenis crop yang chest-nya kebetulan penuh membuat SELURUH proses setor untuk chest itu (semua jenis item lain juga) gagal total, inventaris tidak pernah mengempis, jadi bot bahkan tidak pernah punya slot kosong untuk mengambil cangkul perbaikan lahan', async () => {
+    const depositCalls = [];
+    const window = {
+      containerItems: () => [],
+      deposit: async (type, metadata, count) => {
+        depositCalls.push({ type, count });
+        if (type === 999) throw new Error('destination full'); // persis error mineflayer sungguhan
+      },
+      close: () => {}
+    };
+    const bot = {
+      entity: { position: { x: 0, y: 64, z: 0 } },
+      pathfinder: { goto: async () => {} },
+      blockAt: () => ({ name: 'chest', position: { x: 1, y: 64, z: 1 } }),
+      openChest: async () => window,
+      inventory: { items: () => [
+        { name: 'wheat_full', type: 999, count: 10 }, // chest-nya PENUH untuk jenis ini
+        { name: 'carrot', type: 7, count: 5 } // chest MASIH ADA RUANG untuk jenis ini
+      ] }
+    };
+    const adapter = new MineflayerRoleAdapter(bot);
+
+    let result;
+    await assert.doesNotReject(async () => { result = await adapter.depositToChest({ x: 1, y: 64, z: 1 }, () => true); }, 'satu jenis item yang gagal disetor TIDAK BOLEH menjatuhkan seluruh proses setor');
+
+    assert.ok(depositCalls.some((c) => c.type === 7 && c.count === 5), 'carrot tetap harus disetor walau wheat_full gagal duluan');
+    assert.equal(result.deposited, 5, 'cuma yang benar-benar berhasil yang dihitung');
+  });
 });
 
 describe('MineflayerRoleAdapter.dig - harus mengambil barang yang jatuh, bukan cuma menggali', () => {

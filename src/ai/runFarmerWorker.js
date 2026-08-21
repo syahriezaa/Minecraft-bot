@@ -156,6 +156,11 @@ function startFarmerWorker({ host, port, botName, scanRadius = 32, baseGoal = DE
       const posLabel = position ? ` di (${position.x},${position.y},${position.z})` : '';
       log(`PERINGATAN: gagal ${step}${posLabel} untuk perbaikan lahan (${error}) - lewati, coba kandidat/tick lain.`);
     });
+    // Log EKSPLISIT setiap kali SATU jenis item gagal disetor (chest tujuannya penuh dsb) -
+    // ditemukan dari bug live nyata: metrics.deposited tetap 0 selama bermenit-menit walau sudah
+    // panen ratusan item, karena satu jenis yang gagal dulu menjatuhkan seluruh loop setor sebelum
+    // ada log apapun yang sempat tercatat.
+    engine.on('depositError', ({ name, position, error }) => log(`PERINGATAN: gagal setor ${name} ke (${position.x},${position.y},${position.z}) (${error}) - lewati, coba jenis lain.`));
 
     log('Pekerja pertanian mulai bekerja.');
     lastAction = 'WORKING';

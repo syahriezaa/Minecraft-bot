@@ -655,9 +655,22 @@ class MineflayerRoleAdapter {
           if (amount <= 0) continue;
         }
         if (typeof chest.deposit === 'function') {
-          await chest.deposit(item.type, item.metadata ?? null, amount);
-          deposited += amount;
-          depositedSoFar.set(item.name, (depositedSoFar.get(item.name) || 0) + amount);
+          // chest.deposit() sungguhan MELEMPAR "destination full" kalau chest genuinely tidak
+          // muat lagi untuk jenis ini (bukan gagal dengan tenang) - dibungkus try/catch PER JENIS
+          // ITEM supaya satu jenis yang kebetulan chest-nya penuh tidak menjatuhkan SELURUH proses
+          // setor untuk jenis lain di kunjungan yang sama - ditemukan dari bug live nyata:
+          // FarmerWorker.deposited tetap 0 selama bermenit-menit walau sudah panen 200+ item,
+          // karena satu jenis crop yang chest-nya kebetulan penuh membuat setor GAGAL TOTAL untuk
+          // semua jenis lain juga, inventaris tidak pernah mengempis - rantai akibatnya sampai ke
+          // fitur lain: bot bahkan tidak pernah punya slot kosong untuk mengambil cangkul
+          // perbaikan lahan.
+          try {
+            await chest.deposit(item.type, item.metadata ?? null, amount);
+            deposited += amount;
+            depositedSoFar.set(item.name, (depositedSoFar.get(item.name) || 0) + amount);
+          } catch (e) {
+            this.options.log(`[Deposit] PERINGATAN: gagal setor ${amount}x ${item.name} (${e.message}) - lewati, lanjut ke jenis lain.`);
+          }
         }
       }
     } finally {

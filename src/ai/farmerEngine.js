@@ -354,8 +354,17 @@ class FarmerEngine extends EventEmitter {
         if (!chestPos) continue;
         const isSeedItem = Object.values(CROP_RULES).some(rule => rule.seed === name);
         const maxPerItem = isSeedItem ? { [name]: this.options.seedReserve } : {};
-        const result = await this.adapter.depositToChest(chestPos, item => item.name === name, maxPerItem);
-        totalDeposited += result.deposited || 0;
+        // Dibungkus try/catch PER JENIS ITEM - depositToChest sungguhan bisa MELEMPAR (mis.
+        // "destination full") kalau chest tujuan jenis ini genuinely penuh. Tanpa penjagaan ini
+        // SATU jenis yang kebetulan chest-nya penuh menjatuhkan SELURUH loop, membuat jenis lain
+        // yang chest-nya masih longgar ikut tidak pernah disetor - ditemukan dari bug live nyata:
+        // metrics.deposited tetap 0 selama bermenit-menit walau sudah panen ratusan item.
+        try {
+          const result = await this.adapter.depositToChest(chestPos, item => item.name === name, maxPerItem);
+          totalDeposited += result.deposited || 0;
+        } catch (e) {
+          this.emit('depositError', { name, position: chestPos, error: e.message });
+        }
       }
       this.metrics.deposited += totalDeposited;
       if (totalDeposited > 0) return { action: 'deposit', count: totalDeposited };
