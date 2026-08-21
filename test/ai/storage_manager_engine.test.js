@@ -425,6 +425,26 @@ describe('StorageManagerEngine', () => {
     assert.ok(oreChest.items.some((i) => i.name === 'iron_ingot' && i.count === 8), 'iron_ingot harus SUDAH SAMPAI di chest yang benar');
   });
 
+  it('SETELAH reorganize mengambil item salah tempat dari sebuah chest, chestSnapshot BERIKUTNYA untuk chest itu harus REFLEKSIKAN isi yang SUDAH BERKURANG (full replace), bukan snapshot lama yang masih menyertakan item yang baru saja diambil - permintaan nyata pemilik: "memorynya hanya bisa menambah ya tidak bisa menghapus isi peti yang di pindah? harusnya ketika di update full replace saja" - dashboard/memori TIDAK BOLEH terus menampilkan barang yang sebenarnya sudah dipindahkan', async () => {
+    const wrongChest = { position: { x: -183, y: 72, z: -352 }, items: [{ name: 'iron_ingot', count: 8 }, { name: 'dirt', count: 3 }] };
+    const oreChest = { position: { x: -185, y: 72, z: -352 }, items: [] };
+    const adapter = new FakeStorageAdapter({
+      chests: { '-183,72,-352': wrongChest, '-185,72,-352': oreChest }
+    });
+    const engine = new StorageManagerEngine({ adapter, houseBounds: HOUSE_BOUNDS, initialAssignments: { iron_ingot: '-185,72,-352' } });
+    const snapshots = [];
+    engine.on('chestSnapshot', (snap) => snapshots.push(snap));
+
+    const result = await engine.tick();
+    assert.equal(result.action, 'reorganize');
+
+    const wrongChestSnapshots = snapshots.filter((s) => s.position.x === -183 && s.position.z === -352);
+    assert.ok(wrongChestSnapshots.length >= 2, 'harus ada snapshot BARU setelah withdraw, bukan cuma snapshot sebelum withdraw');
+    const latest = wrongChestSnapshots[wrongChestSnapshots.length - 1];
+    assert.deepEqual(latest.items, [{ name: 'dirt', count: 3 }], 'iron_ingot yang SUDAH DIAMBIL tidak boleh lagi muncul di snapshot terbaru chest ini');
+    assert.equal(latest.misplaced.length, 0, 'tidak ada lagi item salah tempat tersisa di chest ini setelah diambil semua');
+  });
+
   it('kalau SATU chest berisi BEBERAPA jenis item yang salah tempat sekaligus, harus ambil SEMUANYA dalam SATU kali kunjungan (bukan satu jenis per kunjungan) - ditemukan dari keluhan nyata pemilik ("banyak yang tidak sesuai"): dengan cuma satu item per kunjungan, membersihkan chest yang berisi puluhan barang salah tempat butuh puluhan tick bolak-balik (kalah prioritas sama deliver/collect tiap kali), jadi progresnya sangat lambat', async () => {
     const messyChest = {
       position: { x: -183, y: 71, z: -350 },
@@ -491,7 +511,10 @@ describe('StorageManagerEngine', () => {
 
     await engine.tick();
 
-    assert.equal(snapshots.length, 1);
+    // 2 snapshot: satu SEBELUM withdraw (isi asli, dipakai untuk deteksi salah tempat), satu lagi
+    // SETELAH withdraw (full replace, iron_ingot yang sudah diambil tidak lagi muncul) - lihat tes
+    // "SETELAH reorganize..." untuk kasus itu secara spesifik.
+    assert.equal(snapshots.length, 2);
     assert.deepEqual(snapshots[0].position, { x: -183, y: 72, z: -352 });
     assert.deepEqual(snapshots[0].items, [{ name: 'iron_ingot', count: 8 }, { name: 'dirt', count: 3 }], 'harus SELURUH isi chest, bukan cuma yang salah tempat - dirt (tidak punya assignment) tetap harus tercatat apa adanya');
     assert.equal(snapshots[0].misplaced.length, 1, 'cuma iron_ingot yang punya assignment jelas dan memang salah tempat - dirt tidak boleh ditebak-tebak');

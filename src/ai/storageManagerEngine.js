@@ -515,16 +515,33 @@ class StorageManagerEngine extends EventEmitter {
           misplacedItems.map((item) => ({ name: item.name, count: item.count }))
         );
         const relocated = [];
+        const withdrawnCounts = new Map();
         for (const result of withdrawResults) {
           if (result.withdrawn <= 0) continue;
           this.metrics.reorganized += result.withdrawn;
           relocated.push({ name: result.name, count: result.withdrawn });
+          withdrawnCounts.set(result.name, (withdrawnCounts.get(result.name) || 0) + result.withdrawn);
           this.emit('misplaced', {
             position: nextToInspect,
             item: result.name,
             count: result.withdrawn,
             correctPosition: parseKey(this.chestAssignments.get(result.name))
           });
+        }
+        // Memori/dashboard TIDAK BOLEH terus menampilkan item yang baru saja diambil - permintaan
+        // nyata pemilik: "memorynya hanya bisa menambah ya tidak bisa menghapus isi peti yang di
+        // pindah? harusnya ketika di update full replace saja". emitChestSnapshot sebelumnya
+        // (lewat onRead) merekam isi SEBELUM withdraw - sekarang hitung isi SETELAH withdraw dan
+        // pancarkan ulang, full replace, supaya knownMisplacedCounts & dashboard langsung sinkron
+        // tanpa menunggu chest ini dibaca ulang.
+        if (relocated.length > 0) {
+          const remainingItems = items
+            .map((it) => {
+              const taken = withdrawnCounts.get(it.name) || 0;
+              return taken > 0 ? { ...it, count: it.count - taken } : it;
+            })
+            .filter((it) => it.count > 0);
+          this.emitChestSnapshot(nextToInspect, remainingItems, insideChests);
         }
         // JANGAN tandai chest ini "sudah diperiksa" - periksa ulang tick berikutnya untuk
         // memastikan benar-benar bersih (mis. kalau ada stack lain dari jenis yang sama).
