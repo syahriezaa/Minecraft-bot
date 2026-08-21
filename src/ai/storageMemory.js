@@ -421,6 +421,14 @@ const OVERFLOW_CHESTS = {
   [STONE_COBBLE_CHEST]: STONE_COBBLE_OVERFLOW_CHEST,
   [WOOD_BLOCKS_CHEST]: WOOD_BLOCKS_OVERFLOW_CHEST,
   [BOOKS_CHEST]: BOOKS_OVERFLOW_CHEST,
+  // Buku tingkat KEDUA - permintaan nyata pemilik langsung: "enchantment book perlu tempat lagi
+  // juga coba optimalkan barel barel itu". Dicek live lewat storage/chests: BOOKS_CHEST 25/27 dan
+  // BOOKS_OVERFLOW_CHEST 8/27 (enchanted_book stackSize:1 - SATU item = SATU slot, jadi cepat
+  // penuh walau jumlah "barang"-nya kelihatan sedikit). TRINKETS_OVERFLOW_CHEST dipilih sebagai
+  // rantai kedua karena TRINKETS_CHEST utamanya sendiri masih longgar (12/27) - barel ini nyaris
+  // tidak terpakai (1/27) walau sudah terdaftar untuk trinkets, aman dipakai BERSAMA (overflow
+  // eksplisit boleh dipakai banyak kategori berbeda sekaligus, lihat walkOverflowChain).
+  [BOOKS_OVERFLOW_CHEST]: TRINKETS_OVERFLOW_CHEST,
   // Cadangan BARU dari double chest/barel tambahan yang ditaruh pemilik - permintaan nyata
   // pemilik: "saya menaruh beberapa lagi double peti di area itu kamu bisa ekspan lagi storage
   // nya terutama untuk item yang jumlah nya banyak". POTATO_CHEST/CARROT_CHEST sebelumnya SAMA
