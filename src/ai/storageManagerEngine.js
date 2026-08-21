@@ -241,10 +241,15 @@ class StorageManagerEngine extends EventEmitter {
 
       if (deliveries.length === 0) {
         if (!attemptedAny) {
-          // Semua chest gudang diketahui penuh - reset catatan supaya dicoba lagi nanti
-          // (barangkali sudah dikosongkan manual sejak dicatat) daripada macet permanen.
-          this.fullChestPositions.clear();
-          return { action: 'idle', reason: 'all_house_chests_full' };
+          // Chest tujuan item ini diketahui penuh dan tidak ada alternatif aman - JANGAN reset
+          // fullChestPositions di sini. Ditemukan dari bug live nyata: reset di titik ini membuat
+          // loop 2-tick tanpa henti (tick A: coba, gagal, tandai penuh - tick B: dikecualikan,
+          // tidak ada target, LANGSUNG di-reset di sini - tick C: coba chest yang PERSIS SAMA lagi
+          // karena baru saja di-reset, gagal lagi...) - storage worker terlihat "cuma buka-buka
+          // chest, tidak pernah benar-benar memindahkan apa-apa" karena pola inilah. Reset yang
+          // benar cuma terjadi SEKALI per putaran penuh (lihat akhir tick(), bareng
+          // collectedPositions/inspectedPositions) - bukan tiap kali satu item kebetulan buntu.
+          return { action: 'idle', reason: 'no_delivery_target' };
         }
         return { action: 'deliver_failed', reason: 'no_delivery_succeeded' };
       }
@@ -338,10 +343,14 @@ class StorageManagerEngine extends EventEmitter {
     }
 
     // Semua chest luar sudah dikumpulkan dan semua chest dalam sudah diperiksa - reset supaya
-    // putaran berikutnya mengulang (chest baru bisa saja terisi lagi seiring waktu berjalan).
-    if (this.collectedPositions.size > 0 || this.inspectedPositions.size > 0) {
+    // putaran berikutnya mengulang (chest baru bisa saja terisi lagi seiring waktu berjalan). Chest
+    // yang tercatat penuh JUGA di-reset di SINI SAJA (satu kali per putaran penuh) - bukan di jalur
+    // deliver setiap kali satu item kebetulan buntu (itu penyebab loop 2-tick tanpa henti yang
+    // sudah diperbaiki di atas).
+    if (this.collectedPositions.size > 0 || this.inspectedPositions.size > 0 || this.fullChestPositions.size > 0) {
       this.collectedPositions.clear();
       this.inspectedPositions.clear();
+      this.fullChestPositions.clear();
     }
     return { action: 'idle' };
   }

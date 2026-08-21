@@ -611,4 +611,30 @@ describe('StorageManagerEngine', () => {
     assert.equal(result.action, 'deliver', 'harus tetap berhasil mengantar ke chest yang BAIK, bukan crash gara-gara satu chest lain gagal dibuka');
     assert.equal(result.deliveries[0].position.y, 71);
   });
+
+  it('2-TICK OSCILLATION: kalau HANYA membawa satu jenis item dan rumahnya PENUH tanpa alternatif aman, JANGAN mengulang percobaan ke chest PERSIS SAMA setiap tick - ditemukan dari keluhan nyata pemilik: "storage worker hanya membuka-buka chest saja tidak memindahkan barang apapun" - root cause: reset fullChestPositions yang kelewat agresif (tiap kali SATU item kebetulan buntu) membuat tandai-penuh baru saja dipasang langsung terhapus lagi tick berikutnya, jadi chest yang SAMA dicoba lagi dan gagal lagi, selamanya', async () => {
+    const fullHome = { position: { x: -181, y: 71, z: -352 }, items: [{ name: 'cobblestone', count: 64 }] };
+    const adapter = new FakeStorageAdapter({
+      chests: { '-181,71,-352': fullHome },
+      inventory: { cobblestone: 31 }
+    });
+    // depositToChest ke chest ini SELALU gagal (persis "destination full" nyata) - tidak ada
+    // chest lain sama sekali sebagai alternatif (skenario nyata: cuma satu chest kategori itu).
+    adapter.depositToChest = async () => { throw new Error('destination full'); };
+    const engine = new StorageManagerEngine({ adapter, houseBounds: HOUSE_BOUNDS, initialAssignments: { cobblestone: '-181,71,-352' } });
+
+    const first = await engine.tick(); // percobaan pertama - gagal, chest ditandai penuh
+    assert.equal(first.action, 'deliver_failed');
+
+    // Beberapa tick berikutnya HARUS TETAP idle/gagal secara stabil - TIDAK BOLEH kembali mencoba
+    // chest yang sama lagi (itu berarti tandai-penuhnya sudah ke-reset sebelum waktunya).
+    const second = await engine.tick();
+    const third = await engine.tick();
+    const fourth = await engine.tick();
+
+    for (const result of [second, third, fourth]) {
+      assert.notEqual(result.action, 'deliver_failed', 'kalau ini "deliver_failed" lagi, berarti dia mencoba chest yang sama lagi - tandai-penuh ke-reset terlalu cepat, persis bug yang dilaporkan');
+      assert.equal(result.action, 'idle');
+    }
+  });
 });
