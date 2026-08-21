@@ -92,6 +92,13 @@ class StorageManagerEngine extends EventEmitter {
     // yang sama berulang-ulang tiap tick (mis. chest kosong tetap ditandai "sudah dikunjungi").
     this.collectedPositions = new Set();
     this.inspectedPositions = new Set();
+    // posKey -> jumlah item salah tempat yang TERAKHIR DIKETAHUI di chest itu, dari chestSnapshot
+    // manapun (inspect resmi ATAUPUN intipan resolveChestForItem) - permintaan nyata pemilik:
+    // "jika state item sudah di ketahui salah selesaikan semua kesalahannya dulu baru re
+    // inspeksi...gunakan memory untuk melakukan perencanaan se akurat mungkin". Dipakai untuk
+    // memprioritaskan chest yang SUDAH DIKETAHUI berantakan (diurutkan dari yang paling banyak
+    // salah) di atas urutan alami nearest-neighbor - lihat pemilihan nextToInspect di tick().
+    this.knownMisplacedCounts = new Map();
     // Chest gudang yang diketahui PENUH (deposit ke sana gagal/ditolak) - dikecualikan dari
     // resolveChestForItem supaya tidak terus mengulang chest yang sama sampai bekukan progres
     // pengantaran - ditemukan dari bug live nyata: StorageWorker terjebak "destination full"
@@ -229,12 +236,22 @@ class StorageManagerEngine extends EventEmitter {
   // lewat onRead SEBELUM chest ditutup (permintaan nyata pemilik: "log harus nya open -> get data
   // -> save to memory -> close").
   emitChestSnapshot(pos, items, insideChests) {
+    const misplacedItems = this.computeMisplacedItems(pos, items, insideChests);
+    // Ingat berapa banyak item salah tempat yang TERAKHIR diketahui di chest ini - dipakai
+    // nextToInspect di tick() untuk memprioritaskan chest yang sudah diketahui berantakan.
+    // Hapus dari peta kalau sekarang bersih (0) supaya tidak terus dianggap prioritas selamanya.
+    const key = posKey(pos);
+    if (misplacedItems.length > 0) {
+      this.knownMisplacedCounts.set(key, misplacedItems.reduce((s, it) => s + it.count, 0));
+    } else {
+      this.knownMisplacedCounts.delete(key);
+    }
     this.emit('chestSnapshot', {
       position: pos,
       // Salin (bukan referensi langsung) - kode lain bisa memutasi objek item yang sama sesudah
       // snapshot ini di-emit - snapshot yang sudah dikirim ke UI tidak boleh ikut berubah.
       items: items.map((it) => ({ ...it })),
-      misplaced: this.computeMisplacedItems(pos, items, insideChests).map((it) => ({
+      misplaced: misplacedItems.map((it) => ({
         name: it.name,
         count: it.count,
         targetPosition: parseKey(this.chestAssignments.get(it.name))
@@ -425,7 +442,24 @@ class StorageManagerEngine extends EventEmitter {
     // chest luar yang kebetulan ada di dunia - koleksi chest luar tetap jalan sesudahnya, giliran
     // KEDUA, bukan dihapus.
     const insideChests = this.getInsideChestPositions();
-    const nextToInspect = insideChests.find((pos) => !this.inspectedPositions.has(posKey(pos)));
+    // Chest yang SUDAH DIKETAHUI berantakan (dari chestSnapshot manapun - inspect resmi ATAUPUN
+    // intipan resolveChestForItem) DIDAHULUKAN di atas urutan alami nearest-neighbor, diurutkan
+    // dari yang PALING BANYAK item salah tempatnya - permintaan nyata pemilik: "jika state item
+    // sudah di ketahui salah selesaikan semua kesalahannya dulu baru re inspeksi dan ambil chest
+    // yang paling penuh dan salah terlebih dahulu, gunakan memory untuk melakukan perencanaan se
+    // akurat mungkin". Kalau tidak ada yang diketahui berantakan, baru jatuh ke urutan biasa
+    // (chest pertama yang belum pernah diperiksa sama sekali).
+    let nextToInspect = null;
+    if (this.knownMisplacedCounts.size > 0) {
+      const byMisplacedDesc = [...this.knownMisplacedCounts.entries()].sort((a, b) => b[1] - a[1]);
+      for (const [key] of byMisplacedDesc) {
+        const match = insideChests.find((pos) => posKey(pos) === key);
+        if (match) { nextToInspect = match; break; }
+      }
+    }
+    if (!nextToInspect) {
+      nextToInspect = insideChests.find((pos) => !this.inspectedPositions.has(posKey(pos)));
+    }
     if (nextToInspect) {
       let items;
       try {

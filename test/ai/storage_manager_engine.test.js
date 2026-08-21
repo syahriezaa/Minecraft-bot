@@ -960,6 +960,59 @@ describe('StorageManagerEngine', () => {
     assert.notEqual(result.action, 'reorganize', 'tidak ada tujuan aman sama sekali (utama & overflow sama-sama penuh) - jangan diambil, itu cuma akan bolak-balik tanpa hasil');
   });
 
+  it('PRIORITAS MEMORI: kalau engine SUDAH TAHU (dari chestSnapshot sebelumnya, mis. hasil intipan resolveChestForItem) suatu chest punya item salah tempat, chest itu HARUS diprioritaskan lebih dulu daripada chest lain yang belum pernah diperiksa sama sekali - permintaan nyata pemilik: "jika state item sudah di ketahui salah selesaikan semua kesalahannya dulu baru re inspeksi...gunakan memory untuk melakukan perencanaan se akurat mungkin" - jangan tunggu giliran urutan alami (nearest-neighbor) kalau sudah ada bukti nyata chest itu berantakan', async () => {
+    // chestBersih ditemukan LEBIH DULU secara urutan alami (posisi pertama di object) - tapi
+    // chestKotor SUDAH DIKETAHUI berantakan dari intipan sebelumnya (redstone belum punya
+    // assignment, memicu jalur pengintipan resolveChestForItem yang mengunjungi chestKotor duluan
+    // dan menemukan iron_ingot nyasar di sana).
+    const chestBersih = { position: { x: -185, y: 72, z: -352 }, items: [] };
+    const chestKotor = { position: { x: -183, y: 72, z: -352 }, items: [{ name: 'iron_ingot', count: 8 }] };
+    const adapter = new FakeStorageAdapter({
+      chests: { '-185,72,-352': chestBersih, '-183,72,-352': chestKotor },
+      inventory: { redstone: 1 } // item TANPA assignment - memicu pengintipan resolveChestForItem duluan
+    });
+    const engine = new StorageManagerEngine({
+      adapter,
+      houseBounds: HOUSE_BOUNDS,
+      initialAssignments: { iron_ingot: '-185,72,-352' }
+    });
+    engine.mode = 'deposit'; // paksa masuk jalur delivery (resolveChestForItem) duluan tick ini
+
+    const first = await engine.tick(); // deposit gagal cari tujuan redstone -> mengintip kedua chest, menemukan chestKotor berantakan
+    engine.mode = 'collect'; // sekarang giliran inspect - chestKotor HARUS didahulukan
+
+    const second = await engine.tick();
+
+    assert.equal(second.action, 'reorganize', 'chest yang SUDAH DIKETAHUI berantakan dari memori harus langsung diprioritaskan untuk diperiksa/dirapikan, bukan menunggu giliran urutan alami');
+    assert.deepEqual(second.position, { x: -183, y: 72, z: -352 }, 'harus memilih chestKotor (sudah diketahui salah dari memori), bukan chestBersih (urutan alami lebih dulu tapi belum diketahui apa-apa)');
+  });
+
+  it('PRIORITAS MEMORI: di antara BEBERAPA chest yang sudah diketahui berantakan, harus dahulukan yang PALING BANYAK item salah tempatnya ("paling penuh dan salah terlebih dahulu")', async () => {
+    const chestSedikitSalah = { position: { x: -183, y: 72, z: -352 }, items: [{ name: 'iron_ingot', count: 1 }] };
+    const chestBanyakSalah = { position: { x: -184, y: 72, z: -352 }, items: [{ name: 'diamond', count: 1 }, { name: 'gold_ingot', count: 1 }, { name: 'coal', count: 1 }] };
+    const adapter = new FakeStorageAdapter({
+      chests: {
+        '-183,72,-352': chestSedikitSalah,
+        '-184,72,-352': chestBanyakSalah
+      },
+      inventory: { redstone: 1 }
+    });
+    const engine = new StorageManagerEngine({
+      adapter,
+      houseBounds: HOUSE_BOUNDS,
+      initialAssignments: { iron_ingot: '-185,72,-352', diamond: '-185,72,-352', gold_ingot: '-185,72,-352', coal: '-185,72,-352' }
+    });
+    engine.mode = 'deposit';
+
+    await engine.tick(); // mengintip kedua chest, mempelajari keduanya berantakan (1 vs 3 item salah)
+    engine.mode = 'collect';
+
+    const result = await engine.tick();
+
+    assert.equal(result.action, 'reorganize');
+    assert.deepEqual(result.position, { x: -184, y: 72, z: -352 }, 'harus dahulukan chestBanyakSalah (3 item salah tempat) daripada chestSedikitSalah (cuma 1), sesuai permintaan "paling penuh dan salah terlebih dahulu"');
+  });
+
   it('MODE: engine harus mulai di mode "collect" secara default', () => {
     const adapter = new FakeStorageAdapter({});
     const engine = new StorageManagerEngine({ adapter, houseBounds: HOUSE_BOUNDS });
