@@ -337,29 +337,16 @@ class StorageManagerEngine extends EventEmitter {
       return await this.runDeliverPhase(carried);
     }
 
-    const outsideChests = this.getOutsideChestPositions();
-    const nextToCollect = outsideChests.find((pos) => !this.collectedPositions.has(posKey(pos)));
-    if (nextToCollect) {
-      // Chest yang GAGAL DIBUKA SAMA SEKALI (mis. "windowOpen" tidak pernah merespons - beda dari
-      // "penuh", ini genuinely tidak bisa diakses) tetap harus ditandai "sudah dicoba" SEBELUM
-      // melempar error lagi ke atas - kalau tidak, tick berikutnya memilih posisi yang PERSIS SAMA
-      // lagi (karena belum pernah masuk collectedPositions), macet mengulang chest yang sama
-      // selamanya - bug live nyata: StorageWorker diam di tempat 5+ menit gara-gara ini.
-      this.collectedPositions.add(posKey(nextToCollect));
-      try {
-        await this.adapter.navigateNear(nextToCollect, 3);
-        const result = await this.adapter.withdrawAllFromChest(nextToCollect);
-        this.metrics.collected += 1;
-        this.metrics.itemsCollected += result.totalCount;
-        this.emit('collected', { position: nextToCollect, count: result.totalCount });
-        this.switchToDepositIfCarryFull();
-        return { action: 'collect', position: nextToCollect, count: result.totalCount };
-      } catch (e) {
-        this.emit('chestError', { position: nextToCollect, error: e.message });
-        return { action: 'error', position: nextToCollect, error: e.message };
-      }
-    }
-
+    // PRIORITASKAN memeriksa chest DI DALAM (inspect/reorganize barang salah tempat) DI ATAS
+    // mengumpulkan chest DI LUAR - permintaan nyata pemilik (setelah keluhan berulang "dia tetap
+    // tidak mengambil apapun yang salah dalam mode collect"): dunia luar bisa punya PULUHAN chest
+    // tersebar jauh (loot dungeon/village dsb dalam radius scan) yang makan waktu ber-menit-menit
+    // untuk didatangi SEMUA sebelum urutan lama ini akhirnya sempat memeriksa satu pun chest dalam
+    // - sementara rapikan gudang (tujuan UTAMA fitur mode collect/deposit ini) jadi kelaparan
+    // giliran tanpa batas waktu. Chest DALAM jumlahnya kecil & TETAP (satu ruang gudang tunggal),
+    // jadi mendahulukannya menjamin rapi-rapi selesai cepat TANPA BERGANTUNG berapa banyak/jauh
+    // chest luar yang kebetulan ada di dunia - koleksi chest luar tetap jalan sesudahnya, giliran
+    // KEDUA, bukan dihapus.
     const insideChests = this.getInsideChestPositions();
     const nextToInspect = insideChests.find((pos) => !this.inspectedPositions.has(posKey(pos)));
     if (nextToInspect) {
@@ -422,6 +409,30 @@ class StorageManagerEngine extends EventEmitter {
       this.metrics.inspected += 1;
       this.emit('inspected', { position: nextToInspect, items });
       return { action: 'inspect', position: nextToInspect, items };
+    }
+
+    // Giliran KEDUA (semua chest dalam sudah diperiksa duluan di atas) - kumpulkan chest DI LUAR.
+    const outsideChests = this.getOutsideChestPositions();
+    const nextToCollect = outsideChests.find((pos) => !this.collectedPositions.has(posKey(pos)));
+    if (nextToCollect) {
+      // Chest yang GAGAL DIBUKA SAMA SEKALI (mis. "windowOpen" tidak pernah merespons - beda dari
+      // "penuh", ini genuinely tidak bisa diakses) tetap harus ditandai "sudah dicoba" SEBELUM
+      // melempar error lagi ke atas - kalau tidak, tick berikutnya memilih posisi yang PERSIS SAMA
+      // lagi (karena belum pernah masuk collectedPositions), macet mengulang chest yang sama
+      // selamanya - bug live nyata: StorageWorker diam di tempat 5+ menit gara-gara ini.
+      this.collectedPositions.add(posKey(nextToCollect));
+      try {
+        await this.adapter.navigateNear(nextToCollect, 3);
+        const result = await this.adapter.withdrawAllFromChest(nextToCollect);
+        this.metrics.collected += 1;
+        this.metrics.itemsCollected += result.totalCount;
+        this.emit('collected', { position: nextToCollect, count: result.totalCount });
+        this.switchToDepositIfCarryFull();
+        return { action: 'collect', position: nextToCollect, count: result.totalCount };
+      } catch (e) {
+        this.emit('chestError', { position: nextToCollect, error: e.message });
+        return { action: 'error', position: nextToCollect, error: e.message };
+      }
     }
 
     // Semua chest luar sudah dikumpulkan dan semua chest dalam sudah diperiksa - reset supaya

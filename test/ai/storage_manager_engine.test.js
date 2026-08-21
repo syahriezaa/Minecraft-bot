@@ -675,8 +675,10 @@ describe('StorageManagerEngine', () => {
     const second = await engine.tick();
 
     // Item di tangan MASIH ada (tidak pernah terkirim) DAN masih tidak punya tujuan - tapi bot
-    // TIDAK BOLEH diam saja, harus lanjut kumpulkan chest luar yang tersedia.
-    assert.equal(second.action, 'collect', 'bot harus tetap produktif (collect chest luar) walau ada satu item buntu di tangan, bukan diam total menunggu');
+    // TIDAK BOLEH diam saja, harus lanjut inspect/collect (chest dalam diprioritaskan lebih dulu -
+    // fullHome sendiri belum pernah diperiksa, jadi itu yang dikerjakan duluan; masih produktif,
+    // bukan diam total menunggu).
+    assert.equal(second.action, 'inspect', 'bot harus tetap produktif (periksa chest dalam yang belum dicek) walau ada satu item buntu di tangan, bukan diam total menunggu');
   });
 
   it('brokenPositions HARUS di-reset secara berkala (sama seperti fullChestPositions) - JANGAN memblokir chest selamanya gara-gara SATU kegagalan buka yang sifatnya sementara (lag server) - ditemukan dari keluhan nyata pemilik: diamond & iron_ingot (yang rumahnya sudah lama mapan) berhenti total terkirim setelah sesi berjalan lama, karena chest tujuannya pernah SEKALI gagal dibuka (windowOpen timeout sesaat) dan sejak itu dikecualikan PERMANEN, padahal chest itu sebenarnya baik-baik saja', async () => {
@@ -817,12 +819,12 @@ describe('StorageManagerEngine', () => {
     const engine = new StorageManagerEngine({ adapter, houseBounds: HOUSE_BOUNDS });
 
     const first = await engine.tick();
-    assert.equal(first.action, 'collect');
-    assert.equal(engine.mode, 'collect', 'setelah kumpulkan SATU chest luar, masih ada chest luar lain - harus tetap mode collect, bukan langsung menaruh');
+    assert.equal(first.action, 'inspect', 'chest dalam diprioritaskan lebih dulu (jumlahnya kecil & tetap, tidak boleh kelaparan giliran gara-gara banyak chest luar)');
+    assert.equal(engine.mode, 'collect', 'baru periksa satu chest dalam (bersih), masih ada chest luar yang belum dikumpulkan - harus tetap mode collect, bukan langsung menaruh');
 
     const second = await engine.tick();
-    assert.equal(second.action, 'collect');
-    assert.equal(engine.mode, 'collect', 'chest luar KEDUA baru saja dikumpulkan - masih ada chest dalam yang belum diperiksa, tetap mode collect');
+    assert.equal(second.action, 'collect', 'chest dalam sudah habis diperiksa - giliran chest luar');
+    assert.equal(engine.mode, 'collect', 'chest luar PERTAMA baru saja dikumpulkan - masih ada chest luar lain, tetap mode collect');
   });
 
   it('MODE COLLECT: begitu SEMUA chest luar sudah dikumpulkan dan SEMUA chest dalam sudah diperiksa (tidak ada lagi yang bisa diambil), harus beralih ke mode "deposit" - walau tas belum penuh', async () => {
@@ -850,7 +852,11 @@ describe('StorageManagerEngine', () => {
     const engine = new StorageManagerEngine({ adapter, houseBounds: HOUSE_BOUNDS, maxCarrySlots: 1 });
 
     const first = await engine.tick();
-    assert.equal(first.action, 'collect');
+    assert.equal(first.action, 'inspect', 'chest dalam (kosong, bersih) diperiksa duluan - belum mengambil apapun, jadi maxCarrySlots belum relevan di tick ini');
+    assert.equal(engine.mode, 'collect', 'belum mengambil apapun sama sekali, belum ada alasan beralih ke mode menaruh');
+
+    const second = await engine.tick();
+    assert.equal(second.action, 'collect');
     assert.equal(engine.mode, 'deposit', 'tas sudah mencapai batas (maxCarrySlots:1) setelah SATU kali ambil - harus langsung beralih ke mode menaruh, JANGAN lanjut ambil chest luar kedua');
   });
 
@@ -865,7 +871,11 @@ describe('StorageManagerEngine', () => {
     const engine = new StorageManagerEngine({ adapter, houseBounds: HOUSE_BOUNDS });
 
     const first = await engine.tick();
-    assert.equal(first.action, 'collect');
+    assert.equal(first.action, 'inspect', 'chest dalam (kosong, bersih) diperiksa duluan - belum mengambil apapun di tick ini');
+    assert.equal(engine.mode, 'collect', 'belum mengambil apapun sama sekali, belum ada alasan beralih ke mode menaruh');
+
+    const second = await engine.tick();
+    assert.equal(second.action, 'collect');
     assert.equal(engine.mode, 'deposit', 'slot bebas (1) sudah di bawah cadangan (2) - harus langsung beralih ke mode menaruh walau maxCarrySlots masih jauh');
   });
 
