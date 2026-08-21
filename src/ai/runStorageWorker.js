@@ -60,8 +60,9 @@ const RAW_ORE_CHEST = '-181,73,-353';
 // OVERFLOW_CHESTS + resolveChestForItem di storageManagerEngine.js), BUKAN rumah kedua yang
 // setara - permintaan nyata pemilik: "make the overflow chest is for emergency only when the
 // actual cest is full". Semua ore/ingot TETAP terdaftar ke chest utama; overflow cuma jalan
-// keluar sementara saat chest utama tidak bisa menerima.
-const PROCESSED_ORE_OVERFLOW_CHEST = '-181,74,-344';
+// keluar sementara saat chest utama tidak bisa menerima. Posisi sebenarnya (alias ke
+// RARE_DROPS_CHEST) dideklarasikan di bawah, sesudah RARE_DROPS_CHEST - lihat komentar di sana
+// soal kenapa (satu Large Chest fisik yang sama, ditemukan lewat probe langsung ke dunia).
 const CANONICAL_ORE_INGOT_ASSIGNMENTS = {
   coal: PROCESSED_ORE_CHEST,
   coal_block: PROCESSED_ORE_CHEST,
@@ -94,31 +95,48 @@ const CANONICAL_ORE_INGOT_ASSIGNMENTS = {
 // ini. 3 chest fungsi (dispenser/observer/chest cadangan) DIGABUNG jadi satu chest "blok utilitas"
 // supaya 2 slot yang kosong-longgar itu bisa dipakai untuk kategori baru (senjata & drop langka)
 // yang sebelumnya tidak kebagian slot sendiri.
-const NETHER_MATERIALS_CHEST = '-181,71,-353';
+// PENTING - ditemukan dari keluhan nyata pemilik ("bamboo nyasar di chest benih, padahal
+// memory-nya sudah benar") dan dikonfirmasi lewat probe langsung ke dunia sungguhan: kolom z=-353/
+// -352, z=-350/-349, dan z=-345/-344 BUKAN dua chest tunggal yang kebetulan bersebelahan - mereka
+// benar-benar SATU "Large Chest" (double chest) per pasangan, satu inventaris 54 slot yang sama,
+// persis seperti z=-353/-352 dan z=-350/-349 lainnya. Rancangan kategori sebelumnya salah asumsi
+// kalau tiap koordinat z adalah chest terpisah, jadi dua kategori BERBEDA (mis. SEEDS_CHEST di
+// -350 dan FARMING_BYPRODUCTS_CHEST di -349) sebenarnya menunjuk ke KOTAK FISIK YANG SAMA -
+// canonicalKeyFor() di storageManagerEngine.js sudah benar mendeteksi ini (makanya item yang
+// "salah tempat" di pasangan begini tidak pernah dianggap salah tempat - bagi engine, dua alamat
+// itu memang satu tempat yang sah), tapi memori kategorinya sendiri yang keliru menjanjikan dua
+// rumah berbeda untuk satu kotak yang sama. Perbaikannya: setiap pasangan yang benar-benar
+// menyatu dialiaskan ke SATU posisi kanonik yang sama, supaya memori cocok dengan kotak fisik
+// sungguhan - baru kalau ini benar, item otomatis "pada tempatnya" begitu berada di salah satu
+// separuh manapun (tidak akan dipindah-pindah lagi karena tidak ada lagi tujuan "berbeda" palsu).
+// Cuma kolom z=-347 (semua level y) dan barel (z -351/-348/-346) yang benar-benar TUNGGAL
+// (dikonfirmasi lewat probe: ada celah udara di kedua sisinya) - tetap dapat kategori masing-
+// masing seperti sebelumnya.
 const STONE_COBBLE_CHEST = '-181,71,-352';
-// Kolom baru z=-344 (pemilik menambahkan level double chest tambahan) - dipakai sebagai CADANGAN
-// untuk 3 kategori yang paling sering "destination full": drop mob, benih, dan batu/cobble.
-// Ditemukan dari keluhan nyata pemilik: ink_sac di chest y73,-350 tidak pernah dipindahkan -
-// rumah aslinya (MOB_DROPS_CHEST) memang benar tapi kronis penuh, dan pengaman anti-bolak-balik
-// (lihat storageManagerEngine.js) sengaja TIDAK memindahkan ke rumah yang diketahui masih penuh -
-// jadi ink_sac (dan item sejenis) butuh rumah KEDUA yang benar-benar berbeda secara fisik, bukan
-// cuma menunggu rumah pertama kosong (yang mungkin tidak pernah terjadi).
-const MOB_DROPS_OVERFLOW_CHEST = '-181,71,-344';
-const SEEDS_OVERFLOW_CHEST = '-181,72,-344';
-const STONE_COBBLE_OVERFLOW_CHEST = '-181,73,-344';
+const NETHER_MATERIALS_CHEST = STONE_COBBLE_CHEST; // ALIAS - satu Large Chest fisik yang sama dengan STONE_COBBLE_CHEST
+const MOB_DROPS_CHEST = '-181,71,-349';
 // Armor, buku, dan perkakas SENGAJA disimpan di BARREL, bukan chest - permintaan nyata pemilik
 // ("i think tools armor and book shoud be store in barel"). Posisi barel diambil dari barel
-// sungguhan yang ditemukan di antara kolom chest (y71-73, z -351/-348).
+// sungguhan yang ditemukan di antara kolom chest (y71-73, z -351/-348) - barel TIDAK PERNAH
+// bergabung dengan chest/barel lain apapun jaraknya, jadi masing-masing memang benar chest
+// tunggal sungguhan (beda dari kolom -353/-352 dkk di atas).
 const ARMOR_CHEST = '-181,71,-351'; // barrel
-const MOB_DROPS_CHEST = '-181,71,-349';
 const BOOKS_CHEST = '-181,72,-351'; // barrel
 const TOOLS_CHEST = '-181,71,-348'; // barrel
 const FOOD_CHEST = '-181,71,-345';
+// Kolom z=-344 (pemilik menambahkan level double chest tambahan) SENGAJA merge fisik dengan
+// kolom z=-345 di sebelahnya (Large Chest juga, dikonfirmasi lewat probe) - dipakai sebagai
+// CADANGAN DARURAT untuk kategori yang paling sering "destination full" (drop mob, benih, batu/
+// cobble, ore olahan). Karena secara fisik satu kotak dengan kategori -345 di y yang sama, overflow
+// ini otomatis "menumpang" di kotak kategori -345 tersebut - masih tetap TERPISAH secara fisik
+// dari chest UTAMA masing-masing kategori (itu yang penting untuk "emergency only", lihat
+// OVERFLOW_CHESTS di bawah), cuma bukan kotak yang benar-benar kosong/dedicated sendiri.
+const MOB_DROPS_OVERFLOW_CHEST = FOOD_CHEST; // ALIAS - satu Large Chest fisik dengan FOOD_CHEST (y71)
 
-const RAILS_MINECART_CHEST = '-181,72,-353';
 const WEAPONS_CHEST = '-181,72,-352';
+const RAILS_MINECART_CHEST = WEAPONS_CHEST; // ALIAS - satu Large Chest fisik yang sama dengan WEAPONS_CHEST
 const SEEDS_CHEST = '-181,72,-350';
-const FARMING_BYPRODUCTS_CHEST = '-181,72,-349';
+const FARMING_BYPRODUCTS_CHEST = SEEDS_CHEST; // ALIAS - satu Large Chest fisik yang sama dengan SEEDS_CHEST (temuan bug: bamboo nyasar di sini)
 const SAPLINGS_PLANTS_CHEST = '-181,72,-347';
 // Kolom z=-347 (SEMUA level y) SENGAJA dijadikan SATU tema besar "kayu & hasil olahannya" -
 // permintaan nyata pemilik: "-347 dari atas ke bawah isi dengan wood dan hasilnya misal log
@@ -127,20 +145,26 @@ const SAPLINGS_PLANTS_CHEST = '-181,72,-347';
 // log, trapdoor kayu, dst) supaya seluruh kolom murni kayu.
 const WOOD_BLOCKS_CHEST = '-181,71,-347';
 const TRINKETS_CHEST = '-181,72,-345';
+const SEEDS_OVERFLOW_CHEST = TRINKETS_CHEST; // ALIAS - satu Large Chest fisik dengan TRINKETS_CHEST (y72)
 
-const BUILDING_MATERIALS_CHEST = '-181,73,-352';
+// BUILDING_MATERIALS_CHEST secara fisik SATU Large Chest dengan RAW_ORE_CHEST (dideklarasikan di
+// atas bersama PROCESSED_ORE_CHEST) - dialiaskan ke situ, bukan koordinat terpisah.
+const BUILDING_MATERIALS_CHEST = RAW_ORE_CHEST;
 const WHEAT_CHEST = '-181,73,-350';
-const CARROT_CHEST = '-181,73,-349';
+const CARROT_CHEST = WHEAT_CHEST; // ALIAS - satu Large Chest fisik yang sama dengan WHEAT_CHEST
 const PLANKS_CHEST = '-181,73,-347';
 const UTILITY_BLOCKS_CHEST = '-181,73,-345';
+const STONE_COBBLE_OVERFLOW_CHEST = UTILITY_BLOCKS_CHEST; // ALIAS - satu Large Chest fisik dengan UTILITY_BLOCKS_CHEST (y73)
 
-const DIRT_SAND_CHEST = '-181,74,-352';
+// DIRT_SAND_CHEST secara fisik SATU Large Chest dengan PROCESSED_ORE_CHEST (dideklarasikan di
+// atas) - dialiaskan ke situ, bukan koordinat terpisah.
+const DIRT_SAND_CHEST = PROCESSED_ORE_CHEST;
 const POTATO_CHEST = '-181,74,-350';
-// y74,-349 SENGAJA dibiarkan tanpa kategori baku - isinya kecil (cocoa_beans/melon_seeds/
-// red_mushroom) dan sudah ditangani kategori lain (SEEDS_CHEST/FARMING_BYPRODUCTS_CHEST), jadi
-// slot ini jadi ruang cadangan alami untuk kategori manapun yang kehabisan tempat.
+// y74,-349 fisiknya SATU Large Chest dengan POTATO_CHEST (dikonfirmasi lewat probe) - tidak ada
+// kategori terpisah untuk -349, isinya otomatis jadi bagian POTATO_CHEST.
 const LOGS_CHEST = '-181,74,-347';
 const RARE_DROPS_CHEST = '-181,74,-345';
+const PROCESSED_ORE_OVERFLOW_CHEST = RARE_DROPS_CHEST; // ALIAS - satu Large Chest fisik dengan RARE_DROPS_CHEST (y74)
 
 const CANONICAL_GEAR_ASSIGNMENTS = {
   // Buku & catatan
