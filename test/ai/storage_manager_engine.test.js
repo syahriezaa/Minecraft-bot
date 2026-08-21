@@ -429,6 +429,27 @@ describe('StorageManagerEngine', () => {
     assert.equal(engine.metrics.inspected, 1);
   });
 
+  it('setiap kali chest diperiksa (bersih ATAU salah tempat), harus emit "chestSnapshot" berisi SELURUH isi chest itu plus daftar item yang salah tempat dan ke mana rencananya dipindah - permintaan nyata pemilik: "di ui web tampilkan isi semua peti...dan bagaimana bot akan memindahkannya di tandai dengan panah panah" - dashboard butuh data ini untuk gambarkan peta gudang lengkap dengan panah tujuan, bukan cuma log teks', async () => {
+    const wrongChest = { position: { x: -183, y: 72, z: -352 }, items: [{ name: 'iron_ingot', count: 8 }, { name: 'dirt', count: 3 }] };
+    const oreChest = { position: { x: -185, y: 72, z: -352 }, items: [] };
+    const adapter = new FakeStorageAdapter({
+      chests: { '-183,72,-352': wrongChest, '-185,72,-352': oreChest }
+    });
+    const engine = new StorageManagerEngine({ adapter, houseBounds: HOUSE_BOUNDS, initialAssignments: { iron_ingot: '-185,72,-352' } });
+    const snapshots = [];
+    engine.on('chestSnapshot', (snap) => snapshots.push(snap));
+
+    await engine.tick();
+
+    assert.equal(snapshots.length, 1);
+    assert.deepEqual(snapshots[0].position, { x: -183, y: 72, z: -352 });
+    assert.deepEqual(snapshots[0].items, [{ name: 'iron_ingot', count: 8 }, { name: 'dirt', count: 3 }], 'harus SELURUH isi chest, bukan cuma yang salah tempat - dirt (tidak punya assignment) tetap harus tercatat apa adanya');
+    assert.equal(snapshots[0].misplaced.length, 1, 'cuma iron_ingot yang punya assignment jelas dan memang salah tempat - dirt tidak boleh ditebak-tebak');
+    assert.equal(snapshots[0].misplaced[0].name, 'iron_ingot');
+    assert.equal(snapshots[0].misplaced[0].count, 8);
+    assert.deepEqual(snapshots[0].misplaced[0].targetPosition, { x: -185, y: 72, z: -352 });
+  });
+
   it('DOUBLE CHEST: dua blok chest yang bersebelahan (x berbeda 1, y/z sama) adalah SATU wadah fisik yang sama - item di sana TIDAK BOLEH dianggap "salah tempat" hanya karena assignment-nya mencatat koordinat blok SEBELAH (separuh chest yang lain)', async () => {
     const halfA = { position: { x: -181, y: 72, z: -352 }, items: [{ name: 'iron_ingot', count: 8 }] };
     const halfB = { position: { x: -180, y: 72, z: -352 }, items: [{ name: 'iron_ingot', count: 8 }] };

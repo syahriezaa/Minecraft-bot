@@ -93,6 +93,9 @@
       case 'STORAGE_COMPLIANCE_UPDATE':
         renderComplianceLog(msg.data?.events || []);
         break;
+      case 'STORAGE_CHEST_MAP_UPDATE':
+        renderChestMap(msg.data?.chests || []);
+        break;
     }
   }
 
@@ -188,6 +191,71 @@
     .then(r => r.json())
     .then(res => {
       if (res.data?.events) renderComplianceLog(res.data.events);
+    })
+    .catch(() => {});
+
+  // ── Peta Isi Gudang - isi APA ADANYA tiap chest + panah rencana pemindahan ──
+  const chestMapContainer = document.getElementById('storage-chest-map');
+  const chestMapCountBadge = document.getElementById('chest-map-count-badge');
+
+  function posLabel(p) {
+    return p ? `(${p.x},${p.y},${p.z})` : '-';
+  }
+
+  function renderChestMap(chests) {
+    if (!chestMapContainer || !Array.isArray(chests)) return;
+    if (chestMapCountBadge) chestMapCountBadge.textContent = `${chests.length} CHEST TERPETAKAN`;
+
+    if (chests.length === 0) {
+      chestMapContainer.innerHTML = '<p class="empty-row">Belum ada chest yang diperiksa - jalankan kuartermaster untuk mulai memetakan gudang.</p>';
+      return;
+    }
+
+    // Urutkan berdasarkan posisi (y lalu z) supaya tata letak konsisten tiap kali diperbarui,
+    // bukan berubah urutan acak setiap ada snapshot baru masuk.
+    const sorted = [...chests].sort((a, b) => (a.position.y - b.position.y) || (a.position.z - b.position.z) || (a.position.x - b.position.x));
+
+    chestMapContainer.innerHTML = sorted.map(chest => {
+      const items = Array.isArray(chest.items) ? chest.items : [];
+      const misplacedNames = new Set((chest.misplaced || []).map(m => m.name));
+      const misplacedByName = new Map((chest.misplaced || []).map(m => [m.name, m]));
+
+      const rows = items.length === 0
+        ? '<div class="chest-map-empty">(kosong)</div>'
+        : items.map(it => {
+            const isMisplaced = misplacedByName.has(it.name);
+            const target = isMisplaced ? misplacedByName.get(it.name).targetPosition : null;
+            return `
+              <div class="chest-map-item-row${isMisplaced ? ' chest-map-item-misplaced' : ''}">
+                <span class="chest-map-item-name">${it.name}</span>
+                <span class="chest-map-item-count">x${it.count}</span>
+                ${isMisplaced ? `<span class="chest-map-arrow" title="Akan dipindah ke ${posLabel(target)}">&rarr; ${posLabel(target)}</span>` : ''}
+              </div>
+            `;
+          }).join('');
+
+      const misplacedCount = misplacedNames.size;
+      const time = chest.timestamp ? new Date(chest.timestamp).toLocaleTimeString('id-ID') : '-';
+
+      return `
+        <div class="chest-map-card${misplacedCount > 0 ? ' chest-map-card-dirty' : ''}">
+          <div class="chest-map-card-header">
+            <span class="chest-map-pos">${posLabel(chest.position)}</span>
+            ${misplacedCount > 0
+              ? `<span class="chest-map-badge chest-map-badge-dirty">${misplacedCount} SALAH TEMPAT</span>`
+              : '<span class="chest-map-badge chest-map-badge-clean">BERSIH</span>'}
+          </div>
+          <div class="chest-map-items">${rows}</div>
+          <div class="chest-map-updated">Diperiksa: ${time}</div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  fetch('/api/storage/chests')
+    .then(r => r.json())
+    .then(res => {
+      if (res.data?.chests) renderChestMap(res.data.chests);
     })
     .catch(() => {});
 

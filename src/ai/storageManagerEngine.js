@@ -403,6 +403,27 @@ class StorageManagerEngine extends EventEmitter {
         return canonicalKeyFor(parseKey(assignedKey), insideChests, isChest) !== hereKey;
       });
 
+      // Emit SELURUH isi chest ini plus rencana pemindahan (item salah tempat -> tujuannya) -
+      // dipakai panel peta gudang di dashboard (permintaan nyata pemilik: "tampilkan isi semua
+      // peti...dan bagaimana bot akan memindahkannya di tandai dengan panah panah"). Beda dari
+      // event 'inspected' (yang cuma jalan kalau chest-nya bersih) dan 'misplaced' (yang cuma
+      // berisi item yang benar-benar berhasil DIAMBIL, per item, bukan gambaran isi chest yang
+      // utuh) - snapshot ini selalu jalan setiap chest diperiksa, isinya utuh, dan sudah termasuk
+      // item yang TIDAK punya assignment sama sekali (dilaporkan apa adanya, bukan dianggap salah
+      // tempat - konsisten dengan aturan "jangan tebak" yang sama dipakai misplacedItems).
+      this.emit('chestSnapshot', {
+        position: nextToInspect,
+        // Salin (bukan referensi langsung) - withdrawFromChest di bawah bisa memutasi objek item
+        // yang sama sesudah snapshot ini di-emit (mis. adapter uji yang mengembalikan array chest
+        // aslinya, bukan salinan) - snapshot yang sudah dikirim ke UI tidak boleh ikut berubah.
+        items: items.map((it) => ({ ...it })),
+        misplaced: misplacedItems.map((it) => ({
+          name: it.name,
+          count: it.count,
+          targetPosition: parseKey(this.chestAssignments.get(it.name))
+        }))
+      });
+
       if (misplacedItems.length > 0) {
         // Ambil SEMUA item salah tempat di chest ini dalam SATU kunjungan (bukan satu per
         // kunjungan) - ditemukan dari keluhan nyata pemilik ("banyak yang tidak sesuai"): dengan

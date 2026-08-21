@@ -480,6 +480,14 @@ const storageWorkers = new Map(); // botName -> handle
 // terbaru supaya tidak membengkak tanpa batas.
 const STORAGE_COMPLIANCE_LOG_LIMIT = 50;
 const storageComplianceLog = [];
+// Peta isi TIAP chest gudang (posKey "x,y,z" -> snapshot terakhir) - permintaan nyata pemilik:
+// "di ui web tampilkan isi semua peti nya...dan bagaimana bot akan memindahkannya di tandai
+// dengan panah panah" - "pemilik 100% yakin worker tidak melihat isi peti dengan benar", jadi
+// panel ini menampilkan APA ADANYA isi yang engine baca (via event 'chestSnapshot'), termasuk
+// rencana pemindahan (misplaced -> targetPosition) sebagai bukti visual langsung, bukan cuma log
+// teks yang harus dibaca satu-satu. Diperbarui tiap kali chest diperiksa (bersih ATAU salah
+// tempat) - disimpan di memori (bukan disk), cukup untuk sesi berjalan.
+const storageChestMap = new Map();
 
 app.post('/api/storage/start', (req, res) => {
   const { host, port, botName, scanRadius } = req.body || {};
@@ -503,6 +511,10 @@ app.post('/api/storage/start', (req, res) => {
       storageComplianceLog.unshift(entry);
       if (storageComplianceLog.length > STORAGE_COMPLIANCE_LOG_LIMIT) storageComplianceLog.length = STORAGE_COMPLIANCE_LOG_LIMIT;
       broadcast({ type: 'STORAGE_COMPLIANCE_UPDATE', data: { events: storageComplianceLog } });
+    },
+    onChestSnapshot: (snapshot) => {
+      storageChestMap.set(`${snapshot.position.x},${snapshot.position.y},${snapshot.position.z}`, snapshot);
+      broadcast({ type: 'STORAGE_CHEST_MAP_UPDATE', data: { chests: Array.from(storageChestMap.values()) } });
     }
   });
   storageWorkers.set(name, handle);
@@ -512,6 +524,10 @@ app.post('/api/storage/start', (req, res) => {
 
 app.get('/api/storage/compliance', (req, res) => {
   res.json({ success: true, data: { events: storageComplianceLog } });
+});
+
+app.get('/api/storage/chests', (req, res) => {
+  res.json({ success: true, data: { chests: Array.from(storageChestMap.values()) } });
 });
 
 app.post('/api/storage/stop', (req, res) => {

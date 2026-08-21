@@ -414,6 +414,65 @@ body {
 .compliance-item-name { color: var(--warn); font-weight: 600; }
 .compliance-arrow { color: var(--text-faint); margin: 0 4px; }
 
+/* ── Peta Isi Gudang ─────────────────────────────────────────── */
+.chest-map-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 0.7rem;
+}
+.chest-map-card {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.65rem 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.chest-map-card-dirty { border-color: var(--bad); }
+.chest-map-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.chest-map-pos { font-family: var(--mono); font-size: 0.78rem; color: var(--text); font-weight: 600; }
+.chest-map-badge {
+  padding: 2px 7px;
+  border-radius: var(--radius-sm);
+  font-size: 0.65rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+.chest-map-badge-clean { background: var(--good-dim); color: var(--good); }
+.chest-map-badge-dirty { background: var(--bad-dim); color: var(--bad); }
+.chest-map-items {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.chest-map-item-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  font-family: var(--mono);
+  font-size: 0.74rem;
+  padding: 2px 4px;
+  border-radius: var(--radius-sm);
+  flex-wrap: wrap;
+}
+.chest-map-item-row:nth-child(odd) { background: var(--surface-3); }
+.chest-map-item-misplaced { background: var(--bad-dim) !important; }
+.chest-map-item-name { color: var(--text); flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.chest-map-item-count { color: var(--text-dim); }
+.chest-map-arrow { color: var(--bad); font-weight: 600; flex-basis: 100%; }
+.chest-map-empty { color: var(--text-faint); font-family: var(--mono); font-size: 0.78rem; font-style: italic; }
+.chest-map-updated { color: var(--text-faint); font-size: 0.66rem; font-family: var(--mono); }
+
 /* ── Swarm Coordinates Panel ────────────────────────────────── */
 .card-header-flex {
   display: flex;

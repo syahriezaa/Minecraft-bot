@@ -357,7 +357,7 @@ function buildMovements(bot) {
   return movements;
 }
 
-function startStorageWorker({ host, port, botName, scanRadius = 48, baseGoal = DEFAULT_BASE_GOAL, houseBounds = DEFAULT_HOUSE_BOUNDS, log = (m) => console.log(m), onDisconnect = () => {}, onMisplaced = () => {} }) {
+function startStorageWorker({ host, port, botName, scanRadius = 48, baseGoal = DEFAULT_BASE_GOAL, houseBounds = DEFAULT_HOUSE_BOUNDS, log = (m) => console.log(m), onDisconnect = () => {}, onMisplaced = () => {}, onChestSnapshot = () => {} }) {
   const bot = mineflayer.createBot({
     host, port,
     username: botName || 'StorageWorker',
@@ -413,6 +413,11 @@ function startStorageWorker({ host, port, botName, scanRadius = 48, baseGoal = D
       // Dipakai panel "Kepatuhan Kategori Gudang" di dashboard - permintaan nyata pemilik: chest
       // yang belum sesuai aturan kategori harus tercatat, supaya terlihat tanpa perlu scan manual.
       onMisplaced({ botName: botName || 'StorageWorker', position, item, count, correctPosition, timestamp: Date.now() });
+    });
+    engine.on('chestSnapshot', ({ position, items, misplaced }) => {
+      // Dipakai panel peta gudang di dashboard - permintaan nyata pemilik: "di ui web tampilkan
+      // isi semua peti...dan bagaimana bot akan memindahkannya di tandai dengan panah panah".
+      onChestSnapshot({ position, items, misplaced, timestamp: Date.now() });
     });
 
     log('Pekerja gudang mulai bekerja.');
