@@ -376,10 +376,15 @@ class FarmerEngine extends EventEmitter {
 
   async tick() {
     if (this.adapter.getHealth() <= this.options.retreatHealth) {
+      // Mundur JUGA sambil coba makan, bukan salah satu saja - ditemukan dari bug live nyata:
+      // "tetap berlubang" setelah versi pertama fix ini dipasang. Versi pertama return LANGSUNG
+      // begitu retreatPosition ada, tidak pernah sampai ke langkah makan sama sekali - food tidak
+      // pernah naik, health tidak pernah regenerasi alami (Minecraft butuh food tinggi untuk
+      // regen), jadi bot macet SELAMANYA di status RETREAT tanpa pernah pulih untuk lanjut
+      // memperbaiki lahan lagi.
       if (this.options.retreatPosition) {
         await this.adapter.navigateNear(this.options.retreatPosition, 1);
         this.metrics.retreats = (this.metrics.retreats || 0) + 1;
-        return { action: 'retreat' };
       }
       const foodBefore = this.adapter.getFood();
       const ate = await this.adapter.eatBestFood();
@@ -388,6 +393,7 @@ class FarmerEngine extends EventEmitter {
         this.emit('ate', { foodBefore, foodAfter: this.adapter.getFood() });
         return { action: 'eat' };
       }
+      return { action: 'retreat' };
     }
 
     if (this.adapter.getFood() <= this.options.autoEatFoodThreshold) {

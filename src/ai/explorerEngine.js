@@ -263,8 +263,17 @@ class ExplorerEngine extends EventEmitter {
     // sempat menjelajah waypoint ini, jadi jangan dianggap sudah selesai) supaya begitu health
     // pulih, penjelajahan lanjut dari titik yang sama, bukan melompati bagian yang tertunda.
     if (this.adapter.getHealth() <= this.options.retreatHealth) {
+      // Mundur JUGA sambil coba makan, bukan salah satu saja - kalau retreat dan makan saling
+      // eksklusif, food tidak pernah naik dan health tidak pernah regenerasi alami (Minecraft
+      // butuh food tinggi untuk regen), jadi bot macet selamanya di status RETREAT tanpa pernah
+      // pulih (ditemukan dari bug live nyata: ExplorerWorker macet di health 0.5/20 tanpa henti).
       await this.adapter.navigateNear(this.options.basePosition, 1);
       this.metrics.retreats = (this.metrics.retreats || 0) + 1;
+      const ate = await this.adapter.eatBestFood();
+      if (ate) {
+        this.metrics.eaten = (this.metrics.eaten || 0) + 1;
+        return { action: 'eat' };
+      }
       return { action: 'retreat' };
     }
     if (this.adapter.getFood() <= this.options.eatFoodThreshold) {

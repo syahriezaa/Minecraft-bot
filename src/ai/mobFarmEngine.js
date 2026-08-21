@@ -80,16 +80,20 @@ class MobFarmEngine extends EventEmitter {
 
   async tick() {
     if (this.adapter.getHealth() <= this.options.retreatHealth) {
+      // Mundur JUGA sambil coba makan, bukan salah satu saja - kalau retreat dan makan saling
+      // eksklusif, food tidak pernah naik dan health tidak pernah regenerasi alami (Minecraft
+      // butuh food tinggi untuk regen), jadi bot macet selamanya di status RETREAT tanpa pernah
+      // pulih (bug yang sama persis dengan "tetap berlubang" di FarmerEngine).
       if (this.options.retreatPosition) {
         await this.adapter.navigateNear(this.options.retreatPosition, 1);
         this.metrics.retreats++;
-        return { action: 'retreat' };
       }
       const ate = await this.adapter.eatBestFood();
       if (ate) {
         this.metrics.eaten++;
         return { action: 'eat' };
       }
+      return { action: 'retreat' };
     }
 
     if (this.adapter.getFood() <= this.options.eatFoodThreshold) {

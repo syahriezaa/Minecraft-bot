@@ -215,6 +215,16 @@ describe('ExplorerEngine', () => {
       assert.deepEqual(navigateCall.position, { x: 0, y: 64, z: 0 }, 'harus mundur PERSIS ke base, bukan lanjut ke waypoint spiral');
     });
 
+    it('health kritis DAN ada makanan di tas - harus tetap coba MAKAN juga setelah mundur, bukan cuma mundur terus tanpa henti - ditemukan dari bug live nyata: ExplorerWorker macet selamanya di status RETREAT (health 0.5/20 tidak pernah naik) karena versi pertama fix ini return LANGSUNG begitu mundur, tidak pernah sampai ke langkah makan - food tidak pernah naik, health tidak pernah regenerasi alami, jadi tidak pernah pulih untuk lanjut menjelajah lagi', async () => {
+      const adapter = new FakeExplorerAdapter({ health: 3, food: 5 });
+      const engine = new ExplorerEngine({ adapter, basePosition: { x: 0, y: 64, z: 0 }, retreatHealth: 6 });
+
+      const result = await engine.tick();
+
+      assert.equal(result.action, 'eat');
+      assert.ok(adapter.actions.some((a) => a.type === 'navigate'), 'harus tetap mundur ke base juga, bukan cuma makan diam di tempat');
+    });
+
     it('mundur karena health kritis TIDAK BOLEH memajukan spiralIndex - begitu health pulih, penjelajahan harus lanjut dari titik yang SAMA, bukan melompati bagian yang belum sempat dijelajah', async () => {
       const criticalAdapter = new FakeExplorerAdapter({ health: 3 });
       const criticalEngine = new ExplorerEngine({ adapter: criticalAdapter, basePosition: { x: 0, y: 64, z: 0 }, retreatHealth: 6 });

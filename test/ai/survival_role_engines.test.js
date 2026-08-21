@@ -149,6 +149,16 @@ describe('FarmerEngine', () => {
     assert.ok(!adapter.actions.some((a) => a.type === 'dig'), 'jangan panen dulu kalau health kritis, walau ada crop matang di depan mata');
   });
 
+  it('health kritis DAN retreatPosition diset DAN ada makanan di tas - harus tetap coba MAKAN juga setelah mundur, bukan cuma mundur terus tanpa henti - ditemukan dari bug live nyata: "tetap berlubang" setelah fix mundur pertama kali dipasang, FarmerWorker macet selamanya di status RETREAT (health 2.8/20 tidak pernah naik) karena versi pertama return LANGSUNG begitu retreatPosition diset, tidak pernah sampai ke langkah makan - food tidak pernah naik, health tidak pernah regenerasi alami (butuh food tinggi), jadi tidak pernah pulih untuk lanjut kerja/perbaiki lahan lagi', async () => {
+    const adapter = new FakeRoleAdapter({ health: 3, items: { carrot: 5 } });
+    const engine = new FarmerEngine({ adapter, retreatHealth: 6, retreatPosition: { x: -185, y: 71, z: -352 } });
+
+    const result = await engine.tick();
+
+    assert.equal(result.action, 'eat');
+    assert.ok(adapter.actions.some((a) => a.type === 'navigate'), 'harus tetap mundur ke retreatPosition juga, bukan cuma makan diam di tempat');
+  });
+
   it('health kritis TAPI tidak ada retreatPosition diset - harus tetap coba makan sebagai upaya terakhir (sama seperti MobFarmEngine), bukan diam saja', async () => {
     const adapter = new FakeRoleAdapter({ health: 3, items: { carrot: 5 } });
     const engine = new FarmerEngine({ adapter, retreatHealth: 6 }); // retreatPosition SENGAJA tidak diset
@@ -778,6 +788,16 @@ describe('MobFarmEngine', () => {
     assert.equal(result.action, 'eat');
     assert.equal(adapter.actions[0].type, 'eat');
     assert.equal(adapter.actions.some(a => a.type === 'attack'), false);
+  });
+
+  it('health kritis DAN retreatPosition diset DAN ada makanan di tas - harus tetap coba MAKAN juga setelah mundur, bukan cuma mundur terus tanpa henti - bug yang sama seperti "tetap berlubang" di FarmerEngine: kalau retreat dan makan saling eksklusif, food tidak pernah naik dan health tidak pernah regenerasi alami, jadi bot macet selamanya di status RETREAT', async () => {
+    const adapter = new FakeRoleAdapter({ health: 3, items: { bread: 1 } });
+    const engine = new MobFarmEngine({ adapter, retreatHealth: 6, retreatPosition: { x: -185, y: 71, z: -352 } });
+
+    const result = await engine.tick();
+
+    assert.equal(result.action, 'eat');
+    assert.ok(adapter.actions.some((a) => a.type === 'navigate'), 'harus tetap mundur ke retreatPosition juga, bukan cuma makan diam di tempat');
   });
 
   it('dengan patrolWaypoints diset dan tidak ada ancaman, harus berjalan ke waypoint SEKARANG, lalu pindah ke waypoint berikutnya begitu tiba - ditemukan dari keluhan nyata pemilik: penjaga cuma diam di satu titik ("standby") jadi jarang ketemu mob sama sekali, bukan benar-benar berpatroli', async () => {
