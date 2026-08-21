@@ -44,6 +44,13 @@ const DEFAULT_BASE_GOAL = { x: -185, y: 71, z: -352 };
 // target yang kadang tak terjangkau. Dikecualikan sama sekali dari pertimbangan farm engine (lihat
 // avoidArea) - pemilik minta bot jangan pernah ke sana lagi.
 const DEFAULT_AVOID_AREA = { min: { x: -200, y: 0, z: -337 }, max: { x: -170, y: 100, z: -318 } };
+// Batas lahan farming SUNGGUHAN - permintaan nyata pemilik (koordinat diberikan langsung):
+// "hanya perbaiki lahan pertanian di koordinat tadi untuk farmworker set itu". Sebelumnya
+// farmArea TIDAK PERNAH diset sama sekali (selalu null/tanpa batas) - FarmerWorker menganggap
+// SEMUA farmland yang kebetulan ditemukan dalam scanRadius sebagai lahannya, termasuk potensi
+// lahan/petak lain yang bukan bagian kebun sungguhan. Rentang Y diberi margin (55-72) di atas/
+// bawah y=62 (ketinggian farmland sungguhan) untuk menampung crop/terrain sekitarnya.
+const DEFAULT_FARM_AREA = { min: { x: -211, y: 55, z: -405 }, max: { x: -183, y: 72, z: -372 } };
 
 function buildMovements(bot) {
   const movements = new Movements(bot);
@@ -94,7 +101,7 @@ async function restockSeedVarietyFromStorage(adapter, log, sharedChestAssignment
   }
 }
 
-function startFarmerWorker({ host, port, botName, scanRadius = 32, baseGoal = DEFAULT_BASE_GOAL, avoidArea = DEFAULT_AVOID_AREA, log = (m) => console.log(m), onDisconnect = () => {} }) {
+function startFarmerWorker({ host, port, botName, scanRadius = 32, baseGoal = DEFAULT_BASE_GOAL, avoidArea = DEFAULT_AVOID_AREA, farmArea = DEFAULT_FARM_AREA, log = (m) => console.log(m), onDisconnect = () => {} }) {
   const bot = mineflayer.createBot({
     host, port,
     username: botName || 'FarmerWorker',
@@ -141,6 +148,7 @@ function startFarmerWorker({ host, port, botName, scanRadius = 32, baseGoal = DE
       adapter,
       scanRadius,
       avoidArea,
+      farmArea,
       autoMatchStorage: true,
       sharedChestAssignments,
       harvestBatchSize: Number(process.env.FARM_HARVEST_BATCH) || 16,
@@ -226,6 +234,24 @@ function startFarmerWorker({ host, port, botName, scanRadius = 32, baseGoal = DE
         // Isi tas sungguhan bot ini SAAT INI - dipakai panel "Koordinat Armada Live" di dashboard.
         inventory: bot.inventory ? bot.inventory.items().map((item) => ({ name: item.name, count: item.count })) : []
       };
+    },
+    // Baca komposisi blok dalam kotak x/z (satu ketinggian y) memakai chunk yang SUDAH termuat
+    // oleh bot ini - TANPA perlu jalan kaki sama sekali, karena bot ini sudah lama bekerja persis
+    // di area gudang/farming. Dipakai untuk verifikasi cepat batas area (mis. "apakah kotak
+    // koordinat ini benar-benar lahan farming?") tanpa harus spawn bot baru yang jalan dari nol.
+    queryBlockBox({ minX, maxX, minZ, maxZ, y }) {
+      const { Vec3 } = require('vec3');
+      const counts = {};
+      let total = 0;
+      for (let x = minX; x <= maxX; x++) {
+        for (let z = minZ; z <= maxZ; z++) {
+          total++;
+          const block = bot.blockAt(new Vec3(x, y, z));
+          const name = block ? block.name : 'unloaded';
+          counts[name] = (counts[name] || 0) + 1;
+        }
+      }
+      return { total, counts };
     }
   };
 }

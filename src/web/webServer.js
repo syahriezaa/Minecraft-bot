@@ -326,6 +326,18 @@ app.post('/api/farmer/stop', (req, res) => {
   res.json({ success: true, data: { message: `Pekerja tani '${botName}' dihentikan` } });
 });
 
+// Baca komposisi blok dalam kotak x/z lewat chunk yang SUDAH termuat salah satu pekerja tani yang
+// sedang berjalan - dipakai untuk verifikasi cepat batas area (landmark dsb) tanpa perlu bot baru
+// jalan kaki dari nol.
+app.post('/api/farmer/query-blocks', (req, res) => {
+  const { minX, maxX, minZ, maxZ, y } = req.body || {};
+  const handle = farmerWorkers.values().next().value;
+  if (!handle) {
+    return res.status(409).json({ success: false, error: { code: 'NOT_RUNNING', message: 'Tidak ada pekerja tani yang berjalan' } });
+  }
+  res.json({ success: true, data: handle.queryBlockBox({ minX, maxX, minZ, maxZ, y }) });
+});
+
 app.get('/api/farmer/status', (req, res) => {
   res.json({
     success: true,
