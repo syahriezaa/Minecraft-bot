@@ -29,18 +29,38 @@ const POINT_BLOCK_CATEGORIES = {
 };
 
 // Kategori blok AREA (dikelompokkan jadi satu landmark per kluster bersebelahan, bukan satu per
-// blok - "setiap farming area...sungai").
-const AREA_BLOCK_CATEGORIES = {
-  farmland: 'farming_area',
-  water: 'river'
-};
+// blok - "setiap farming area...sungai"). Satu kategori bisa terdiri dari BANYAK jenis blok
+// (mis. "structure" - bangunan biasanya campuran planks+bricks+glass+dst dalam satu struktur yang
+// sama), makanya berbentuk daftar grup, bukan pemetaan 1 blok -> 1 kategori.
+const AREA_BLOCK_GROUPS = [
+  { blockNames: ['farmland'], category: 'farming_area' },
+  { blockNames: ['water'], category: 'river' },
+  // Bahan bangunan umum - permintaan nyata pemilik: "saya ingin maping bangunan saya". SENGAJA
+  // tidak menyertakan blok alami murni (stone/dirt/cobblestone polos dsb, yang juga muncul lewat
+  // gua/medan alami) - cuma bentuk yang jelas hasil OLAHAN/konstruksi (planks, bricks, kaca,
+  // pintu, tangga buatan, pagar) yang hampir pasti bagian dari bangunan sungguhan, bukan medan.
+  {
+    blockNames: [
+      'oak_planks', 'spruce_planks', 'birch_planks', 'jungle_planks', 'acacia_planks', 'dark_oak_planks', 'cherry_planks', 'mangrove_planks',
+      'bricks', 'stone_bricks', 'chiseled_stone_bricks', 'cracked_stone_bricks', 'mossy_stone_bricks', 'smooth_stone', 'polished_andesite', 'polished_diorite', 'polished_granite',
+      'glass', 'glass_pane', 'white_stained_glass', 'quartz_block', 'smooth_quartz',
+      'oak_door', 'spruce_door', 'birch_door', 'iron_door',
+      'oak_stairs', 'stone_stairs', 'brick_stairs', 'cobblestone_stairs',
+      'oak_fence', 'oak_fence_gate', 'iron_bars',
+      'oak_slab', 'stone_slab', 'cobblestone_slab',
+      'bookshelf', 'crafting_table', 'furnace', 'ladder'
+    ],
+    category: 'structure'
+  }
+];
 
 const NAME_TEMPLATES = {
   chest: 'Peti',
   mob_spawner: 'Mob Spawner',
   farming_area: 'Lahan Farming',
   river: 'Sungai/Air',
-  villager_area: 'Area Villager'
+  villager_area: 'Area Villager',
+  structure: 'Bangunan'
 };
 
 // Convex hull (monotone chain) - "vektor batas" area yang bisa diinterpretasikan lewat
@@ -77,7 +97,14 @@ class ExplorerEngine extends EventEmitter {
     this.adapter = options.adapter || new MineflayerRoleAdapter(options.bot, options.adapterOptions);
     this.options = {
       basePosition: { x: 0, y: 64, z: 0 },
-      spiralStepSize: 16,
+      // Langkah lebih rapat (dulu 16) + radius maksimal dibatasi (permintaan nyata pemilik:
+      // "utamakan explore sekitar base saya ingin maping bangunan saya") - liputan padat di
+      // sekitar base untuk menemukan bangunan kecil, bukan langkah lebar yang melompati detail.
+      spiralStepSize: 8,
+      // Begitu spiral akan melompat lebih jauh dari radius ini, MENGULANG dari titik dekat base
+      // lagi (bukan terus kabur menjelajah jauh) - landmark yang sudah dikenal otomatis dilewati
+      // (isAlreadyKnown/isAreaAlreadyKnown), jadi mengulang aman, tidak spam duplikat.
+      maxExploreRadius: 48,
       scanRadius: 24,
       dedupeDistance: 12,
       llmClient: null,
@@ -88,17 +115,16 @@ class ExplorerEngine extends EventEmitter {
     this.metrics = { waypointsVisited: 0, landmarksFound: 0 };
   }
 
-  // Spiral kotak keluar dari base (0,0 relatif) - permintaan nyata pemilik: "spiral keluar dari
-  // base". Algoritma standar: melangkah dalam pola kanan-atas-kiri-bawah dengan panjang lengan
-  // yang membesar setiap 2 belokan, membentuk kotak yang melebar.
-  nextSpiralWaypoint() {
-    const step = this.options.spiralStepSize;
+  // Titik spiral MENTAH (dalam satuan langkah, belum dikali step) untuk index tertentu - dipisah
+  // dari nextSpiralWaypoint() supaya bisa dicoba beberapa index tanpa efek samping (menaikkan
+  // spiralIndex) saat mengecek apakah suatu titik masih dalam maxExploreRadius.
+  computeSpiralPoint(index) {
     let x = 0, z = 0;
     let dx = 1, dz = 0;
     let segmentLength = 1;
     let segmentPassed = 0;
     let turnsInSegment = 0;
-    for (let i = 0; i < this.spiralIndex; i++) {
+    for (let i = 0; i < index; i++) {
       x += dx; z += dz;
       segmentPassed++;
       if (segmentPassed === segmentLength) {
@@ -111,8 +137,27 @@ class ExplorerEngine extends EventEmitter {
         }
       }
     }
+    return { x, z };
+  }
+
+  // Spiral kotak keluar dari base (0,0 relatif) - permintaan nyata pemilik: "spiral keluar dari
+  // base". Algoritma standar: melangkah dalam pola kanan-atas-kiri-bawah dengan panjang lengan
+  // yang membesar setiap 2 belokan, membentuk kotak yang melebar. Begitu titik berikutnya akan
+  // melewati maxExploreRadius dari base, ULANG dari awal (index 0) - permintaan nyata pemilik:
+  // "utamakan explore sekitar base saya ingin maping bangunan saya", jangan sampai spiral kabur
+  // ke alam liar jauh dari base.
+  nextSpiralWaypoint() {
+    const step = this.options.spiralStepSize;
+    const raw = this.computeSpiralPoint(this.spiralIndex);
+    const dist = Math.sqrt((raw.x * step) ** 2 + (raw.z * step) ** 2);
+    if (dist > this.options.maxExploreRadius) {
+      this.spiralIndex = 0;
+      const wrapped = this.computeSpiralPoint(0);
+      this.spiralIndex++;
+      return { x: wrapped.x * step, z: wrapped.z * step };
+    }
     this.spiralIndex++;
-    return { x: x * step, z: z * step };
+    return { x: raw.x * step, z: raw.z * step };
   }
 
   isAlreadyKnown(pos) {
@@ -161,15 +206,15 @@ class ExplorerEngine extends EventEmitter {
 
   async recordAreaLandmarks() {
     const created = [];
-    for (const [blockName, category] of Object.entries(AREA_BLOCK_CATEGORIES)) {
-      const blocks = this.adapter.findBlocksByNames([blockName], { maxDistance: this.options.scanRadius });
+    for (const { blockNames, category } of AREA_BLOCK_GROUPS) {
+      const blocks = this.adapter.findBlocksByNames(blockNames, { maxDistance: this.options.scanRadius });
       if (blocks.length === 0) continue;
       const points = blocks.map((b) => ({ x: b.position.x, z: b.position.z }));
       const centroid = centroidOf(points);
       if (this.isAreaAlreadyKnown(category, centroid)) continue;
       const boundary = convexHull(points);
       if (boundary.length < 3) continue; // terlalu sedikit blok untuk membentuk area sungguhan
-      const name = await this.nameFor(category, { blockName, count: blocks.length, centroid });
+      const name = await this.nameFor(category, { blockNames: [...new Set(blocks.map((b) => b.name))], count: blocks.length, centroid });
       const landmark = makeAreaLandmark({ name, category, boundary });
       addLandmark(landmark, this.options.log);
       this.options.log(`[Explorer] Landmark area baru: ${name} (${category}) - ${blocks.length} blok, ${boundary.length} titik batas`);

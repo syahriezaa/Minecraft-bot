@@ -41,7 +41,7 @@ function buildMovements(bot) {
   return movements;
 }
 
-function startExplorerWorker({ host, port, botName, scanRadius = 24, spiralStepSize = 16, baseGoal = DEFAULT_BASE_GOAL, log = (m) => console.log(m), onDisconnect = () => {}, onLandmarkFound = () => {} }) {
+function startExplorerWorker({ host, port, botName, scanRadius = 24, spiralStepSize = 8, maxExploreRadius = 48, baseGoal = DEFAULT_BASE_GOAL, log = (m) => console.log(m), onDisconnect = () => {}, onLandmarkFound = () => {} }) {
   const bot = mineflayer.createBot({
     host, port,
     username: botName || 'ExplorerWorker',
@@ -83,6 +83,7 @@ function startExplorerWorker({ host, port, botName, scanRadius = 24, spiralStepS
       basePosition: effectiveBase,
       scanRadius,
       spiralStepSize,
+      maxExploreRadius,
       llmClient,
       log
     });

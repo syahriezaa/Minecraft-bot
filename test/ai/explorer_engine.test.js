@@ -68,6 +68,19 @@ describe('ExplorerEngine', () => {
     assert.equal(new Set(keys).size, keys.length, 'tidak boleh ada titik spiral yang berulang persis sama di awal');
   });
 
+  it('nextSpiralWaypoint() TIDAK BOLEH pernah melebihi maxExploreRadius dari base - permintaan nyata pemilik: "utamakan explore sekitar base saya ingin maping bangunan saya" - begitu spiral akan melompat lebih jauh dari radius itu, harus MENGULANG dari awal (memutar dekat base terus-menerus), bukan kabur menjelajah jauh ke alam liar', () => {
+    const adapter = new FakeExplorerAdapter({});
+    const engine = new ExplorerEngine({ adapter, basePosition: { x: 0, y: 64, z: 0 }, maxExploreRadius: 40, spiralStepSize: 8 });
+
+    const points = [];
+    for (let i = 0; i < 60; i++) points.push(engine.nextSpiralWaypoint());
+
+    for (const p of points) {
+      const dist = Math.sqrt(p.x * p.x + p.z * p.z);
+      assert.ok(dist <= 40, `titik (${p.x},${p.z}) berjarak ${dist.toFixed(1)} dari base, melebihi maxExploreRadius 40`);
+    }
+  });
+
   it('tick() harus mencatat CHEST yang ditemukan sebagai landmark titik baru ke memori bersama', async () => {
     const adapter = new FakeExplorerAdapter({
       blocks: [{ name: 'chest', position: { x: 5, y: 64, z: 5 } }]
@@ -148,6 +161,25 @@ describe('ExplorerEngine', () => {
     const villagerLandmark = saved.find((l) => l.category === 'villager_area');
     assert.ok(villagerLandmark, 'kelompok villager harus tercatat sebagai landmark area');
     assert.equal(villagerLandmark.shape, 'area');
+  });
+
+  it('kumpulan blok BAHAN BANGUNAN (planks, bricks, glass, dst) yang ditemukan bersebelahan harus dicatat sebagai SATU landmark AREA berkategori "structure" - permintaan nyata pemilik: "saya ingin maping bangunan saya"', async () => {
+    const buildingBlocks = [];
+    for (let x = 0; x < 4; x++) {
+      for (let z = 0; z < 4; z++) {
+        buildingBlocks.push({ name: x % 2 === 0 ? 'oak_planks' : 'stone_bricks', position: { x, y: 65, z } });
+      }
+    }
+    const adapter = new FakeExplorerAdapter({ blocks: buildingBlocks });
+    const engine = new ExplorerEngine({ adapter, basePosition: { x: 0, y: 64, z: 0 } });
+
+    await engine.tick();
+
+    const saved = worldLandmarks.loadLandmarks();
+    const structureLandmarks = saved.filter((l) => l.category === 'structure');
+    assert.equal(structureLandmarks.length, 1, 'harus jadi SATU landmark bangunan, bukan terpisah per jenis blok (oak_planks vs stone_bricks)');
+    assert.equal(structureLandmarks[0].shape, 'area');
+    assert.ok(structureLandmarks[0].boundary.length >= 3);
   });
 
   it('metrics.waypointsVisited harus bertambah setiap tick, dan posisi bot harus benar-benar berpindah ke waypoint spiral berikutnya', async () => {

@@ -347,7 +347,7 @@ app.get('/api/farmer/status', (req, res) => {
 const explorerWorkers = new Map(); // botName -> handle
 
 app.post('/api/explorer/start', (req, res) => {
-  const { host, port, botName, scanRadius, spiralStepSize } = req.body || {};
+  const { host, port, botName, scanRadius, spiralStepSize, maxExploreRadius } = req.body || {};
   const name = botName || 'ExplorerWorker';
   if (explorerWorkers.has(name)) {
     return res.status(409).json({ success: false, error: { code: 'ALREADY_RUNNING', message: `Penjelajah '${name}' sudah berjalan` } });
@@ -359,7 +359,8 @@ app.post('/api/explorer/start', (req, res) => {
     port: port || 25565,
     botName: name,
     scanRadius: scanRadius || 24,
-    spiralStepSize: spiralStepSize || 16,
+    spiralStepSize: spiralStepSize || 8,
+    maxExploreRadius: maxExploreRadius || 48,
     log: (msg) => broadcast({ type: 'AI_ACTION_EVENT', data: { task: 'EXPLORER_WORKER', step: `[${name}] ${msg}`, status: 'RUNNING' } }),
     onDisconnect: () => {
       explorerWorkers.delete(name);
