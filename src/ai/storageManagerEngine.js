@@ -365,16 +365,29 @@ class StorageManagerEngine extends EventEmitter {
       // lewat canonicalKeyFor supaya separuh double-chest yang sama tidak dianggap "lain"). Cuma
       // barang yang MEMANG punya assignment jelas yang dipindah - kalau belum ada info rumah yang
       // benar, jangan tebak (itu justru penyebab bug sortir tercampur sebelumnya). Kalau rumah
-      // aslinya sendiri sedang PENUH/RUSAK, JANGAN tandai salah tempat sama sekali - memindahkan
-      // ke sana pasti gagal lagi (balik ke sini), lalu dianggap salah tempat lagi tick berikutnya
-      // - ditemukan dari bug live nyata: rotten_flesh bolak-balik TANPA HENTI 2+ menit karena
-      // reorganize terus memaksa memindah ke rumah yang ternyata masih penuh.
+      // aslinya sendiri sedang PENUH/RUSAK DAN tidak ada overflow terdaftar yang masih longgar,
+      // JANGAN tandai salah tempat sama sekali - memindahkan ke sana pasti gagal lagi (balik ke
+      // sini), lalu dianggap salah tempat lagi tick berikutnya - ditemukan dari bug live nyata:
+      // rotten_flesh bolak-balik TANPA HENTI 2+ menit karena reorganize terus memaksa memindah ke
+      // rumah yang ternyata masih penuh. TAPI kalau ADA overflow terdaftar (options.overflowChests)
+      // untuk rumah utama itu dan overflow-nya sendiri MASIH longgar, tetap tandai salah tempat -
+      // resolveChestForItem (dipakai saat deliver nanti) sudah tahu cara memakai overflow itu.
+      // Tanpa pengecualian ini, item yang rumah utamanya kebetulan penuh jadi TIDAK PERNAH
+      // terdeteksi salah tempat sama sekali walau overflow-nya kosong melompong - ditemukan dari
+      // keluhan nyata pemilik ("dia tetap tidak mengambil apapun yang salah dalam mode collect"),
+      // dikonfirmasi lewat pemantauan live: rotten_flesh terlihat jelas di log isi chest tapi tidak
+      // pernah ditandai salah tempat.
       const isChest = (p) => this.isChestBlock(p);
       const hereKey = canonicalKeyFor(nextToInspect, insideChests, isChest);
+      const hasUsableHome = (assignedKey) => {
+        if (!this.fullChestPositions.has(assignedKey) && !this.brokenPositions.has(assignedKey)) return true;
+        const overflowKey = this.options.overflowChests?.[assignedKey];
+        return Boolean(overflowKey) && !this.fullChestPositions.has(overflowKey) && !this.brokenPositions.has(overflowKey);
+      };
       const misplacedItems = items.filter((it) => {
         const assignedKey = this.chestAssignments.get(it.name);
         if (!assignedKey) return false;
-        if (this.fullChestPositions.has(assignedKey) || this.brokenPositions.has(assignedKey)) return false;
+        if (!hasUsableHome(assignedKey)) return false;
         return canonicalKeyFor(parseKey(assignedKey), insideChests, isChest) !== hereKey;
       });
 

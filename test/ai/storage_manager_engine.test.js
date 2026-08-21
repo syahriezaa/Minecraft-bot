@@ -802,6 +802,52 @@ describe('StorageManagerEngine', () => {
     assert.equal(second.deliveries[0].position.z, -344);
   });
 
+  it('OVERFLOW DARURAT: item salah tempat HARUS tetap terdeteksi & dipindah saat inspect walau rumah UTAMA-nya sedang penuh, SELAMA ada overflow terdaftar yang masih bisa menampung - permintaan nyata pemilik ("dia tetap tidak mengambil apapun yang salah dalam mode collect"): ditemukan lewat pemantauan live bahwa rotten_flesh yang jelas salah tempat TIDAK PERNAH terdeteksi karena rumah utamanya (MOB_DROPS_CHEST) kebetulan sedang ditandai penuh - filter salah-tempat lama langsung skip TANPA mengecek overflow sama sekali, padahal overflow-nya sendiri masih longgar', async () => {
+    const wrongChest = { position: { x: -183, y: 72, z: -352 }, items: [{ name: 'rotten_flesh', count: 28 }] };
+    const primaryChest = { position: { x: -185, y: 72, z: -352 }, items: [] };
+    const overflowChest = { position: { x: -187, y: 72, z: -352 }, items: [] };
+    const adapter = new FakeStorageAdapter({
+      chests: { '-183,72,-352': wrongChest, '-185,72,-352': primaryChest, '-187,72,-352': overflowChest }
+    });
+    const engine = new StorageManagerEngine({
+      adapter,
+      houseBounds: HOUSE_BOUNDS,
+      initialAssignments: { rotten_flesh: '-185,72,-352' },
+      overflowChests: { '-185,72,-352': '-187,72,-352' }
+    });
+    // Simulasikan rumah utama SUDAH ditandai penuh dari kejadian sebelumnya (mis. percobaan
+    // deliver lain yang gagal) - overflow-nya sendiri TIDAK ditandai penuh/rusak.
+    engine.fullChestPositions.add('-185,72,-352');
+
+    const result = await engine.tick();
+
+    assert.equal(result.action, 'reorganize', 'rotten_flesh harus TETAP terdeteksi salah tempat dan diambil, bukan dilewati diam-diam cuma karena rumah utamanya kebetulan penuh - masih ada overflow yang longgar');
+    assert.equal(result.items.length, 1);
+    assert.equal(result.items[0].name, 'rotten_flesh');
+    assert.ok(!wrongChest.items.some((i) => i.name === 'rotten_flesh'), 'rotten_flesh harus SUDAH DIAMBIL dari chest yang salah');
+  });
+
+  it('OVERFLOW DARURAT: item salah tempat HARUS TETAP dilewati (skip aman) kalau rumah utama DAN overflow-nya SAMA-SAMA penuh/rusak - jangan diambil kalau memang tidak ada tujuan aman sama sekali', async () => {
+    const wrongChest = { position: { x: -183, y: 72, z: -352 }, items: [{ name: 'rotten_flesh', count: 28 }] };
+    const primaryChest = { position: { x: -185, y: 72, z: -352 }, items: [] };
+    const overflowChest = { position: { x: -187, y: 72, z: -352 }, items: [] };
+    const adapter = new FakeStorageAdapter({
+      chests: { '-183,72,-352': wrongChest, '-185,72,-352': primaryChest, '-187,72,-352': overflowChest }
+    });
+    const engine = new StorageManagerEngine({
+      adapter,
+      houseBounds: HOUSE_BOUNDS,
+      initialAssignments: { rotten_flesh: '-185,72,-352' },
+      overflowChests: { '-185,72,-352': '-187,72,-352' }
+    });
+    engine.fullChestPositions.add('-185,72,-352');
+    engine.fullChestPositions.add('-187,72,-352'); // overflow-nya JUGA penuh
+
+    const result = await engine.tick();
+
+    assert.notEqual(result.action, 'reorganize', 'tidak ada tujuan aman sama sekali (utama & overflow sama-sama penuh) - jangan diambil, itu cuma akan bolak-balik tanpa hasil');
+  });
+
   it('MODE: engine harus mulai di mode "collect" secara default', () => {
     const adapter = new FakeStorageAdapter({});
     const engine = new StorageManagerEngine({ adapter, houseBounds: HOUSE_BOUNDS });
