@@ -106,6 +106,7 @@ class MineflayerRoleAdapter {
       // Timeout SENGAJA resolve (bukan reject) ke false: caller (findMatchingChest,
       // withdrawAllFromChest, dst) sudah menganggap false/gagal sebagai sinyal "lewati saja,
       // lanjut ke target berikutnya", bukan error yang perlu ditangani khusus.
+      const start = Date.now();
       let timeoutHandle;
       const timeout = new Promise((resolve) => {
         timeoutHandle = setTimeout(() => resolve(false), this.options.navigateTimeoutMs);
@@ -115,6 +116,13 @@ class MineflayerRoleAdapter {
         timeout
       ]);
       clearTimeout(timeoutHandle);
+      if (!result) {
+        // Dulu gagal DIAM-DIAM tanpa jejak sama sekali - ditemukan dari keluhan nyata pemilik
+        // ("kok bisa berjarak beberapa menit padahal harusnya kurang dari 5 detik") saat jeda
+        // panjang tak terjelaskan antar pemeriksaan chest ternyata (diduga) navigasi yang macet
+        // berulang kali, tapi tidak pernah tercatat di mana pun sehingga tidak kelihatan.
+        this.options.log(`[Navigasi] PERINGATAN: navigasi ke (${pos.x},${pos.y},${pos.z}) timeout setelah ${Date.now() - start}ms (${this.options.navigateTimeoutMs}ms batas) - dilewati, lanjut ke target berikutnya.`);
+      }
       return result;
     }
     return distance(this.getPosition(), pos) <= range;
@@ -279,8 +287,21 @@ class MineflayerRoleAdapter {
     const block = this.blockAt(pos);
     if (!block || typeof this.bot?.openChest !== 'function') return null;
     await this.navigateNear(pos, 3);
+    const openStart = Date.now();
     const chest = await this.bot.openChest(block);
+    // Log EKSPLISIT buka/tutup - permintaan nyata pemilik: "coba tambahkan log bot membuka peti
+    // dan bot menutup peti dan lihat di antara 2 log itu" - supaya waktu yang dihabiskan SELAMA
+    // satu chest terbuka (settle-poll, probe verifikasi, withdraw/deposit) kelihatan jelas dan
+    // terpisah dari waktu navigasi ke chest berikutnya (yang sudah dilaporkan lewat log navigasi).
+    this.options.log(`[Chest] Dibuka (${pos.x},${pos.y},${pos.z})`);
     await this.waitForStableChestItems(chest);
+    if (typeof chest?.close === 'function') {
+      const originalClose = chest.close.bind(chest);
+      chest.close = (...args) => {
+        this.options.log(`[Chest] Ditutup (${pos.x},${pos.y},${pos.z}) - ${Date.now() - openStart}ms sejak dibuka`);
+        return originalClose(...args);
+      };
+    }
     return chest;
   }
 

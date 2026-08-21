@@ -653,6 +653,19 @@ describe('MineflayerRoleAdapter.navigateNear - harus PUNYA BATAS WAKTU, jangan p
     assert.equal(result, false, 'harus menyerah dan lanjut (false), bukan menggantung selamanya menunggu goto() yang tidak pernah selesai');
   });
 
+  it('kalau navigateNear timeout, harus LAPOR lewat log() dengan posisi tujuan dan berapa lama menunggu - permintaan nyata pemilik ("kok bisa berjarak beberapa menit padahal harusnya kurang dari 5 detik"): timeout navigasi sebelumnya gagal DIAM-DIAM tanpa jejak sama sekali, jadi jeda menit-menitan antar pemeriksaan chest tidak pernah terlihat penyebabnya di log', async () => {
+    const bot = {
+      entity: { position: { x: 0, y: 64, z: 0 } },
+      pathfinder: { goto: () => new Promise(() => {}) }
+    };
+    const logMessages = [];
+    const adapter = new MineflayerRoleAdapter(bot, { navigateTimeoutMs: 30, log: (m) => logMessages.push(m) });
+
+    await adapter.navigateNear({ x: 10, y: 64, z: 10 }, 3);
+
+    assert.ok(logMessages.some((m) => m.includes('navigasi') && m.includes('10') && m.includes('30ms')), 'harus melaporkan lewat log() bahwa navigasi timeout - bukti nyata penyebab jeda lama, bukan gagal diam-diam');
+  });
+
   it('kalau pathfinder.goto() berhasil sebelum batas waktu, tetap harus mengembalikan true seperti biasa', async () => {
     const bot = {
       entity: { position: { x: 0, y: 64, z: 0 } },
@@ -745,6 +758,28 @@ describe('MineflayerRoleAdapter.openChestAt - harus beri jeda singkat setelah wi
     const elapsed = Date.now() - start;
 
     assert.ok(elapsed >= 30, `harus menunggu minimal chestSettleMs (30ms) sesudah open, tapi cuma ${elapsed}ms`);
+  });
+
+  it('harus LAPOR lewat log() persis kapan chest dibuka dan kapan ditutup (dengan jeda antaranya) - permintaan nyata pemilik: "coba tambahkan log bot membuka peti dan bot menutup peti dan lihat di antara 2 log itu" - supaya waktu yang dihabiskan SELAMA satu chest terbuka (settle-poll, probe verifikasi, withdraw/deposit) terlihat jelas dan terpisah dari waktu navigasi ke chest berikutnya', async () => {
+    const logMessages = [];
+    const bot = {
+      entity: { position: { x: 0, y: 64, z: 0 } },
+      pathfinder: { goto: async () => {} },
+      blockAt: () => ({ name: 'chest', position: { x: 5, y: 64, z: 5 } }),
+      openChest: async () => ({ containerItems: () => [], close: () => {} })
+    };
+    const adapter = new MineflayerRoleAdapter(bot, { chestSettleMs: 5, log: (m) => logMessages.push(m) });
+
+    const chest = await adapter.openChestAt({ x: 5, y: 64, z: 5 });
+    chest.close();
+
+    const openedLog = logMessages.find((m) => m.includes('Dibuka'));
+    const closedLog = logMessages.find((m) => m.includes('Ditutup'));
+    assert.ok(openedLog, 'harus ada log "Dibuka" segera setelah chest terbuka');
+    assert.ok(openedLog.includes('5') && openedLog.includes('64'), 'log "Dibuka" harus menyertakan posisi chest');
+    assert.ok(closedLog, 'harus ada log "Ditutup" saat chest.close() dipanggil');
+    assert.ok(/\d+ms/.test(closedLog), 'log "Ditutup" harus menyertakan jeda waktu (ms) sejak dibuka');
+    assert.ok(logMessages.indexOf(openedLog) < logMessages.indexOf(closedLog), 'log "Dibuka" harus muncul SEBELUM log "Ditutup"');
   });
 
   it('harus TERUS membaca ulang isi chest sampai dua bacaan berturut-turut SAMA (bukan cuma tunggu sekali lalu percaya) - kalau lag server lebih lama dari chestSettleMs, satu jeda tunggal saja bisa masih membaca data lama/belum lengkap - ditemukan dari keluhan nyata pemilik: item yang salah tempat tetap tidak diambil karena data chest yang dibaca belum ter-update saat dicocokkan dengan kategori seharusnya', async () => {
