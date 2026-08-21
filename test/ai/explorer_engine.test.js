@@ -23,13 +23,17 @@ describe('ExplorerEngine', () => {
   let worldLandmarks;
 
   class FakeExplorerAdapter {
-    constructor({ blocks = [], entities = [] } = {}) {
+    constructor({ blocks = [], entities = [], health = 20, food = 20 } = {}) {
       this.position = { x: 0, y: 64, z: 0 };
       this.blocks = blocks;
       this.entities = entities;
       this.actions = [];
+      this.health = health;
+      this.food = food;
     }
     getPosition() { return this.position; }
+    getHealth() { return this.health; }
+    getFood() { return this.food; }
     async navigateNear(pos) {
       this.actions.push({ type: 'navigate', position: pos });
       this.position = { x: pos.x, y: pos.y, z: pos.z };
@@ -40,6 +44,12 @@ describe('ExplorerEngine', () => {
       return this.blocks.filter((b) => wanted.has(b.name));
     }
     getEntities() { return this.entities; }
+    async eatBestFood() {
+      this.actions.push({ type: 'eat' });
+      const ok = this.food < 20;
+      if (ok) this.food = 20;
+      return ok;
+    }
   }
 
   beforeEach(() => {
@@ -191,5 +201,43 @@ describe('ExplorerEngine', () => {
 
     assert.equal(engine.metrics.waypointsVisited, 2);
     assert.equal(adapter.actions.filter((a) => a.type === 'navigate').length, 2);
+  });
+
+  describe('keselamatan bot penjelajah - permintaan tersirat: bot ditemukan hampir mati (health 0.5/20) sambil tetap terus menjelajah tanpa henti, TIDAK PUNYA sama sekali mekanisme menyelamatkan diri (beda dari FarmerEngine yang setidaknya makan saat lapar) - penjelajah justru yang paling berisiko karena sengaja masuk area BELUM DIKENAL', () => {
+    it('kalau health sudah kritis (di bawah retreatHealth), harus MUNDUR ke base SEGERA - jangan lanjut menjelajah dulu (bisa langsung mati kena satu serangan/jatuh lagi)', async () => {
+      const adapter = new FakeExplorerAdapter({ health: 3 });
+      const engine = new ExplorerEngine({ adapter, basePosition: { x: 0, y: 64, z: 0 }, retreatHealth: 6 });
+
+      const result = await engine.tick();
+
+      assert.equal(result.action, 'retreat');
+      const navigateCall = adapter.actions.find((a) => a.type === 'navigate');
+      assert.deepEqual(navigateCall.position, { x: 0, y: 64, z: 0 }, 'harus mundur PERSIS ke base, bukan lanjut ke waypoint spiral');
+    });
+
+    it('mundur karena health kritis TIDAK BOLEH memajukan spiralIndex - begitu health pulih, penjelajahan harus lanjut dari titik yang SAMA, bukan melompati bagian yang belum sempat dijelajah', async () => {
+      const criticalAdapter = new FakeExplorerAdapter({ health: 3 });
+      const criticalEngine = new ExplorerEngine({ adapter: criticalAdapter, basePosition: { x: 0, y: 64, z: 0 }, retreatHealth: 6 });
+      await criticalEngine.tick();
+      assert.equal(criticalEngine.spiralIndex, 0, 'spiralIndex tidak boleh maju sama sekali saat mundur');
+    });
+
+    it('kalau food rendah (belum sampai kritis di health), harus makan dulu seperti FarmerEngine - jangan sampai health ikut turun gara-gara kelaparan padahal ada makanan di tas', async () => {
+      const adapter = new FakeExplorerAdapter({ health: 20, food: 5 });
+      const engine = new ExplorerEngine({ adapter, basePosition: { x: 0, y: 64, z: 0 } });
+
+      const result = await engine.tick();
+
+      assert.equal(result.action, 'eat');
+    });
+
+    it('kalau health DAN food normal, harus lanjut menjelajah seperti biasa - keselamatan tidak boleh menghalangi kerja normal kalau memang tidak sedang darurat', async () => {
+      const adapter = new FakeExplorerAdapter({ health: 20, food: 20 });
+      const engine = new ExplorerEngine({ adapter, basePosition: { x: 0, y: 64, z: 0 } });
+
+      const result = await engine.tick();
+
+      assert.equal(result.action, 'explore');
+    });
   });
 });

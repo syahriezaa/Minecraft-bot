@@ -110,6 +110,12 @@ class ExplorerEngine extends EventEmitter {
       maxExploreRadius: 64,
       scanRadius: 24,
       dedupeDistance: 12,
+      // Keselamatan diri - ditemukan dari bug live nyata: ExplorerWorker sempat health 0.5/20
+      // sambil TETAP terus menjelajah tanpa henti, karena engine ini TIDAK PUNYA sama sekali
+      // mekanisme menyelamatkan diri (beda dari FarmerEngine yang setidaknya makan saat lapar) -
+      // penjelajah justru yang PALING berisiko karena sengaja masuk area yang belum dikenal.
+      retreatHealth: 6,
+      eatFoodThreshold: 14,
       llmClient: null,
       log: () => {},
       ...options
@@ -253,6 +259,22 @@ class ExplorerEngine extends EventEmitter {
   }
 
   async tick() {
+    // Mundur SEGERA kalau health sudah kritis - JANGAN maju spiralIndex sama sekali (belum
+    // sempat menjelajah waypoint ini, jadi jangan dianggap sudah selesai) supaya begitu health
+    // pulih, penjelajahan lanjut dari titik yang sama, bukan melompati bagian yang tertunda.
+    if (this.adapter.getHealth() <= this.options.retreatHealth) {
+      await this.adapter.navigateNear(this.options.basePosition, 1);
+      this.metrics.retreats = (this.metrics.retreats || 0) + 1;
+      return { action: 'retreat' };
+    }
+    if (this.adapter.getFood() <= this.options.eatFoodThreshold) {
+      const ate = await this.adapter.eatBestFood();
+      if (ate) {
+        this.metrics.eaten = (this.metrics.eaten || 0) + 1;
+        return { action: 'eat' };
+      }
+    }
+
     const waypoint = this.nextSpiralWaypoint();
     const target = {
       x: this.options.basePosition.x + waypoint.x,

@@ -103,6 +103,10 @@ function startExplorerWorker({ host, port, botName, scanRadius = 24, spiralStepS
       try {
         const result = await engine.tick();
         lastAction = result.action.toUpperCase();
+        // Log EKSPLISIT untuk mundur/makan - ditemukan dari bug live nyata: bot sempat health
+        // 0.5/20 sambil tetap terus menjelajah tanpa henti, tanpa jejak apapun kenapa.
+        if (result.action === 'retreat') log(`PERINGATAN: health kritis - mundur ke base.`);
+        if (result.action === 'eat') log(`Makan (darurat, food rendah).`);
       } catch (e) {
         log(`ERROR di tick eksplorasi (non-fatal, lanjut tick berikutnya): ${e.message}`);
       }
