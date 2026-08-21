@@ -29,9 +29,9 @@ describe('runFarmerWorker.buildMovements', () => {
     assert.equal(movements.maxDropDown, 3);
   });
 
-  it('allowParkour harus false - parkour membuat pathfinder berani lompat/turun lewat rute berisiko (mis. langsung melintasi lubang ledakan creeper) alih-alih memutar jalan aman', () => {
+  it('allowParkour harus true - permintaan nyata pemilik ("allow aja") setelah FarmerEngine punya health-retreat + makan sambil mundur, fall-damage sesekali dari parkour tidak lagi berisiko bikin bot macet/mati diam-diam', () => {
     const movements = buildMovements(fakeBot);
-    assert.equal(movements.allowParkour, false);
+    assert.equal(movements.allowParkour, true);
   });
 
   it('canDig tetap false dan tidak menaruh scaffolding - perilaku lama yang sudah benar tidak boleh berubah gara-gara perbaikan ini', () => {

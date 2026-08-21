@@ -56,13 +56,11 @@ function buildMovements(bot) {
   const movements = new Movements(bot);
   movements.canDig = false;
   movements.canOpenDoors = true;
-  // Parkour DIMATIKAN - permintaan nyata pemilik: "bot nya ngawur seperti tidak paham map
-  // sekitar base". Parkour bikin pathfinder berani lompat/turun lewat rute pendek yang berisiko
-  // (mis. langsung melintasi lubang ledakan creeper di lahan farming) alih-alih memutar jalan
-  // aman - terbukti lewat log live: metrics.eaten melonjak drastis (17->26 dalam beberapa menit)
-  // persis saat fitur perbaikan lahan sedang aktif bekerja di dekat lubang, tanda bot berulang
-  // kali kena damage (regenerasi HP menguras hunger cepat) - fall damage, bukan navigasi acak.
-  movements.allowParkour = false;
+  // Parkour DIAKTIFKAN KEMBALI - permintaan nyata pemilik ("allow aja"). Sebelumnya dimatikan
+  // karena diduga penyebab fall-damage berlebih, tapi FarmerEngine sekarang sudah punya
+  // health-retreat + makan sambil mundur (lihat commit sebelumnya) sehingga fall-damage sesekali
+  // tidak lagi berisiko membuat bot macet/mati diam-diam.
+  movements.allowParkour = true;
   movements.allowSprinting = true;
   // Batasi jatuh maksimal 3 blok (default library 4) - di Minecraft, jatuh SAMPAI 3 blok TIDAK
   // kena damage sama sekali, jatuh 4 blok pasti kena 1 damage. Defaultnya (4) berarti pathfinder
