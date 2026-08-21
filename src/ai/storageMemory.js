@@ -183,17 +183,21 @@ const RARE_DROPS_CHEST = '-181,74,-345';
 // TIDAK PUNYA cadangan darurat sama sekali (dirt/log/hasil sampingan panen).
 const POTATO_OVERFLOW_CHEST = '-181,71,-350';
 const CARROT_OVERFLOW_CHEST = '-181,72,-348';
-const WHEAT_OVERFLOW_CHEST = '-181,72,-346';
-// Awalnya dialokasikan untuk dirt/logs, tapi DIALIHKAN ke cadangan KEDUA & KETIGA untuk batu &
-// cobblestone (dan turunannya - granite/diorite/andesite/deepslate/tuff/gravel, SEMUA berbagi satu
-// STONE_COBBLE_CHEST) - permintaan nyata pemilik: "storage worker mencoba menaruh stone tapi penuh
-// coba berikan peti lagi" lalu "tambahkan 2 chest baru tadi untuk stone cobblestone dan turunannya".
-// Dirt/logs TIDAK butuh overflow sekritis batu - dirt terus-menerus DIKONSUMSI oleh fitur perbaikan
-// lahan (FarmerEngine.repairEnabled), bukan menumpuk, jadi aman dikorbankan untuk kategori yang jauh
-// lebih mendesak.
+// Awalnya dialokasikan untuk dirt/logs/wheat/hasil sampingan panen, tapi DIALIHKAN SEMUANYA ke
+// rantai cadangan untuk batu & cobblestone (dan turunannya - granite/diorite/andesite/deepslate/
+// tuff/gravel, SEMUA berbagi satu STONE_COBBLE_CHEST) - ditemukan dari pemantauan live LANGSUNG
+// pemilik: "storage worker nya tetap stuck di batu" bahkan SETELAH 3 tingkat overflow pertama
+// (reorganized:1151x - tanda thrashing berat, worker berulang-ulang ambil-taruh tanpa progres).
+// Gudang fisik sudah diperiksa ULANG (query-blocks y70-76, area luas) - TIDAK ADA chest/barel lain
+// yang belum terdaftar, jadi kapasitas tambahan HARUS datang dari mengorbankan kategori lain.
+// Dirt/logs/wheat/hasil sampingan panen dipilih karena TIDAK PERNAH terbukti kritis lewat
+// pemantauan live (beda dari potato/carrot/beetroot yang masing-masing punya bukti nyata pernah
+// menumpuk parah) - permintaan nyata pemilik: "kan tadi saya menambahkan peti kan barusan kalau
+// tidak salah 7 itu gunakan beberapa [untuk batu]".
 const STONE_COBBLE_OVERFLOW_2_CHEST = '-181,73,-348';
 const STONE_COBBLE_OVERFLOW_3_CHEST = '-181,73,-346';
-const FARMING_BYPRODUCTS_OVERFLOW_CHEST = '-181,74,-348';
+const STONE_COBBLE_OVERFLOW_4_CHEST = '-181,72,-346'; // dulu WHEAT_OVERFLOW_CHEST
+const STONE_COBBLE_OVERFLOW_5_CHEST = '-181,74,-348'; // dulu FARMING_BYPRODUCTS_OVERFLOW_CHEST
 const BEETROOT_OVERFLOW_CHEST = '-181,74,-346';
 const ARMOR_OVERFLOW_CHEST = '-180,71,-351'; // barrel
 const TOOLS_OVERFLOW_CHEST = '-180,71,-348'; // barrel
@@ -242,10 +246,10 @@ const CHEST_CATEGORIES = [
   { pos: RARE_DROPS_CHEST, label: 'Drop Langka' },
   { pos: POTATO_OVERFLOW_CHEST, label: 'Cadangan Kentang' },
   { pos: CARROT_OVERFLOW_CHEST, label: 'Cadangan Wortel' },
-  { pos: WHEAT_OVERFLOW_CHEST, label: 'Cadangan Gandum' },
   { pos: STONE_COBBLE_OVERFLOW_2_CHEST, label: 'Cadangan Batu & Cobblestone (2)' },
   { pos: STONE_COBBLE_OVERFLOW_3_CHEST, label: 'Cadangan Batu & Cobblestone (3)' },
-  { pos: FARMING_BYPRODUCTS_OVERFLOW_CHEST, label: 'Cadangan Hasil Sampingan Panen' },
+  { pos: STONE_COBBLE_OVERFLOW_4_CHEST, label: 'Cadangan Batu & Cobblestone (4)' },
+  { pos: STONE_COBBLE_OVERFLOW_5_CHEST, label: 'Cadangan Batu & Cobblestone (5)' },
   { pos: BEETROOT_OVERFLOW_CHEST, label: 'Cadangan Beetroot' },
   { pos: ARMOR_OVERFLOW_CHEST, label: 'Cadangan Armor', mirror: false },
   { pos: TOOLS_OVERFLOW_CHEST, label: 'Cadangan Perkakas', mirror: false },
@@ -424,15 +428,16 @@ const OVERFLOW_CHESTS = {
   // sekarang 3 FarmerWorker jalan paralel jadi panen jauh lebih cepat menumpuk.
   [POTATO_CHEST]: POTATO_OVERFLOW_CHEST,
   [CARROT_CHEST]: CARROT_OVERFLOW_CHEST,
-  [WHEAT_CHEST]: WHEAT_OVERFLOW_CHEST,
-  // Batu/cobble & turunannya (granite/diorite/andesite/deepslate/tuff/gravel) BERANTAI 3 tingkat -
-  // sebelumnya cuma 1 overflow (STONE_COBBLE_OVERFLOW_CHEST) dan itu SENDIRI juga sudah kronis
-  // penuh (ditemukan dari keluhan nyata pemilik: "storage worker mencoba menaruh stone tapi
-  // penuh") - overflow dari overflow ini yang belum pernah diuji sebelumnya, lihat tes "OVERFLOW
-  // DARURAT BERANTAI" di storage_manager_engine.test.js.
+  // Batu/cobble & turunannya (granite/diorite/andesite/deepslate/tuff/gravel) BERANTAI 5 tingkat -
+  // sebelumnya cuma 1 overflow (STONE_COBBLE_OVERFLOW_CHEST), lalu 3 (masih tidak cukup) - masih
+  // TETAP stuck ("storage worker nya tetap stuck di batu", reorganized:1151x). Gudang fisik sudah
+  // habis (diperiksa ulang, tidak ada chest lain) - 2 tingkat tambahan ini mengorbankan
+  // wheat/hasil-sampingan-panen (tidak pernah terbukti kritis lewat pemantauan live, beda dari
+  // potato/carrot/beetroot yang masing-masing punya bukti nyata pernah menumpuk parah).
   [STONE_COBBLE_OVERFLOW_CHEST]: STONE_COBBLE_OVERFLOW_2_CHEST,
   [STONE_COBBLE_OVERFLOW_2_CHEST]: STONE_COBBLE_OVERFLOW_3_CHEST,
-  [FARMING_BYPRODUCTS_CHEST]: FARMING_BYPRODUCTS_OVERFLOW_CHEST,
+  [STONE_COBBLE_OVERFLOW_3_CHEST]: STONE_COBBLE_OVERFLOW_4_CHEST,
+  [STONE_COBBLE_OVERFLOW_4_CHEST]: STONE_COBBLE_OVERFLOW_5_CHEST,
   [BEETROOT_CHEST]: BEETROOT_OVERFLOW_CHEST,
   [ARMOR_CHEST]: ARMOR_OVERFLOW_CHEST,
   [TOOLS_CHEST]: TOOLS_OVERFLOW_CHEST,
