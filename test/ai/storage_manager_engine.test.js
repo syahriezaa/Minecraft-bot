@@ -983,6 +983,42 @@ describe('StorageManagerEngine', () => {
     assert.notEqual(result.action, 'reorganize', 'tidak ada tujuan aman sama sekali (utama & overflow sama-sama penuh) - jangan diambil, itu cuma akan bolak-balik tanpa hasil');
   });
 
+  it('OVERFLOW DARURAT BERANTAI: kalau chest utama DAN overflow pertamanya SAMA-SAMA penuh, harus lanjut coba overflow TINGKAT KEDUA (overflow terdaftar UNTUK overflow pertama) sebelum menyerah - permintaan nyata pemilik: "storage worker mencoba menaruh stone tapi penuh coba berikan peti lagi" - kategori bervolume sangat tinggi (stone/cobblestone) bisa menghabiskan overflow pertamanya juga. Overflow tingkat kedua SENGAJA dibuat TIDAK KOSONG (sudah berisi jenis lain) supaya tes ini murni membuktikan pengecekan RANTAI overflowChests, bukan kebetulan ketemu lewat fallback "chest kosong" generik (yang HANYA mengambil chest benar-benar kosong).', async () => {
+    const primaryChest = { position: { x: -181, y: 74, z: -353 }, items: [{ name: 'iron_ingot', count: 64 }] };
+    const overflow1 = { position: { x: -181, y: 74, z: -344 }, items: [{ name: 'iron_ingot', count: 64 }] };
+    const overflow2 = { position: { x: -181, y: 74, z: -341 }, items: [{ name: 'coal', count: 5 }] };
+    const WIDE_HOUSE = { min: { x: -190, y: 70, z: -360 }, max: { x: -179, y: 76, z: -340 } };
+    const adapter = new FakeStorageAdapter({
+      chests: { '-181,74,-353': primaryChest, '-181,74,-344': overflow1, '-181,74,-341': overflow2 },
+      inventory: { diamond: 4 }
+    });
+    adapter.depositToChest = async (pos, predicate) => {
+      if (pos.z === -353 || pos.z === -344) throw new Error('destination full');
+      const chest = adapter.chests[`${pos.x},${pos.y},${pos.z}`];
+      let deposited = 0;
+      for (const [name, count] of Array.from(adapter.inventory.entries())) {
+        if (!predicate({ name, count })) continue;
+        if (chest) chest.items.push({ name, count });
+        deposited += count;
+        adapter.inventory.delete(name);
+      }
+      return { deposited };
+    };
+    const engine = new StorageManagerEngine({
+      adapter,
+      houseBounds: WIDE_HOUSE,
+      initialAssignments: { diamond: '-181,74,-353' },
+      overflowChests: { '-181,74,-353': '-181,74,-344', '-181,74,-344': '-181,74,-341' }
+    });
+    engine.fullChestPositions.add('-181,74,-353');
+    engine.fullChestPositions.add('-181,74,-344');
+
+    const result = await engine.tick();
+
+    assert.equal(result.action, 'deliver', 'harus lanjut ke overflow tingkat kedua, bukan menyerah begitu overflow pertama juga penuh');
+    assert.equal(result.deliveries[0].position.z, -341);
+  });
+
   it('PRIORITAS MEMORI: kalau engine SUDAH TAHU (dari chestSnapshot sebelumnya, mis. hasil intipan resolveChestForItem) suatu chest punya item salah tempat, chest itu HARUS diprioritaskan lebih dulu daripada chest lain yang belum pernah diperiksa sama sekali - permintaan nyata pemilik: "jika state item sudah di ketahui salah selesaikan semua kesalahannya dulu baru re inspeksi...gunakan memory untuk melakukan perencanaan se akurat mungkin" - jangan tunggu giliran urutan alami (nearest-neighbor) kalau sudah ada bukti nyata chest itu berantakan', async () => {
     // chestBersih ditemukan LEBIH DULU secara urutan alami (posisi pertama di object) - tapi
     // chestKotor SUDAH DIKETAHUI berantakan dari intipan sebelumnya (redstone belum punya

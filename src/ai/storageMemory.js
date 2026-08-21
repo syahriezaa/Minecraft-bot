@@ -184,8 +184,15 @@ const RARE_DROPS_CHEST = '-181,74,-345';
 const POTATO_OVERFLOW_CHEST = '-181,71,-350';
 const CARROT_OVERFLOW_CHEST = '-181,72,-348';
 const WHEAT_OVERFLOW_CHEST = '-181,72,-346';
-const DIRT_SAND_OVERFLOW_CHEST = '-181,73,-348';
-const LOGS_OVERFLOW_CHEST = '-181,73,-346';
+// Awalnya dialokasikan untuk dirt/logs, tapi DIALIHKAN ke cadangan KEDUA & KETIGA untuk batu &
+// cobblestone (dan turunannya - granite/diorite/andesite/deepslate/tuff/gravel, SEMUA berbagi satu
+// STONE_COBBLE_CHEST) - permintaan nyata pemilik: "storage worker mencoba menaruh stone tapi penuh
+// coba berikan peti lagi" lalu "tambahkan 2 chest baru tadi untuk stone cobblestone dan turunannya".
+// Dirt/logs TIDAK butuh overflow sekritis batu - dirt terus-menerus DIKONSUMSI oleh fitur perbaikan
+// lahan (FarmerEngine.repairEnabled), bukan menumpuk, jadi aman dikorbankan untuk kategori yang jauh
+// lebih mendesak.
+const STONE_COBBLE_OVERFLOW_2_CHEST = '-181,73,-348';
+const STONE_COBBLE_OVERFLOW_3_CHEST = '-181,73,-346';
 const FARMING_BYPRODUCTS_OVERFLOW_CHEST = '-181,74,-348';
 const BEETROOT_OVERFLOW_CHEST = '-181,74,-346';
 const ARMOR_OVERFLOW_CHEST = '-180,71,-351'; // barrel
@@ -236,8 +243,8 @@ const CHEST_CATEGORIES = [
   { pos: POTATO_OVERFLOW_CHEST, label: 'Cadangan Kentang' },
   { pos: CARROT_OVERFLOW_CHEST, label: 'Cadangan Wortel' },
   { pos: WHEAT_OVERFLOW_CHEST, label: 'Cadangan Gandum' },
-  { pos: DIRT_SAND_OVERFLOW_CHEST, label: 'Cadangan Tanah & Pasir' },
-  { pos: LOGS_OVERFLOW_CHEST, label: 'Cadangan Kayu Gelondongan' },
+  { pos: STONE_COBBLE_OVERFLOW_2_CHEST, label: 'Cadangan Batu & Cobblestone (2)' },
+  { pos: STONE_COBBLE_OVERFLOW_3_CHEST, label: 'Cadangan Batu & Cobblestone (3)' },
   { pos: FARMING_BYPRODUCTS_OVERFLOW_CHEST, label: 'Cadangan Hasil Sampingan Panen' },
   { pos: BEETROOT_OVERFLOW_CHEST, label: 'Cadangan Beetroot' },
   { pos: ARMOR_OVERFLOW_CHEST, label: 'Cadangan Armor', mirror: false },
@@ -418,8 +425,13 @@ const OVERFLOW_CHESTS = {
   [POTATO_CHEST]: POTATO_OVERFLOW_CHEST,
   [CARROT_CHEST]: CARROT_OVERFLOW_CHEST,
   [WHEAT_CHEST]: WHEAT_OVERFLOW_CHEST,
-  [DIRT_SAND_CHEST]: DIRT_SAND_OVERFLOW_CHEST,
-  [LOGS_CHEST]: LOGS_OVERFLOW_CHEST,
+  // Batu/cobble & turunannya (granite/diorite/andesite/deepslate/tuff/gravel) BERANTAI 3 tingkat -
+  // sebelumnya cuma 1 overflow (STONE_COBBLE_OVERFLOW_CHEST) dan itu SENDIRI juga sudah kronis
+  // penuh (ditemukan dari keluhan nyata pemilik: "storage worker mencoba menaruh stone tapi
+  // penuh") - overflow dari overflow ini yang belum pernah diuji sebelumnya, lihat tes "OVERFLOW
+  // DARURAT BERANTAI" di storage_manager_engine.test.js.
+  [STONE_COBBLE_OVERFLOW_CHEST]: STONE_COBBLE_OVERFLOW_2_CHEST,
+  [STONE_COBBLE_OVERFLOW_2_CHEST]: STONE_COBBLE_OVERFLOW_3_CHEST,
   [FARMING_BYPRODUCTS_CHEST]: FARMING_BYPRODUCTS_OVERFLOW_CHEST,
   [BEETROOT_CHEST]: BEETROOT_OVERFLOW_CHEST,
   [ARMOR_CHEST]: ARMOR_OVERFLOW_CHEST,

@@ -210,6 +210,24 @@ class StorageManagerEngine extends EventEmitter {
     }
   }
 
+  // Jalan RANTAI overflowChests dari startKey (chest utama, atau chest overflow lain) sampai
+  // ketemu satu yang belum penuh/rusak, ATAU rantainya habis/berputar - permintaan nyata pemilik:
+  // "storage worker mencoba menaruh stone tapi penuh coba berikan peti lagi", overflow tunggal
+  // (satu tingkat) TERNYATA tidak cukup untuk kategori bervolume sangat tinggi (batu/cobblestone)
+  // yang bisa menghabiskan overflow pertamanya juga. Guard `visited` mencegah loop tak berujung
+  // kalau overflowChests kebetulan membentuk siklus (mis. salah konfigurasi A->B->A).
+  walkOverflowChain(startKey) {
+    const chain = [];
+    let key = this.options.overflowChests?.[startKey];
+    const visited = new Set([startKey]);
+    while (key && !visited.has(key)) {
+      visited.add(key);
+      chain.push(key);
+      key = this.options.overflowChests?.[key];
+    }
+    return chain;
+  }
+
   // "left"/"right"/"single" -> hasUsableHome/hereKey -> daftar item salah tempat, dipakai BAIK
   // oleh inspect() resmi MAUPUN oleh intipan resolveChestForItem - satu logika yang sama supaya
   // hasil "salah tempat atau tidak" konsisten di mana pun chest ini dibaca.
@@ -218,8 +236,9 @@ class StorageManagerEngine extends EventEmitter {
     const hereKey = canonicalKeyFor(pos, insideChests, getType);
     const hasUsableHome = (assignedKey) => {
       if (!this.fullChestPositions.has(assignedKey) && !this.brokenPositions.has(assignedKey)) return true;
-      const overflowKey = this.options.overflowChests?.[assignedKey];
-      return Boolean(overflowKey) && !this.fullChestPositions.has(overflowKey) && !this.brokenPositions.has(overflowKey);
+      return this.walkOverflowChain(assignedKey).some(
+        (key) => !this.fullChestPositions.has(key) && !this.brokenPositions.has(key)
+      );
     };
     return items.filter((it) => {
       const assignedKey = this.chestAssignments.get(it.name);
@@ -275,8 +294,8 @@ class StorageManagerEngine extends EventEmitter {
       // fallback "chest kosong" generik di bawah, yang cuma muat SATU jenis sampai chest itu
       // terisi) - assignment PERMANEN item tetap ke chest utama, TIDAK pernah ditimpa jadi
       // overflow (lihat return langsung tanpa chestAssignments.set di bawah).
-      const overflowKey = this.options.overflowChests?.[assignedKey];
-      if (overflowKey && !this.fullChestPositions.has(overflowKey) && !this.brokenPositions.has(overflowKey)) {
+      for (const overflowKey of this.walkOverflowChain(assignedKey)) {
+        if (this.fullChestPositions.has(overflowKey) || this.brokenPositions.has(overflowKey)) continue;
         const overflowPos = candidates.find((pos) => posKey(pos) === overflowKey);
         if (overflowPos) return overflowPos;
       }
