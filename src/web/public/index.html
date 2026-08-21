@@ -209,6 +209,35 @@
       </div>
     </section>
 
+    <!-- Item Salah Tempat SAAT INI - beda dari Kepatuhan Kategori (log HISTORIS barang yang SUDAH
+         dipindah) - ini rangkuman kondisi TERKINI: apa yang masih salah tempat sekarang dan ke
+         mana rencananya, dikumpulkan dari seluruh chest yang sudah dipetakan - permintaan nyata
+         pemilik: "di ui tampilkan item yang tidak tepat dan item yang akan di pindah dan di
+         pindah kemana" -->
+    <section class="row">
+      <div class="card full-width" id="storage-misplaced-now-panel">
+        <div class="card-header-flex">
+          <h2>Item Salah Tempat Saat Ini — dan rencana pemindahannya</h2>
+          <span class="badge live-badge" id="misplaced-now-count-badge">0 ITEM</span>
+        </div>
+        <div class="table-scroll">
+          <table id="misplaced-now-table">
+            <thead>
+              <tr>
+                <th>Item</th>
+                <th>Jumlah</th>
+                <th>Ditemukan Di</th>
+                <th>Akan Dipindah Ke</th>
+              </tr>
+            </thead>
+            <tbody id="misplaced-now-table-body">
+              <tr class="empty-row"><td colspan="4">Belum ada item salah tempat yang terdeteksi saat ini.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
     <!-- Peta Isi Gudang - isi APA ADANYA tiap chest, per baris item, plus panah rencana pemindahan
          untuk item yang salah tempat - permintaan nyata pemilik: "tampilkan isi semua peti nya
          tepat dengan baris dan kolom per item dan jumlahnya dan bagaimana bot akan

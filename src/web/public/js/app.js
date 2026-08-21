@@ -95,6 +95,7 @@
         break;
       case 'STORAGE_CHEST_MAP_UPDATE':
         renderChestMap(msg.data?.chests || []);
+        renderMisplacedNow(msg.data?.chests || []);
         // Memori sortir bisa saja baru saja berubah (item baru pertama kali ketemu rumahnya) -
         // muat ulang supaya panel "Memori Sortir Worker" tetap persis sama dengan engine, bukan
         // cuma snapshot sekali saat halaman dibuka.
@@ -261,9 +262,42 @@
   fetch('/api/storage/chests')
     .then(r => r.json())
     .then(res => {
-      if (res.data?.chests) renderChestMap(res.data.chests);
+      if (res.data?.chests) { renderChestMap(res.data.chests); renderMisplacedNow(res.data.chests); }
     })
     .catch(() => {});
+
+  // ── Item Salah Tempat Saat Ini - rangkuman TERKINI (bukan log historis), dikumpulkan dari
+  // seluruh chest yang sudah dipetakan - permintaan nyata pemilik: "tampilkan item yang tidak
+  // tepat dan item yang akan di pindah dan di pindah kemana" ──
+  const misplacedNowBody = document.getElementById('misplaced-now-table-body');
+  const misplacedNowCountBadge = document.getElementById('misplaced-now-count-badge');
+
+  function renderMisplacedNow(chests) {
+    if (!misplacedNowBody || !Array.isArray(chests)) return;
+
+    const rows = [];
+    chests.forEach(chest => {
+      (chest.misplaced || []).forEach(m => {
+        rows.push({ name: m.name, count: m.count, from: chest.position, to: m.targetPosition });
+      });
+    });
+
+    if (misplacedNowCountBadge) misplacedNowCountBadge.textContent = `${rows.length} ITEM`;
+
+    if (rows.length === 0) {
+      misplacedNowBody.innerHTML = '<tr class="empty-row"><td colspan="4">Belum ada item salah tempat yang terdeteksi saat ini.</td></tr>';
+      return;
+    }
+
+    misplacedNowBody.innerHTML = rows.map(r => `
+      <tr>
+        <td><span class="compliance-item-name">${r.name}</span></td>
+        <td>${r.count}</td>
+        <td>${posLabel(r.from)}</td>
+        <td><span class="compliance-arrow">&rarr;</span>${posLabel(r.to)}</td>
+      </tr>
+    `).join('');
+  }
 
   // ── Memori Sortir Worker - persis engine.getChestAssignments(), tanpa olahan ──
   const assignmentsContainer = document.getElementById('storage-assignments-map');
