@@ -30,7 +30,7 @@ const { pathfinder, Movements } = require('mineflayer-pathfinder');
 const { MineflayerRoleAdapter } = require('./mineflayerRoleAdapter');
 const { MobFarmEngine } = require('./mobFarmEngine');
 const { walkToBase } = require('./walkToBase');
-const { getSharedChestAssignments, parseChestPositionKey, TOOLS_CHEST, WEAPONS_CHEST } = require('./storageMemory');
+const { getSharedChestAssignments, parseChestPositionKey, TOOLS_CHEST, WEAPONS_CHEST, FOOD_CHEST } = require('./storageMemory');
 
 const TICK_INTERVAL_MS = Number(process.env.MOBFARM_TICK_MS) || 2000;
 const DEFAULT_BASE_GOAL = { x: -185, y: 71, z: -352 };
@@ -122,6 +122,17 @@ function startMobFarmWorker({
       }
     }
 
+    // Bawa makanan dari FOOD_CHEST SEBELUM berangkat - ditemukan dari bug live nyata: bot ini
+    // sempat retreat di health 0.5/20 TANPA makanan sama sekali di tas, sama persis pola bug
+    // "retreat vs eat deadlock" yang sudah diperbaiki di FarmerEngine/ExplorerEngine/MobFarmEngine
+    // sesi ini - tapi kalau tasnya memang KOSONG dari awal, eatBestFood tetap tidak bisa menolong
+    // walau logikanya sudah benar. Cukup satu tumpukan, jangan kuras FOOD_CHEST.
+    if (!adapter.hasItem(['bread', 'cooked_beef', 'cooked_porkchop', 'baked_potato', 'apple'])) {
+      const foodPos = parseChestPositionKey(FOOD_CHEST);
+      const result = await adapter.withdrawFromChest(foodPos, ['bread', 'cooked_beef', 'cooked_porkchop', 'baked_potato', 'apple'], 16);
+      if (result.withdrawn > 0) log(`Ambil ${result.withdrawn}x makanan dari FOOD_CHEST gudang.`);
+    }
+
     // Percobaan pertama (langsung ke spawnerGoal di y=-20) GAGAL TOTAL live - jauh di bawah
     // tanah, tidak terjangkau jalan kaki tanpa menggali (bot ini sengaja tidak boleh menggali).
     // Pemilik kasih pintu masuk sungguhan dekat permukaan: "kamu pergi kesekitar -250,67,-434
@@ -159,9 +170,12 @@ function startMobFarmWorker({
       adapter,
       scanRadius,
       patrolWaypoints,
-      // Mundur ke TITIK BERBURU ITU SENDIRI (bukan base yang 300+ blok jauhnya, tidak realistis
-      // untuk mundur darurat) - cukup aman sebagai jeda sesaat sebelum lanjut bertarung lagi.
-      retreatPosition: huntCenter
+      // Mundur ke PINTU MASUK (dekat permukaan, jauh dari ruangan spawner) - BUKAN huntCenter.
+      // Ditemukan dari bug live nyata: mundur ke huntCenter (= titik spawner itu sendiri saat
+      // berhasil turun) sama sekali TIDAK MEMBANTU - bot ditemukan retreat di health 0.5/20 PERSIS
+      // di titik spawner, masih dikelilingi mob yang sama, karena "mundur" tidak benar-benar
+      // menjauh dari bahaya. entranceGoal jauh lebih aman (permukaan, di luar ruangan mob).
+      retreatPosition: entranceGoal
     });
     combatEngine.on('attacked', ({ target }) => log(`Menyerang ${target.name || target.type}`));
 

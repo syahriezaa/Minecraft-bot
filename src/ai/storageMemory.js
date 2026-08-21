@@ -486,5 +486,6 @@ module.exports = {
   parseChestPositionKey,
   TOOLS_CHEST,
   WEAPONS_CHEST,
-  COMPOSTER_POSITIONS
+  COMPOSTER_POSITIONS,
+  FOOD_CHEST
 };
