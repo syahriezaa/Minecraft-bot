@@ -36,6 +36,12 @@ describe('storageMemory', () => {
     assert.equal(assignments.enchanted_book, '-181,72,-351');
   });
 
+  it('beetroot (hasil panen, BUKAN beetroot_seeds) HARUS punya rumah baku - ditemukan dari bug live nyata: "kenapa farming workernya tidak bisa menaruh barangnya di peti" - beetroot_seeds sudah punya rumah (SEEDS_CHEST) tapi beetroot sendiri TIDAK PERNAH terdaftar di mana pun, jadi setiap kali dipanen selalu jatuh ke live-scan findMatchingChest yang TIDAK PERNAH berhasil (tidak ada chest yang PERNAH berisi beetroot untuk dicocokkan - ayam-telur), menumpuk sampai 800+ beetroot di tas tanpa pernah tersetor', () => {
+    const assignments = storageMemory.getSharedChestAssignments();
+    assert.ok(assignments.beetroot, 'beetroot harus punya rumah baku, bukan undefined');
+    assert.notEqual(assignments.beetroot, assignments.beetroot_seeds, 'beetroot (hasil panen) dan beetroot_seeds (benih) harus punya rumah TERPISAH, seperti wheat vs wheat_seeds');
+  });
+
   it('getSharedChestAssignments() harus MENGGABUNGKAN memori yang sudah dipelajari dari disk (item yang belum punya rumah baku) dengan rumah baku - permintaan nyata pemilik: worker lain harus bisa memakai memori yang SAMA persis dengan yang dipakai StorageWorker', () => {
     fs.writeFileSync(tmpFile, JSON.stringify({ some_modded_item: '-181,74,-345' }));
     const assignments = storageMemory.getSharedChestAssignments();

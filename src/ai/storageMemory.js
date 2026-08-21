@@ -163,8 +163,14 @@ const UTILITY_BLOCKS_CHEST = '-181,73,-345';
 
 const DIRT_SAND_CHEST = '-181,74,-352';
 const POTATO_CHEST = '-181,74,-350';
-// y74,-349 SENGAJA dibiarkan tanpa kategori baku - isinya kecil dan sudah ditangani kategori lain,
-// jadi slot ini jadi ruang cadangan alami untuk kategori manapun yang kehabisan tempat.
+// y74,-349 dulu sengaja dibiarkan sebagai ruang cadangan - sekarang dipakai untuk beetroot
+// (hasil panen, BUKAN beetroot_seeds yang sudah punya rumah sendiri di SEEDS_CHEST) - ditemukan
+// dari bug live nyata: "kenapa farming workernya tidak bisa menaruh barangnya di peti". beetroot
+// TIDAK PERNAH terdaftar di mana pun sebelumnya, jadi setiap kali dipanen selalu jatuh ke live-
+// scan findMatchingChest yang TIDAK PERNAH berhasil (tidak ada chest yang PERNAH berisi beetroot
+// untuk dicocokkan - masalah ayam-telur) - menumpuk sampai 800+ beetroot di tas tanpa pernah
+// tersetor, ikut menyumbat slot inventaris sehingga item lain juga tidak sempat kebagian giliran.
+const BEETROOT_CHEST = '-181,74,-349';
 const LOGS_CHEST = '-181,74,-347';
 const RARE_DROPS_CHEST = '-181,74,-345';
 
@@ -206,6 +212,7 @@ const CHEST_CATEGORIES = [
   { pos: UTILITY_BLOCKS_CHEST, label: 'Blok Utilitas' },
   { pos: DIRT_SAND_CHEST, label: 'Tanah & Pasir' },
   { pos: POTATO_CHEST, label: 'Kentang' },
+  { pos: BEETROOT_CHEST, label: 'Beetroot' },
   { pos: LOGS_CHEST, label: 'Kayu Gelondongan (Log)' },
   { pos: RARE_DROPS_CHEST, label: 'Drop Langka' }
 ];
@@ -345,6 +352,7 @@ const CANONICAL_GEAR_ASSIGNMENTS = {
 
   // Hasil panen utama - masing-masing chest sendiri, dikunci eksplisit supaya tidak nyasar lagi
   wheat: WHEAT_CHEST, carrot: CARROT_CHEST, potato: POTATO_CHEST, poisonous_potato: POTATO_CHEST,
+  beetroot: BEETROOT_CHEST,
 
   // Dirt/sand/gravel bulk
   dirt: DIRT_SAND_CHEST, grass_block: DIRT_SAND_CHEST,
