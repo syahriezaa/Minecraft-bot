@@ -95,10 +95,19 @@ class FakeRoleAdapter {
   }
   async withdrawFromChest(pos, itemNames, count) {
     this.actions.push({ type: 'withdrawFromChest', position: pos, itemNames, count });
+    // Meniru perilaku mineflayer sungguhan: chest.withdraw() MELEMPAR error kalau inventaris
+    // bot benar-benar penuh, bukan mengembalikan {withdrawn:0} dengan tenang - dipakai untuk
+    // membuktikan tick() tidak boleh macet/crash kalau ini terjadi di tengah proses perbaikan.
+    if (this.freeSlots !== undefined && this.freeSlots <= 0) {
+      throw new Error('Unable to withdraw, Bot inventory is full');
+    }
     const matchedName = itemNames.find((name) => (this.withdrawStock?.[name] || 0) > 0);
     const take = matchedName ? this.withdrawStock[matchedName] : 0;
     if (take > 0) this.items.set(matchedName, (this.items.get(matchedName) || 0) + take);
     return { withdrawn: take };
+  }
+  getInventoryFreeSlotCount() {
+    return this.freeSlots ?? Infinity;
   }
   async tillFarmland(pos) {
     this.actions.push({ type: 'tillFarmland', position: pos });
@@ -422,6 +431,26 @@ describe('FarmerEngine', () => {
       const candidates = engine.findRepairCandidates();
 
       assert.equal(candidates.length, 0, 'water TIDAK BOLEH pernah dianggap kandidat perbaikan');
+    });
+
+    it('kalau inventaris bot BENAR-BENAR PENUH (tidak ada slot bebas sama sekali) dan repair butuh mengambil cangkul/dirt dari gudang, JANGAN coba mengambil apapun (chest.withdraw sungguhan MELEMPAR error "inventory is full", bukan gagal dengan tenang) - ditemukan dari bug live nyata: "farmer worker nya tidak click apa apa" - setiap tick attemptRepair melempar exception SEBELUM sempat sampai ke langkah deposit, jadi tick() selalu gagal total dan bot macet total, tidak pernah menaruh apapun ke gudang walau itu justru yang seharusnya terjadi duluan', async () => {
+      const adapter = new FakeRoleAdapter({
+        blocks: [
+          { name: 'farmland', position: { x: 0, y: 63, z: 0 } },
+          { name: 'dirt', position: { x: 1, y: 63, z: 0 } },
+          { name: 'stone', position: { x: -1, y: 63, z: 0 } },
+          { name: 'stone', position: { x: 0, y: 63, z: 1 } },
+          { name: 'stone', position: { x: 0, y: 63, z: -1 } }
+        ]
+      });
+      adapter.freeSlots = 0; // inventaris benar-benar penuh - persis situasi bug live nyata
+      const engine = new FarmerEngine({
+        adapter,
+        sharedChestAssignments: { iron_hoe: '-181,71,-348' }
+      });
+
+      await assert.doesNotReject(() => engine.tick(), 'tick() TIDAK BOLEH melempar/crash walau inventaris penuh saat repair butuh mengambil sesuatu');
+      assert.ok(!adapter.actions.some((a) => a.type === 'withdrawFromChest'), 'tidak boleh bahkan MENCOBA mengambil apapun kalau jelas-jelas tidak ada tempat untuk menaruhnya');
     });
   });
 });

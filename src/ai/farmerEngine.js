@@ -202,19 +202,36 @@ class FarmerEngine extends EventEmitter {
   // lewat jenis APAPUN yang sudah dikenal memori bersama (semuanya mengarah ke chest perkakas yang
   // sama); tanpa memori bersama (belum di-set), tidak ada yang bisa diambil - repair menunggu
   // sampai bot kebetulan sudah membawa sendiri.
+  //
+  // Kalau inventaris BENAR-BENAR PENUH (0 slot bebas), JANGAN sekalipun mencoba withdraw - chest
+  // sungguhan (mineflayer) MELEMPAR error "inventory is full", bukan gagal dengan tenang. Try/catch
+  // di sini jaga-jaga TAMBAHAN (mis. penuh SETELAH cek awal, atau alasan gagal lain) supaya
+  // exception ini TIDAK PERNAH merembet sampai ke tick() - ditemukan dari bug live nyata: "farmer
+  // worker nya tidak click apa apa" - dulu exception ini melempar SEBELUM sempat sampai ke langkah
+  // deposit (autoMatchStorage), jadi setiap tick gagal total dan bot macet PERMANEN: tidak pernah
+  // menaruh apapun ke gudang padahal itu justru satu-satunya jalan keluar dari inventaris penuh.
   async fetchRepairSupplies(needHoe, needDirt) {
+    if (this.adapter.getInventoryFreeSlotCount() <= 0) return false;
     if (needHoe) {
       const hoeKey = HOE_NAMES.find(name => this.options.sharedChestAssignments?.[name]);
       if (hoeKey) {
         const pos = parseChestPositionKey(this.options.sharedChestAssignments[hoeKey]);
-        await this.adapter.withdrawFromChest(pos, HOE_NAMES, 1);
+        try {
+          await this.adapter.withdrawFromChest(pos, HOE_NAMES, 1);
+        } catch (e) {
+          this.emit('repairError', { step: 'fetchHoe', error: e.message });
+        }
       }
     }
     if (needDirt) {
       const dirtKey = this.options.sharedChestAssignments?.dirt;
       if (dirtKey) {
         const pos = parseChestPositionKey(dirtKey);
-        await this.adapter.withdrawFromChest(pos, ['dirt'], 64);
+        try {
+          await this.adapter.withdrawFromChest(pos, ['dirt'], 64);
+        } catch (e) {
+          this.emit('repairError', { step: 'fetchDirt', error: e.message });
+        }
       }
     }
     const hoeOk = !needHoe || this.adapter.hasItem(HOE_NAMES);
