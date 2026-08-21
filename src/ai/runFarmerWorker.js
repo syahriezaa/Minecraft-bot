@@ -29,7 +29,7 @@ const { walkToBase } = require('./walkToBase');
 // Dulu FarmerWorker terpaksa menebak lewat pemindaian chest satu-satu (findMatchingChest) setiap
 // kali mau menyimpan/mengambil barang - sekarang pakai memori yang SAMA persis dengan yang
 // dipakai StorageWorker untuk merapikan gudang.
-const { getSharedChestAssignments, parseChestPositionKey, OVERFLOW_CHESTS } = require('./storageMemory');
+const { getSharedChestAssignments, parseChestPositionKey, OVERFLOW_CHESTS, COMPOSTER_POSITIONS } = require('./storageMemory');
 
 const TICK_INTERVAL_MS = Number(process.env.FARMER_TICK_MS) || 2000;
 // Base sungguhan pemilik (dikoreksi live sesi ini - lihat commit sebelumnya, -175,71,-325 lama
@@ -154,6 +154,9 @@ function startFarmerWorker({ host, port, botName, scanRadius = 32, baseGoal = DE
       // terus", health sempat 2.8/20 sambil bot terus lanjut panen/tanam/perbaikan tanpa henti
       // (FarmerEngine dulu cuma cek food, sama sekali tidak cek health mentah).
       retreatPosition: baseGoal,
+      // Buang kelebihan seed/kentang ke composter gudang - permintaan nyata pemilik: "aku baru
+      // menaruh komposer di gudang mungkin jika makanan terlalu banyak buat kompser saja".
+      composterPositions: COMPOSTER_POSITIONS.map(parseChestPositionKey),
       harvestBatchSize: Number(process.env.FARM_HARVEST_BATCH) || 16,
       plantBatchSize: Number(process.env.FARM_PLANT_BATCH) || 16
     });
@@ -196,6 +199,7 @@ function startFarmerWorker({ host, port, botName, scanRadius = 32, baseGoal = DE
       try {
         const farmResult = await engine.tick();
         if (farmResult.action === 'deposit') log(`Simpan ${farmResult.count} item ke gudang.`);
+        if (farmResult.action === 'compost') log(`Kompos 1x ${farmResult.item} (kelebihan) ke composter.`);
         if (farmResult.action === 'retreat') log(`PERINGATAN: health kritis - mundur ke base.`);
         if (farmResult.action !== 'idle') lastAction = farmResult.action.toUpperCase();
       } catch (e) {

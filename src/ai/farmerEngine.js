@@ -80,6 +80,13 @@ class FarmerEngine extends EventEmitter {
       // tidak pernah menyelamatkan diri walau nyaris mati. Pola sama seperti retreat MobFarmEngine.
       retreatHealth: 6,
       retreatPosition: null,
+      // Buang kelebihan seed/kentang ke composter - permintaan nyata pemilik: "aku baru menaruh
+      // komposer di gudang mungkin jika makanan terlalu banyak buat kompser saja". Default kosong
+      // (fitur mati sampai posisi composter sungguhan diberikan lewat options) - poisonous_potato
+      // SENGAJA masuk daftar (bukan makanan, bukan benih, murni sampah yang menumpuk di POTATO_CHEST).
+      composterPositions: [],
+      compostItemNames: ['wheat_seeds', 'beetroot_seeds', 'melon_seeds', 'pumpkin_seeds', 'potato', 'poisonous_potato'],
+      compostThreshold: 128,
       // Perbaiki lahan farming yang rusak (dirt/grass yang belum dicangkul, atau lubang) di
       // PINGGIRAN farmland yang sudah ada - permintaan nyata pemilik: "farming bot harus bisa
       // memperbaiki tempat farming jadi bawa dirt dan hoe dari gudang". Cangkul & dirt diambil
@@ -408,6 +415,26 @@ class FarmerEngine extends EventEmitter {
         // panen/tanam/setor) atau cuma kebetulan makan sekali lalu lanjut kerja normal.
         this.emit('ate', { foodBefore, foodAfter: this.adapter.getFood() });
         return { action: 'eat' };
+      }
+    }
+
+    // Kompos item yang benar-benar berlebihan (wheat_seeds/beetroot_seeds/potato dst) - permintaan
+    // nyata pemilik: "aku baru menaruh komposer di gudang mungkin jika makanan terlalu banyak buat
+    // kompser saja". SATU unit per tick (feedComposter cuma klik kanan sekali, persis composter
+    // sungguhan yang naik satu level per klik) - dicek SEBELUM deposit-when-full supaya kelebihan
+    // benar-benar terkuras pelan-pelan, bukan menumpuk terus di gudang yang sudah sesak.
+    if (this.options.composterPositions?.length > 0) {
+      const items = this.adapter.getInventoryItems();
+      const excess = this.options.compostItemNames
+        .map((name) => ({ name, count: items.filter((i) => i.name === name).reduce((s, i) => s + (i.count || 1), 0) }))
+        .find((entry) => entry.count > this.options.compostThreshold);
+      if (excess) {
+        const fed = await this.adapter.feedComposter(this.options.composterPositions[0], [excess.name]);
+        if (fed) {
+          this.metrics.composted = (this.metrics.composted || 0) + 1;
+          this.emit('composted', { item: excess.name });
+          return { action: 'compost', item: excess.name };
+        }
       }
     }
 

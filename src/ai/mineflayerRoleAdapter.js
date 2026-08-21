@@ -186,6 +186,22 @@ class MineflayerRoleAdapter {
   // kanan (activateBlock, PERSIS mekanisme yang sama dipakai setSpawnAtNearestBed untuk klik bed)
   // blok dirt/grass_block itu - Minecraft otomatis mengubahnya jadi farmland kalau ada ruang
   // kosong di atasnya, tidak perlu logika tambahan apapun.
+  // Masukkan SATU item ke composter (klik kanan sekali = satu unit kompos) - permintaan nyata
+  // pemilik: "aku baru menaruh komposer di gudang mungkin jika makanan terlalu banyak buat
+  // kompser saja". Sengaja SATU unit per panggilan (bukan spam berkali-kali sekaligus) - composter
+  // sungguhan cuma naik satu level per klik, dan kita tidak mau membanjiri satu composter dengan
+  // seluruh isi tas dalam satu tick (biarkan FarmerEngine yang atur berapa kali panggil per tick).
+  async feedComposter(pos, itemNames) {
+    if (!pos || typeof this.bot?.activateBlock !== 'function') return false;
+    const equipped = await this.equipItem(itemNames, 'hand');
+    if (!equipped) return false;
+    await this.navigateNear(pos, 3);
+    const block = this.blockAt(pos);
+    if (!block) return false;
+    await this.bot.activateBlock(block);
+    return true;
+  }
+
   async tillFarmland(pos) {
     if (!pos || typeof this.bot?.activateBlock !== 'function') return false;
     const equipped = await this.equipItem(HOE_NAMES, 'hand');

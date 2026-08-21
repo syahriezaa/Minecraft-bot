@@ -199,6 +199,10 @@ const STONE_COBBLE_OVERFLOW_3_CHEST = '-181,73,-346';
 const STONE_COBBLE_OVERFLOW_4_CHEST = '-181,72,-346'; // dulu WHEAT_OVERFLOW_CHEST
 const STONE_COBBLE_OVERFLOW_5_CHEST = '-181,74,-348'; // dulu FARMING_BYPRODUCTS_OVERFLOW_CHEST
 const BEETROOT_OVERFLOW_CHEST = '-181,74,-346';
+// Composter yang ditaruh pemilik langsung di gudang - permintaan nyata pemilik: "aku baru
+// menaruh komposer di gudang mungkin jika makanan terlalu banyak buat kompser saja". Dikonfirmasi
+// live lewat query-blocks (bisection, bukan tebakan): DUA composter bersebelahan.
+const COMPOSTER_POSITIONS = ['-188,71,-345', '-188,71,-344'];
 const ARMOR_OVERFLOW_CHEST = '-180,71,-351'; // barrel
 const TOOLS_OVERFLOW_CHEST = '-180,71,-348'; // barrel
 const TRINKETS_OVERFLOW_CHEST = '-180,71,-346'; // barrel
@@ -481,5 +485,6 @@ module.exports = {
   getSharedChestAssignments,
   parseChestPositionKey,
   TOOLS_CHEST,
-  WEAPONS_CHEST
+  WEAPONS_CHEST,
+  COMPOSTER_POSITIONS
 };

@@ -78,6 +78,13 @@ class FakeRoleAdapter {
     this.food = 20;
     return this.hasItem(['bread', 'cooked_beef', 'steak', 'apple', 'carrot']);
   }
+  async feedComposter(pos, itemNames) {
+    this.actions.push({ type: 'feedComposter', position: pos, itemNames });
+    const name = itemNames.find((n) => (this.items.get(n) || 0) > 0);
+    if (!name) return false;
+    this.items.set(name, this.items.get(name) - 1);
+    return true;
+  }
   activateShield() {
     this.actions.push({ type: 'shield' });
     return true;
@@ -192,6 +199,37 @@ describe('FarmerEngine', () => {
     assert.ok(ateEvent, 'harus emit event "ate"');
     assert.equal(ateEvent.foodBefore, 5);
     assert.equal(ateEvent.foodAfter, 20, 'food SESUDAH makan harus dicatat, supaya bisa dibuktikan apakah benar-benar naik atau tidak');
+  });
+
+  it('KOMPOS: kalau item yang bisa dikompos (wheat_seeds dst) di tas melebihi compostThreshold, harus masukkan SATU unit ke composter - permintaan nyata pemilik: "aku baru menaruh komposer di gudang mungkin jika makanan terlalu banyak buat kompser saja"', async () => {
+    const adapter = new FakeRoleAdapter({ items: { wheat_seeds: 200 } });
+    const engine = new FarmerEngine({
+      adapter,
+      composterPositions: [{ x: -188, y: 71, z: -345 }],
+      compostThreshold: 128
+    });
+
+    const result = await engine.tick();
+
+    assert.equal(result.action, 'compost');
+    assert.equal(result.item, 'wheat_seeds');
+    assert.ok(adapter.actions.some((a) => a.type === 'feedComposter'), 'harus benar-benar memanggil feedComposter, bukan cuma melapor');
+  });
+
+  it('KOMPOS: kalau item compostable MASIH DI BAWAH compostThreshold, jangan kompos - urutan kerja normal (panen dll) tetap berlaku', async () => {
+    const adapter = new FakeRoleAdapter({
+      items: { wheat_seeds: 10 },
+      blocks: [{ name: 'wheat', properties: { age: 7 }, position: { x: 1, y: 64, z: 0 } }]
+    });
+    const engine = new FarmerEngine({
+      adapter,
+      composterPositions: [{ x: -188, y: 71, z: -345 }],
+      compostThreshold: 128
+    });
+
+    const result = await engine.tick();
+
+    assert.notEqual(result.action, 'compost');
   });
 
   it('harus memanen crop matang dan mengabaikan crop muda', async () => {
