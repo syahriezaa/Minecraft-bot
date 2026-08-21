@@ -39,6 +39,15 @@ const DEFAULT_BASE_GOAL = { x: -185, y: 71, z: -352 };
 // (bukan diam persis di satu blok) supaya tetap menjangkau ruangan spawner walau koordinat pastinya
 // meleset beberapa blok.
 const DEFAULT_SPAWNER_GOAL = { x: -256, y: -20, z: -432 };
+// Pintu masuk sungguhan ke ruangan spawner, diberikan langsung oleh pemilik setelah percobaan
+// pertama gagal total mencari rute ("Bot gagal total mencari rute jalan kaki ke (-256,-20,-432)" -
+// spawner-nya ada di y=-20, jauh di bawah tanah, TIDAK bisa dicapai langsung dari permukaan tanpa
+// menggali karena bot ini sengaja tidak boleh menggali/canDig:false, sama seperti bot lain).
+// Pemilik: "kamu pergi kesekitar -250,67,-434 disitu ada jalan masuk kamu coba cari" - dekat
+// permukaan (y=67), jauh lebih mungkin terjangkau jalan kaki biasa. Bot singgah di sini DULU
+// sebelum lanjut turun ke titik spawner sungguhan - jarak dari pintu masuk ke spawner jauh lebih
+// pendek (dan sudah lewat jalur/lorong yang ada) daripada langsung dari base.
+const DEFAULT_ENTRANCE_GOAL = { x: -250, y: 67, z: -434 };
 const DEFAULT_LOOT_SCAN_RADIUS = 16;
 
 function buildMovements(bot) {
@@ -56,6 +65,7 @@ function startMobFarmWorker({
   host, port, botName,
   scanRadius = 16,
   baseGoal = DEFAULT_BASE_GOAL,
+  entranceGoal = DEFAULT_ENTRANCE_GOAL,
   spawnerGoal = DEFAULT_SPAWNER_GOAL,
   lootScanRadius = DEFAULT_LOOT_SCAN_RADIUS,
   log = (m) => console.log(m),
@@ -103,29 +113,46 @@ function startMobFarmWorker({
       }
     }
 
-    log(`Berjalan ke spawner (${spawnerGoal.x}, ${spawnerGoal.y}, ${spawnerGoal.z})...`);
-    const walkToSpawnerResult = await walkToBase({ bot, goal: spawnerGoal, range: 4, settleMs: 3000, log });
-    if (!walkToSpawnerResult.success) {
-      log(`PERINGATAN: gagal berjalan ke spawner (${walkToSpawnerResult.reason}) - tetap mulai berburu dari posisi sekarang, mungkin belum sampai.`);
+    // Percobaan pertama (langsung ke spawnerGoal di y=-20) GAGAL TOTAL live - jauh di bawah
+    // tanah, tidak terjangkau jalan kaki tanpa menggali (bot ini sengaja tidak boleh menggali).
+    // Pemilik kasih pintu masuk sungguhan dekat permukaan: "kamu pergi kesekitar -250,67,-434
+    // disitu ada jalan masuk kamu coba cari" - singgah di sini DULU, baru lanjut turun ke titik
+    // spawner sungguhan (jarak dari pintu masuk jauh lebih pendek & lewat lorong yang sudah ada).
+    log(`Berjalan ke pintu masuk spawner (${entranceGoal.x}, ${entranceGoal.y}, ${entranceGoal.z})...`);
+    const walkToEntranceResult = await walkToBase({ bot, goal: entranceGoal, range: 4, settleMs: 3000, log });
+    let reachedSpawnerArea = false;
+    if (!walkToEntranceResult.success) {
+      log(`PERINGATAN: gagal berjalan ke pintu masuk spawner (${walkToEntranceResult.reason}) - tetap coba lanjut turun ke spawner dari posisi sekarang.`);
+    } else {
+      log('Sampai di pintu masuk spawner - lanjut turun ke titik spawner sungguhan.');
+      bot.pathfinder.setMovements(buildMovements(bot));
+      const walkToSpawnerResult = await walkToBase({ bot, goal: spawnerGoal, range: 4, settleMs: 3000, log });
+      reachedSpawnerArea = walkToSpawnerResult.success;
+      if (!walkToSpawnerResult.success) {
+        log(`PERINGATAN: sudah di pintu masuk tapi tetap gagal turun ke spawner (${walkToSpawnerResult.reason}) - berburu dari sekitar pintu masuk saja.`);
+      }
     }
     bot.pathfinder.setMovements(buildMovements(bot));
 
-    // Patroli kecil di sekitar titik spawner (bukan diam di satu blok persis) - koordinat dari
-    // pemilik "kurang lebih" pas, patroli ini menjangkau ruangan spawner walau meleset beberapa blok.
+    // Kalau BERHASIL turun ke titik spawner sungguhan, patroli di sekitar SITU (koordinat pemilik
+    // "kurang lebih" pas, patroli menjangkau ruangan walau meleset beberapa blok). Kalau TIDAK,
+    // patroli di sekitar pintu masuk saja - lebih aman daripada memaksa ke titik yang terbukti
+    // tidak terjangkau (bot akan tetap coba lagi tiap tick tanpa kemajuan kalau dipaksakan).
+    const huntCenter = reachedSpawnerArea ? spawnerGoal : entranceGoal;
     const patrolWaypoints = [
-      { x: spawnerGoal.x + 4, y: spawnerGoal.y, z: spawnerGoal.z },
-      { x: spawnerGoal.x, y: spawnerGoal.y, z: spawnerGoal.z + 4 },
-      { x: spawnerGoal.x - 4, y: spawnerGoal.y, z: spawnerGoal.z },
-      { x: spawnerGoal.x, y: spawnerGoal.y, z: spawnerGoal.z - 4 }
+      { x: huntCenter.x + 4, y: huntCenter.y, z: huntCenter.z },
+      { x: huntCenter.x, y: huntCenter.y, z: huntCenter.z + 4 },
+      { x: huntCenter.x - 4, y: huntCenter.y, z: huntCenter.z },
+      { x: huntCenter.x, y: huntCenter.y, z: huntCenter.z - 4 }
     ];
 
     combatEngine = new MobFarmEngine({
       adapter,
       scanRadius,
       patrolWaypoints,
-      // Mundur ke TITIK SPAWNER ITU SENDIRI (bukan base yang 300+ blok jauhnya, tidak realistis
+      // Mundur ke TITIK BERBURU ITU SENDIRI (bukan base yang 300+ blok jauhnya, tidak realistis
       // untuk mundur darurat) - cukup aman sebagai jeda sesaat sebelum lanjut bertarung lagi.
-      retreatPosition: spawnerGoal
+      retreatPosition: huntCenter
     });
     combatEngine.on('attacked', ({ target }) => log(`Menyerang ${target.name || target.type}`));
 
