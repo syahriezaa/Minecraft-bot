@@ -431,17 +431,26 @@ class StorageManagerEngine extends EventEmitter {
         // puluhan tick bolak-balik (kalah prioritas sama deliver/collect tiap kali), progresnya
         // jadi sangat lambat. Bot sudah berdiri di sini - sekalian ambil semuanya.
         await this.adapter.navigateNear(westOf(nextToInspect), 1);
+        // SATU kali buka-tutup untuk SEMUA item salah tempat di chest ini - dulu satu buka-tutup
+        // PER jenis item (withdrawFromChest berulang), yang untuk chest berantakan (mis. 8 jenis
+        // salah tempat) berarti 8 kali navigasi+buka+jeda settle terpisah - ditemukan dari
+        // keluhan nyata pemilik ("kok lama ya apa setiap kali membuka peti tidak selalu membaca
+        // data") - jawabannya iya selalu membaca, tapi PROSESNYA sendiri lambat karena buka-tutup
+        // berulang yang sebenarnya tidak perlu.
+        const withdrawResults = await this.adapter.withdrawManyFromChest(
+          nextToInspect,
+          misplacedItems.map((item) => ({ name: item.name, count: item.count }))
+        );
         const relocated = [];
-        for (const item of misplacedItems) {
-          const result = await this.adapter.withdrawFromChest(nextToInspect, [item.name], item.count);
+        for (const result of withdrawResults) {
           if (result.withdrawn <= 0) continue;
           this.metrics.reorganized += result.withdrawn;
-          relocated.push({ name: item.name, count: result.withdrawn });
+          relocated.push({ name: result.name, count: result.withdrawn });
           this.emit('misplaced', {
             position: nextToInspect,
-            item: item.name,
+            item: result.name,
             count: result.withdrawn,
-            correctPosition: parseKey(this.chestAssignments.get(item.name))
+            correctPosition: parseKey(this.chestAssignments.get(result.name))
           });
         }
         // JANGAN tandai chest ini "sudah diperiksa" - periksa ulang tick berikutnya untuk

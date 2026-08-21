@@ -78,6 +78,26 @@ class FakeStorageAdapter {
     return { withdrawn: take };
   }
 
+  // Ambil beberapa jenis item sekaligus dalam SATU "kunjungan" (satu entri di this.actions) -
+  // dipakai untuk mengetes bahwa StorageManagerEngine benar-benar buka chest SEKALI SAJA untuk
+  // membersihkan semua item salah tempat, bukan sekali per jenis.
+  async withdrawManyFromChest(pos, requests) {
+    this.actions.push({ type: 'withdrawMany', position: pos, requests });
+    const chest = this.chests[`${pos.x},${pos.y},${pos.z}`];
+    if (!chest) return requests.map((r) => ({ name: r.name, withdrawn: 0 }));
+    const results = [];
+    for (const { name, count } of requests) {
+      const match = chest.items.find((it) => it.name === name);
+      if (!match) { results.push({ name, withdrawn: 0 }); continue; }
+      const take = Math.min(count, match.count);
+      this.inventory.set(match.name, (this.inventory.get(match.name) || 0) + take);
+      match.count -= take;
+      results.push({ name, withdrawn: take });
+    }
+    chest.items = chest.items.filter((it) => it.count > 0);
+    return results;
+  }
+
   // blockType per posisi chest (default 'chest') - dipakai canonicalKeyFor untuk membedakan chest
   // (bisa gabung jadi double-chest) dari barrel (SELALU wadah tunggal, tidak pernah gabung).
   blockAt(pos) {

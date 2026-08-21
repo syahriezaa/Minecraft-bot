@@ -160,6 +160,71 @@ describe('MineflayerRoleAdapter.withdrawFromChest - ambil item dari chest gudang
   });
 });
 
+describe('MineflayerRoleAdapter.withdrawManyFromChest - ambil BEBERAPA jenis item sekaligus dalam SATU kali buka-tutup chest', () => {
+  it('harus buka chest SEKALI SAJA (bukan sekali per jenis item) untuk menarik banyak jenis item salah tempat sekaligus - ditemukan dari keluhan nyata pemilik ("kok lama ya"): chest dengan banyak barang salah tempat butuh 1 buka-tutup PER jenis kalau pakai withdrawFromChest berulang, padahal semuanya bisa diambil dalam satu kunjungan yang sama', async () => {
+    const openCalls = [];
+    const closeCalls = [];
+    const withdrawCalls = [];
+    const bot = {
+      entity: { position: { x: 0, y: 64, z: 0 } },
+      pathfinder: { goto: async () => {} },
+      blockAt: () => ({ name: 'chest', position: { x: 5, y: 64, z: 5 } }),
+      openChest: async () => {
+        openCalls.push(true);
+        return {
+          containerItems: () => [
+            { name: 'iron_ingot', type: 42, metadata: 0, count: 20 },
+            { name: 'redstone', type: 43, metadata: 0, count: 15 },
+            { name: 'gold_nugget', type: 44, metadata: 0, count: 3 }
+          ],
+          withdraw: async (type, metadata, count) => { withdrawCalls.push({ type, metadata, count }); },
+          close: () => closeCalls.push(true)
+        };
+      }
+    };
+    const adapter = new MineflayerRoleAdapter(bot);
+
+    const result = await adapter.withdrawManyFromChest({ x: 5, y: 64, z: 5 }, [
+      { name: 'iron_ingot', count: 20 },
+      { name: 'redstone', count: 15 },
+      { name: 'gold_nugget', count: 3 }
+    ]);
+
+    assert.equal(openCalls.length, 1, 'chest cuma boleh dibuka SEKALI untuk semua item, bukan sekali per jenis');
+    assert.equal(closeCalls.length, 1);
+    assert.equal(withdrawCalls.length, 3);
+    assert.deepEqual(result, [
+      { name: 'iron_ingot', withdrawn: 20 },
+      { name: 'redstone', withdrawn: 15 },
+      { name: 'gold_nugget', withdrawn: 3 }
+    ]);
+  });
+
+  it('kalau salah satu jenis item ternyata sudah tidak ada di chest (mis. sudah diambil lebih dulu), lewati saja tanpa menggagalkan jenis lain', async () => {
+    const bot = {
+      entity: { position: { x: 0, y: 64, z: 0 } },
+      pathfinder: { goto: async () => {} },
+      blockAt: () => ({ name: 'chest', position: { x: 5, y: 64, z: 5 } }),
+      openChest: async () => ({
+        containerItems: () => [{ name: 'iron_ingot', type: 42, metadata: 0, count: 20 }],
+        withdraw: async () => {},
+        close: () => {}
+      })
+    };
+    const adapter = new MineflayerRoleAdapter(bot);
+
+    const result = await adapter.withdrawManyFromChest({ x: 5, y: 64, z: 5 }, [
+      { name: 'iron_ingot', count: 20 },
+      { name: 'redstone', count: 15 }
+    ]);
+
+    assert.deepEqual(result, [
+      { name: 'iron_ingot', withdrawn: 20 },
+      { name: 'redstone', withdrawn: 0 }
+    ]);
+  });
+});
+
 describe('MineflayerRoleAdapter.craftItem - buat item lewat crafting table terdekat', () => {
   it('harus mencari crafting_table terdekat, ambil resep pertama yang tersedia, lalu craft sejumlah count', async () => {
     const craftCalls = [];

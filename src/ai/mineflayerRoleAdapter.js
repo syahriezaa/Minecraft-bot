@@ -425,6 +425,35 @@ class MineflayerRoleAdapter {
     };
   }
 
+  // Ambil BEBERAPA jenis item sekaligus dari chest gudang dalam SATU kali buka-tutup - dipakai
+  // StorageManagerEngine untuk menarik SEMUA item salah tempat di satu chest sekaligus. Beda dari
+  // withdrawFromChest (yang buka-tutup chest SENDIRI-SENDIRI per jenis item) - ditemukan dari
+  // keluhan nyata pemilik ("kok lama ya"): chest dengan banyak item salah tempat (mis. 8 jenis)
+  // butuh 8 kali buka-tutup terpisah kalau dipanggil satu-satu, padahal semuanya bisa diambil
+  // dalam SATU kunjungan yang sama - tiap buka-tutup butuh navigasi + jeda settle sendiri,
+  // membuat pembersihan satu chest yang berantakan makan waktu jauh lebih lama dari perlu.
+  async withdrawManyFromChest(pos, requests) {
+    const chest = await this.openChestAt(pos);
+    if (!chest) return requests.map((r) => ({ name: r.name, withdrawn: 0 }));
+    const results = [];
+    try {
+      for (const { name, count } of requests) {
+        const items = chest.containerItems();
+        const match = items.find((it) => it.name === name);
+        if (match && typeof chest.withdraw === 'function') {
+          const take = Math.min(count, match.count);
+          await chest.withdraw(match.type, match.metadata ?? null, take);
+          results.push({ name, withdrawn: take });
+        } else {
+          results.push({ name, withdrawn: 0 });
+        }
+      }
+    } finally {
+      if (typeof chest.close === 'function') chest.close();
+    }
+    return results;
+  }
+
   // Ambil item dari chest gudang ke inventaris - kebalikan dari depositToChest.
   async withdrawFromChest(pos, itemNames, count) {
     const chest = await this.openChestAt(pos);
