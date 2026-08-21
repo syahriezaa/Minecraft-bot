@@ -56,18 +56,25 @@ function saveAssignments(assignments, log) {
 // SUDAH diproses (ingot/blok/permata); chest "Bijih Mentah" (y73,z-353) untuk bijih mentah/redstone.
 const PROCESSED_ORE_CHEST = '-181,74,-353';
 const RAW_ORE_CHEST = '-181,73,-353';
+// Cadangan untuk ore/ingot - chest utama juga kronis penuh (banyak jenis, tumpukan besar) persis
+// pola yang sama dengan drop mob/benih/batu - ditemukan dari keluhan nyata pemilik: diamond &
+// iron_ingot berhenti total terkirim (bukan lagi gara-gara brokenPositions yang sudah diperbaiki,
+// tapi genuinely chest utama penuh). Pakai slot y74,-344 yang sengaja dibiarkan bebas sebelumnya.
+const PROCESSED_ORE_OVERFLOW_CHEST = '-181,74,-344';
 const CANONICAL_ORE_INGOT_ASSIGNMENTS = {
+  // Item bervolume tertinggi tetap di chest utama.
   coal: PROCESSED_ORE_CHEST,
   coal_block: PROCESSED_ORE_CHEST,
   iron_ingot: PROCESSED_ORE_CHEST,
   iron_block: PROCESSED_ORE_CHEST,
-  copper_ingot: PROCESSED_ORE_CHEST,
-  waxed_copper_block: PROCESSED_ORE_CHEST,
-  lapis_lazuli: PROCESSED_ORE_CHEST,
-  diamond: PROCESSED_ORE_CHEST,
-  gold_ingot: PROCESSED_ORE_CHEST,
-  emerald_block: PROCESSED_ORE_CHEST,
-  netherite_ingot: PROCESSED_ORE_CHEST,
+  // Cadangan - jenis lain, dipisah supaya chest utama tidak kronis penuh.
+  copper_ingot: PROCESSED_ORE_OVERFLOW_CHEST,
+  waxed_copper_block: PROCESSED_ORE_OVERFLOW_CHEST,
+  lapis_lazuli: PROCESSED_ORE_OVERFLOW_CHEST,
+  diamond: PROCESSED_ORE_OVERFLOW_CHEST,
+  gold_ingot: PROCESSED_ORE_OVERFLOW_CHEST,
+  emerald_block: PROCESSED_ORE_OVERFLOW_CHEST,
+  netherite_ingot: PROCESSED_ORE_OVERFLOW_CHEST,
   redstone: RAW_ORE_CHEST,
   redstone_block: RAW_ORE_CHEST,
   raw_iron: RAW_ORE_CHEST,
