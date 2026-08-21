@@ -462,7 +462,10 @@ describe('StorageManagerEngine', () => {
 
     const result = await engine.tick();
 
-    assert.equal(result.action, 'idle', 'harus menyerah untuk tick ini (bukan malah dorong ke chest buku)');
+    // Menyerah untuk PENGANTARAN tick ini (tidak dipaksa ke chest buku) - tapi boleh (dan memang
+    // harus) lanjut mengerjakan hal lain seperti inspect selama menunggu (lihat tes "TOTAL
+    // PARALYSIS" di bawah), jadi actionnya BUKAN lagi mesti 'idle' persis.
+    assert.notEqual(result.action, 'deliver', 'harus menyerah untuk pengantaran tick ini (bukan malah dorong ke chest buku)');
     assert.equal(engine.getChestAssignments().dirt, '-181,74,-352', 'memori sortir dirt HARUS TETAP ke chest yang benar, tidak boleh tertimpa jadi chest buku');
     assert.ok(!booksChest.items.some((i) => i.name === 'dirt'), 'dirt tidak boleh nyasar ke chest buku');
   });
@@ -626,15 +629,27 @@ describe('StorageManagerEngine', () => {
     const first = await engine.tick(); // percobaan pertama - gagal, chest ditandai penuh
     assert.equal(first.action, 'deliver_failed');
 
-    // Beberapa tick berikutnya HARUS TETAP idle/gagal secara stabil - TIDAK BOLEH kembali mencoba
-    // chest yang sama lagi (itu berarti tandai-penuhnya sudah ke-reset sebelum waktunya).
+    // Tick BERIKUTNYA (langsung sesudahnya) TIDAK BOLEH mencoba chest yang sama lagi - itu berarti
+    // tandai-penuhnya ke-reset sebelum waktunya (persis bug 2-tick yang dilaporkan pemilik).
     const second = await engine.tick();
-    const third = await engine.tick();
-    const fourth = await engine.tick();
+    assert.notEqual(second.action, 'deliver_failed', 'kalau ini "deliver_failed" lagi PERSIS di tick berikutnya, berarti dia mencoba chest yang sama lagi - tandai-penuh ke-reset terlalu cepat');
+  });
 
-    for (const result of [second, third, fourth]) {
-      assert.notEqual(result.action, 'deliver_failed', 'kalau ini "deliver_failed" lagi, berarti dia mencoba chest yang sama lagi - tandai-penuh ke-reset terlalu cepat, persis bug yang dilaporkan');
-      assert.equal(result.action, 'idle');
-    }
+  it('TOTAL PARALYSIS: kalau item di tangan SAMA SEKALI tidak punya tujuan (rumahnya penuh, tanpa alternatif), engine HARUS tetap lanjut collect/inspect - JANGAN diam menunggu selamanya - ditemukan dari keluhan nyata pemilik: "storage worker hanya membuka-buka chest saja tidak memindahkan barang apapun" (versi lebih parah: bot berhenti TOTAL, tidak collect atau inspect apapun, gara-gara satu item di tangan yang buntu)', async () => {
+    const fullHome = { position: { x: -181, y: 71, z: -352 }, items: [{ name: 'cobblestone', count: 64 }] };
+    const outsideChest = { position: { x: -200, y: 64, z: -360 }, items: [{ name: 'oak_log', count: 5 }] };
+    const adapter = new FakeStorageAdapter({
+      chests: { '-181,71,-352': fullHome, '-200,64,-360': outsideChest },
+      inventory: { cobblestone: 31 }
+    });
+    adapter.depositToChest = async () => { throw new Error('destination full'); };
+    const engine = new StorageManagerEngine({ adapter, houseBounds: HOUSE_BOUNDS, initialAssignments: { cobblestone: '-181,71,-352' } });
+
+    await engine.tick(); // percobaan pertama - gagal, chest ditandai penuh
+    const second = await engine.tick();
+
+    // Item di tangan MASIH ada (tidak pernah terkirim) DAN masih tidak punya tujuan - tapi bot
+    // TIDAK BOLEH diam saja, harus lanjut kumpulkan chest luar yang tersedia.
+    assert.equal(second.action, 'collect', 'bot harus tetap produktif (collect chest luar) walau ada satu item buntu di tangan, bukan diam total menunggu');
   });
 });

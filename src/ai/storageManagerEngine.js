@@ -210,9 +210,11 @@ class StorageManagerEngine extends EventEmitter {
 
   async tick() {
     const carried = this.adapter.getInventoryItems();
+    if (carried.length > 0 && this.getInsideChestPositions().length === 0) {
+      return { action: 'idle', reason: 'no_house_chest' };
+    }
     if (carried.length > 0) {
       const insideChests = this.getInsideChestPositions();
-      if (insideChests.length === 0) return { action: 'idle', reason: 'no_house_chest' };
 
       // Antar TIAP JENIS item ke chest MASING-MASING yang cocok - bukan tumpuk semua jenis ke satu
       // chest berdasarkan jenis item pertama saja (bug nyata yang dilaporkan pemilik: barang
@@ -239,22 +241,18 @@ class StorageManagerEngine extends EventEmitter {
         }
       }
 
-      if (deliveries.length === 0) {
-        if (!attemptedAny) {
-          // Chest tujuan item ini diketahui penuh dan tidak ada alternatif aman - JANGAN reset
-          // fullChestPositions di sini. Ditemukan dari bug live nyata: reset di titik ini membuat
-          // loop 2-tick tanpa henti (tick A: coba, gagal, tandai penuh - tick B: dikecualikan,
-          // tidak ada target, LANGSUNG di-reset di sini - tick C: coba chest yang PERSIS SAMA lagi
-          // karena baru saja di-reset, gagal lagi...) - storage worker terlihat "cuma buka-buka
-          // chest, tidak pernah benar-benar memindahkan apa-apa" karena pola inilah. Reset yang
-          // benar cuma terjadi SEKALI per putaran penuh (lihat akhir tick(), bareng
-          // collectedPositions/inspectedPositions) - bukan tiap kali satu item kebetulan buntu.
-          return { action: 'idle', reason: 'no_delivery_target' };
-        }
+      if (deliveries.length > 0) {
+        this.metrics.delivered += totalDelivered;
+        return { action: 'deliver', count: totalDelivered, deliveries };
+      }
+      if (attemptedAny) {
         return { action: 'deliver_failed', reason: 'no_delivery_succeeded' };
       }
-      this.metrics.delivered += totalDelivered;
-      return { action: 'deliver', count: totalDelivered, deliveries };
+      // TIDAK ADA satupun item yang punya target sama sekali tick ini (semua rumahnya penuh,
+      // tanpa alternatif aman) - JANGAN diam menunggu, lanjut ke collect/inspect di bawah supaya
+      // bot tetap produktif - ditemukan dari bug live nyata: bot berhenti TOTAL (tidak collect,
+      // tidak inspect, tidak apa-apa) selama bermenit-menit hanya karena satu item di tangan
+      // buntu, padahal masih banyak pekerjaan lain yang bisa dikerjakan sambil menunggu.
     }
 
     const outsideChests = this.getOutsideChestPositions();
