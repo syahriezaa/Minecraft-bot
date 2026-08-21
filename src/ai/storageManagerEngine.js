@@ -393,9 +393,23 @@ class StorageManagerEngine extends EventEmitter {
       await this.adapter.navigateNear(westOf(target), 1);
       try {
         const result = await this.adapter.depositToChest(target, (item) => item.name === name);
-        totalDelivered += result.deposited;
-        deliveries.push({ position: target, name, count: result.deposited });
-        this.emit('delivered', { position: target, count: result.deposited, name });
+        if (result.deposited > 0) {
+          totalDelivered += result.deposited;
+          deliveries.push({ position: target, name, count: result.deposited });
+          this.emit('delivered', { position: target, count: result.deposited, name });
+          continue;
+        }
+        // adapter SUNGGUHAN (mineflayerRoleAdapter.depositToChest) menangkap "destination full"
+        // SENDIRI per-item dan tetap RESOLVE normal dengan deposited:0 - TIDAK PERNAH throw ke
+        // sini. Chest yang genuinely penuh HARUS tetap ditandai penuh di jalur ini juga, bukan
+        // cuma di catch() di bawah (yang untuk kegagalan LAIN, mis. chest rusak/timeout) - kalau
+        // tidak, chest ini akan dipilih lagi tick berikutnya, gagal lagi, selamanya, walau
+        // overflow yang terdaftar masih longgar - ditemukan dari bug live nyata: "storage worker
+        // nya tetap stuck di batu" bahkan setelah overflow ditambah sampai 5 tingkat, karena akar
+        // masalahnya BUKAN kurang chest, TAPI chest penuh yang gagal diam-diam tidak pernah
+        // ditandai penuh.
+        this.fullChestPositions.add(posKey(target));
+        this.emit('deliverFailed', { position: target, error: 'destination full (deposited:0)', name });
       } catch (e) {
         // Chest penuh (atau gagal lain) - ingat chest ini supaya tick BERIKUTNYA memilih chest
         // gudang LAIN untuk jenis ini, bukan mengulang chest yang sama tanpa kemajuan selamanya.

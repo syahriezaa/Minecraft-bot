@@ -983,6 +983,44 @@ describe('StorageManagerEngine', () => {
     assert.notEqual(result.action, 'reorganize', 'tidak ada tujuan aman sama sekali (utama & overflow sama-sama penuh) - jangan diambil, itu cuma akan bolak-balik tanpa hasil');
   });
 
+  it('CHEST PENUH TANPA MELEMPAR ERROR: adapter SUNGGUHAN (mineflayerRoleAdapter.depositToChest) menangkap "destination full" SENDIRI per-item lalu tetap RESOLVE dengan {deposited:0} - TIDAK PERNAH melempar exception ke pemanggil. Kalau runDeliverPhase hanya menandai fullChestPositions di blok catch(), chest yang genuinely penuh TIDAK PERNAH ketahuan penuh sama sekali - dipilih lagi tick berikutnya, gagal lagi, selamanya, walau overflow yang terdaftar masih longgar - ditemukan dari bug live nyata: "storage worker nya tetap stuck di batu" bahkan setelah overflow ditambah sampai 5 tingkat, karena akar masalahnya BUKAN kurang chest, TAPI chest penuh yang gagal diam-diam TIDAK PERNAH ditandai penuh.', async () => {
+    const primaryChest = { position: { x: -181, y: 74, z: -353 }, items: [{ name: 'iron_ingot', count: 64 }] };
+    const overflowChest = { position: { x: -181, y: 74, z: -344 }, items: [] };
+    const WIDE_HOUSE = { min: { x: -190, y: 70, z: -360 }, max: { x: -179, y: 76, z: -340 } };
+    const adapter = new FakeStorageAdapter({
+      chests: { '-181,74,-353': primaryChest, '-181,74,-344': overflowChest },
+      inventory: { diamond: 4 }
+    });
+    // Meniru PERSIS perilaku mineflayerRoleAdapter.depositToChest sungguhan: gagal per-item
+    // ditangkap SENDIRI di dalam adapter (try/catch internal), method tetap RESOLVE normal dengan
+    // deposited:0 - TIDAK PERNAH throw ke pemanggil.
+    adapter.depositToChest = async (pos, predicate) => {
+      if (pos.x === -181 && pos.z === -353) return { deposited: 0 };
+      const chest = adapter.chests[`${pos.x},${pos.y},${pos.z}`];
+      let deposited = 0;
+      for (const [name, count] of Array.from(adapter.inventory.entries())) {
+        if (!predicate({ name, count })) continue;
+        if (chest) chest.items.push({ name, count });
+        deposited += count;
+        adapter.inventory.delete(name);
+      }
+      return { deposited };
+    };
+    const engine = new StorageManagerEngine({
+      adapter,
+      houseBounds: WIDE_HOUSE,
+      initialAssignments: { diamond: '-181,74,-353' },
+      overflowChests: { '-181,74,-353': '-181,74,-344' }
+    });
+
+    const first = await engine.tick();
+    assert.equal(first.action, 'deliver_failed', 'deposited:0 harus dianggap GAGAL, bukan "berhasil" antar 0 item');
+
+    const second = await engine.tick();
+    assert.equal(second.action, 'deliver', 'tick berikutnya harus beralih ke overflow - chest utama SEHARUSNYA sudah ditandai penuh dari tick sebelumnya');
+    assert.equal(second.deliveries[0].position.z, -344);
+  });
+
   it('OVERFLOW DARURAT BERANTAI: kalau chest utama DAN overflow pertamanya SAMA-SAMA penuh, harus lanjut coba overflow TINGKAT KEDUA (overflow terdaftar UNTUK overflow pertama) sebelum menyerah - permintaan nyata pemilik: "storage worker mencoba menaruh stone tapi penuh coba berikan peti lagi" - kategori bervolume sangat tinggi (stone/cobblestone) bisa menghabiskan overflow pertamanya juga. Overflow tingkat kedua SENGAJA dibuat TIDAK KOSONG (sudah berisi jenis lain) supaya tes ini murni membuktikan pengecekan RANTAI overflowChests, bukan kebetulan ketemu lewat fallback "chest kosong" generik (yang HANYA mengambil chest benar-benar kosong).', async () => {
     const primaryChest = { position: { x: -181, y: 74, z: -353 }, items: [{ name: 'iron_ingot', count: 64 }] };
     const overflow1 = { position: { x: -181, y: 74, z: -344 }, items: [{ name: 'iron_ingot', count: 64 }] };
