@@ -479,7 +479,8 @@ describe('MineflayerRoleAdapter.getChestContents - buka satu chest, baca isinya,
         close: () => {}
       })
     };
-    const adapter = new MineflayerRoleAdapter(bot, { chestSettleMs: 5 });
+    const logMessages = [];
+    const adapter = new MineflayerRoleAdapter(bot, { chestSettleMs: 5, log: (msg) => logMessages.push(msg) });
 
     const items = await adapter.getChestContents({ x: 5, y: 64, z: 5 });
 
@@ -490,6 +491,7 @@ describe('MineflayerRoleAdapter.getChestContents - buka satu chest, baca isinya,
     assert.equal(calls[1].count, 1, 'harus ditaruh KEMBALI persis sejumlah yang diambil - jangan sampai malah mengurangi isi chest asli');
     assert.equal(calls[1].type, calls[0].type, 'item yang ditaruh kembali harus jenis yang SAMA dengan yang diambil');
     assert.deepEqual(items, [{ name: 'ink_sac', type: 77, metadata: null, count: 3 }, { name: 'wheat_seeds', type: 12, metadata: null, count: 5 }], 'isi akhir yang dilaporkan harus utuh sama seperti semula (barang sudah dikembalikan)');
+    assert.ok(logMessages.some((m) => m.includes('ink_sac')), 'harus melaporkan lewat log() bahwa probe verifikasi ini SUNGGUHAN terjadi (bukan cuma lolos diam-diam di tes) - supaya pemilik bisa lihat buktinya di feed dashboard');
   });
 
   it('kalau slot inventaris bot TIDAK cukup longgar (kurang dari 2 slot bebas), JANGAN coba probe ambil-taruh - permintaan nyata pemilik: sisakan 2 slot untuk melakukan verifikasi ini, jangan sampai malah bikin inventaris kepenuhan gara-gara probe', async () => {

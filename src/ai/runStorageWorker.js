@@ -337,7 +337,7 @@ function startStorageWorker({ host, port, botName, scanRadius = 48, baseGoal = D
     // cest terjangkau" - root cause-nya persis ini, bukan buildMovements() yang salah.
     bot.pathfinder.setMovements(buildMovements(bot));
 
-    const adapter = new MineflayerRoleAdapter(bot);
+    const adapter = new MineflayerRoleAdapter(bot, { log });
 
     const bedResult = await adapter.setSpawnAtNearestBed();
     log(bedResult ? 'Spawn point diset di bed dekat base.' : 'Tidak ada bed dalam jangkauan - spawn point tidak diubah.');

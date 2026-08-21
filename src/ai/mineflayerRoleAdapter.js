@@ -53,6 +53,10 @@ class MineflayerRoleAdapter {
       // terlihat sepanjang sesi ini) - window.slots lokal bot bisa saja belum lengkap/akurat,
       // membuat pengecekan "ada slot kosong?" mineflayer keliru menyimpulkan chest penuh.
       chestSettleMs: 250,
+      // Dipanggil dengan pesan Bahasa Indonesia tiap kali verifyChestContentsByRoundTrip benar-
+      // benar melakukan probe ambil-taruh - supaya pemilik bisa MELIHAT LANGSUNG (lewat feed
+      // dashboard) bahwa verifikasi ini sungguhan terjadi, bukan cuma lolos di tes unit.
+      log: () => {},
       ...options
     };
     this.worldAwareness = options.worldAwareness || null;
@@ -350,13 +354,14 @@ class MineflayerRoleAdapter {
 
     const probe = items[0];
     try {
+      this.options.log(`[Verifikasi chest] Ambil 1x ${probe.name} sebagai probe untuk pastikan data sudah ter-update...`);
       await chest.withdraw(probe.type, probe.metadata ?? null, 1);
       await this.waitForStableChestItems(chest);
       await chest.deposit(probe.type, probe.metadata ?? null, 1);
       await this.waitForStableChestItems(chest);
+      this.options.log(`[Verifikasi chest] ${probe.name} sudah ditaruh kembali - data chest ini sekarang dijamin ter-update.`);
     } catch (e) {
-      // Probe gagal (mis. server menolak klik) - biarkan pembacaan settle-poll biasa yang dipakai,
-      // jangan sampai error di sini menggagalkan seluruh inspeksi chest.
+      this.options.log(`[Verifikasi chest] Probe ambil-taruh ${probe.name} gagal (${e.message}) - lanjut pakai bacaan settle-poll biasa.`);
     }
   }
 
