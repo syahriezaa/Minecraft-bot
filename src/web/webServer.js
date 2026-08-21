@@ -25,6 +25,8 @@ const path = require('path');
 const { BenchmarkRunner } = require('../benchmark/benchmarkRunner');
 const { DeepSeekClient } = require('../ai/deepseekClient');
 const { startFarmerWorker } = require('../ai/runFarmerWorker');
+const { startExplorerWorker } = require('../ai/runExplorerWorker');
+const { loadLandmarks } = require('../ai/worldLandmarks');
 const { startGuardWorker } = require('../ai/runGuardWorker');
 const { startRancherWorker } = require('../ai/runRancherWorker');
 const { startStorageWorker, CHEST_CATEGORY_LABELS } = require('../ai/runStorageWorker');
@@ -86,10 +88,10 @@ function distance3d(a, b) {
 
 function buildRealSwarmList() {
   const bots = [];
-  // rancherWorkers/storageWorkers dideklarasikan lebih bawah di file ini (const) - aman diakses di
-  // sini karena fungsi ini cuma benar-benar DIPANGGIL belakangan (lewat setInterval/endpoint),
-  // bukan saat baris ini pertama dieksekusi.
-  for (const workerMap of [farmerWorkers, guardWorkers, rancherWorkers, storageWorkers]) {
+  // rancherWorkers/storageWorkers/explorerWorkers dideklarasikan lebih bawah di file ini (const) -
+  // aman diakses di sini karena fungsi ini cuma benar-benar DIPANGGIL belakangan (lewat
+  // setInterval/endpoint), bukan saat baris ini pertama dieksekusi.
+  for (const workerMap of [farmerWorkers, guardWorkers, rancherWorkers, storageWorkers, explorerWorkers]) {
     for (const [name, handle] of workerMap) {
       const status = typeof handle.getStatus === 'function' ? handle.getStatus() : null;
       if (!status?.position) continue;
@@ -336,6 +338,82 @@ app.get('/api/farmer/status', (req, res) => {
       }))
     }
   });
+});
+
+// Bot penjelajah - menandai tempat penting (peti, mob spawner, lahan farming, sungai, area
+// villager) ke memori landmark bersama (worldLandmarks.js) - permintaan nyata pemilik: "mari kita
+// buat bot explorer yang menandai akan mengeksplor map area area dan tempat tempat penting".
+// Sama pola armada seperti farmerWorkers di atas.
+const explorerWorkers = new Map(); // botName -> handle
+
+app.post('/api/explorer/start', (req, res) => {
+  const { host, port, botName, scanRadius, spiralStepSize } = req.body || {};
+  const name = botName || 'ExplorerWorker';
+  if (explorerWorkers.has(name)) {
+    return res.status(409).json({ success: false, error: { code: 'ALREADY_RUNNING', message: `Penjelajah '${name}' sudah berjalan` } });
+  }
+  broadcast({ type: 'AI_ACTION_EVENT', data: { task: 'EXPLORER_WORKER', step: `Memulai penjelajah '${name}'...`, status: 'RUNNING' } });
+
+  const handle = startExplorerWorker({
+    host: host || 'atoms-girl.tun.ply.gg',
+    port: port || 25565,
+    botName: name,
+    scanRadius: scanRadius || 24,
+    spiralStepSize: spiralStepSize || 16,
+    log: (msg) => broadcast({ type: 'AI_ACTION_EVENT', data: { task: 'EXPLORER_WORKER', step: `[${name}] ${msg}`, status: 'RUNNING' } }),
+    onDisconnect: () => {
+      explorerWorkers.delete(name);
+      broadcast({ type: 'AI_ACTION_EVENT', data: { task: 'EXPLORER_WORKER', step: `[${name}] Koneksi terputus - dihapus dari daftar armada.`, status: 'STOPPED' } });
+    },
+    onLandmarkFound: (landmark) => broadcast({ type: 'LANDMARK_FOUND', data: { landmark } })
+  });
+  explorerWorkers.set(name, handle);
+
+  res.json({ success: true, data: { message: `Penjelajah '${name}' dimulai` } });
+});
+
+app.post('/api/explorer/stop', (req, res) => {
+  const { botName } = req.body || {};
+  if (!botName) {
+    const count = explorerWorkers.size;
+    if (count === 0) {
+      return res.status(409).json({ success: false, error: { code: 'NOT_RUNNING', message: 'Tidak ada penjelajah yang berjalan' } });
+    }
+    for (const [name, handle] of explorerWorkers) {
+      handle.stop();
+      broadcast({ type: 'AI_ACTION_EVENT', data: { task: 'EXPLORER_WORKER', step: `[${name}] Dihentikan dari dashboard.`, status: 'STOPPED' } });
+    }
+    explorerWorkers.clear();
+    return res.json({ success: true, data: { message: `${count} penjelajah dihentikan` } });
+  }
+  const handle = explorerWorkers.get(botName);
+  if (!handle) {
+    return res.status(409).json({ success: false, error: { code: 'NOT_RUNNING', message: `Penjelajah '${botName}' tidak ditemukan` } });
+  }
+  handle.stop();
+  explorerWorkers.delete(botName);
+  broadcast({ type: 'AI_ACTION_EVENT', data: { task: 'EXPLORER_WORKER', step: `[${botName}] Dihentikan dari dashboard.`, status: 'STOPPED' } });
+  res.json({ success: true, data: { message: `Penjelajah '${botName}' dihentikan` } });
+});
+
+app.get('/api/explorer/status', (req, res) => {
+  res.json({
+    success: true,
+    data: {
+      running: explorerWorkers.size > 0,
+      count: explorerWorkers.size,
+      workers: Array.from(explorerWorkers.entries()).map(([name, handle]) => ({
+        botName: name,
+        metrics: handle.getMetrics()
+      }))
+    }
+  });
+});
+
+// Semua landmark yang sudah ditemukan sejauh ini - dipakai dashboard untuk peta landmark, dan bisa
+// dipakai bot lain (mis. FarmerWorker) untuk menghindari zona yang ditandai secara otomatis.
+app.get('/api/landmarks', (req, res) => {
+  res.json({ success: true, data: { landmarks: loadLandmarks() } });
 });
 
 // Pekerja penjaga otonom (lihat runGuardWorker.js) - jaga base dari mob hostile, perbaiki gear

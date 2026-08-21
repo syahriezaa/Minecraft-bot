@@ -1,0 +1,228 @@
+/**
+ * @file explorerEngine.js
+ * @description Engine bot penjelajah - menjelajah spiral keluar dari base, menandai tempat penting
+ * (peti, mob spawner, lahan farming, sungai, area villager) ke memori landmark bersama
+ * (worldLandmarks.js) yang bisa dipakai bot lain. Permintaan nyata pemilik: "mari kita buat bot
+ * explorer yang menandai akan mengeksplor map area area dan tempat tempat penting dengan ruang 3d
+ * koordinat xyz...jika itu satu titik tulis titiknya, jika area tulis batas batasnya sebagai
+ * vektor yang nantinya bisa di interpretasikan".
+ *
+ * Aturan Tim: Semua komentar, log, dan pesan error ditulis dalam Bahasa Indonesia.
+ */
+
+const EventEmitter = require('node:events');
+const { MineflayerRoleAdapter } = require('./mineflayerRoleAdapter');
+const {
+  addLandmark,
+  findNearbyLandmarks,
+  makePointLandmark,
+  makeAreaLandmark,
+  loadLandmarks
+} = require('./worldLandmarks');
+
+// Kategori blok TITIK (satu landmark per blok) - struktur yang dibangun pemilik ("setiap peti
+// setiap...mob spawner yang sudah saya bangun").
+const POINT_BLOCK_CATEGORIES = {
+  chest: 'chest',
+  barrel: 'chest',
+  spawner: 'mob_spawner'
+};
+
+// Kategori blok AREA (dikelompokkan jadi satu landmark per kluster bersebelahan, bukan satu per
+// blok - "setiap farming area...sungai").
+const AREA_BLOCK_CATEGORIES = {
+  farmland: 'farming_area',
+  water: 'river'
+};
+
+const NAME_TEMPLATES = {
+  chest: 'Peti',
+  mob_spawner: 'Mob Spawner',
+  farming_area: 'Lahan Farming',
+  river: 'Sungai/Air',
+  villager_area: 'Area Villager'
+};
+
+// Convex hull (monotone chain) - "vektor batas" area yang bisa diinterpretasikan lewat
+// point-in-polygon (lihat worldLandmarks.isInsideAreaLandmark). Convex hull cukup untuk menandai
+// JANGKAUAN kasar sebuah kluster tanpa perlu melacak setiap lekukan tepi blok satu-satu.
+function convexHull(points) {
+  const pts = [...new Map(points.map((p) => [`${p.x},${p.z}`, p])).values()].sort((a, b) => a.x - b.x || a.z - b.z);
+  if (pts.length <= 2) return pts;
+  const cross = (o, a, b) => (a.x - o.x) * (b.z - o.z) - (a.z - o.z) * (b.x - o.x);
+  const lower = [];
+  for (const p of pts) {
+    while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop();
+    lower.push(p);
+  }
+  const upper = [];
+  for (let i = pts.length - 1; i >= 0; i--) {
+    const p = pts[i];
+    while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop();
+    upper.push(p);
+  }
+  lower.pop();
+  upper.pop();
+  return [...lower, ...upper];
+}
+
+function centroidOf(points) {
+  const sum = points.reduce((acc, p) => ({ x: acc.x + p.x, z: acc.z + (p.z ?? 0) }), { x: 0, z: 0 });
+  return { x: sum.x / points.length, z: sum.z / points.length };
+}
+
+class ExplorerEngine extends EventEmitter {
+  constructor(options = {}) {
+    super();
+    this.adapter = options.adapter || new MineflayerRoleAdapter(options.bot, options.adapterOptions);
+    this.options = {
+      basePosition: { x: 0, y: 64, z: 0 },
+      spiralStepSize: 16,
+      scanRadius: 24,
+      dedupeDistance: 12,
+      llmClient: null,
+      log: () => {},
+      ...options
+    };
+    this.spiralIndex = 0;
+    this.metrics = { waypointsVisited: 0, landmarksFound: 0 };
+  }
+
+  // Spiral kotak keluar dari base (0,0 relatif) - permintaan nyata pemilik: "spiral keluar dari
+  // base". Algoritma standar: melangkah dalam pola kanan-atas-kiri-bawah dengan panjang lengan
+  // yang membesar setiap 2 belokan, membentuk kotak yang melebar.
+  nextSpiralWaypoint() {
+    const step = this.options.spiralStepSize;
+    let x = 0, z = 0;
+    let dx = 1, dz = 0;
+    let segmentLength = 1;
+    let segmentPassed = 0;
+    let turnsInSegment = 0;
+    for (let i = 0; i < this.spiralIndex; i++) {
+      x += dx; z += dz;
+      segmentPassed++;
+      if (segmentPassed === segmentLength) {
+        segmentPassed = 0;
+        [dx, dz] = [-dz, dx]; // putar 90 derajat
+        turnsInSegment++;
+        if (turnsInSegment === 2) {
+          turnsInSegment = 0;
+          segmentLength++;
+        }
+      }
+    }
+    this.spiralIndex++;
+    return { x: x * step, z: z * step };
+  }
+
+  isAlreadyKnown(pos) {
+    return findNearbyLandmarks(pos, this.options.dedupeDistance, this.options.log).length > 0;
+  }
+
+  isAreaAlreadyKnown(category, centroid) {
+    return loadLandmarks(this.options.log)
+      .filter((l) => l.shape === 'area' && l.category === category)
+      .some((l) => {
+        const c = centroidOf(l.boundary);
+        const dx = c.x - centroid.x, dz = c.z - centroid.z;
+        return Math.sqrt(dx * dx + dz * dz) <= this.options.dedupeDistance;
+      });
+  }
+
+  async nameFor(category, sample) {
+    const fallback = NAME_TEMPLATES[category] || category;
+    if (!this.options.llmClient) return fallback;
+    try {
+      const prompt = `Beri nama singkat (maksimal 4 kata, Bahasa Indonesia) untuk lokasi Minecraft berkategori "${category}" dengan sampel blok/entitas: ${JSON.stringify(sample).slice(0, 300)}. Jawab HANYA nama singkatnya, tanpa penjelasan.`;
+      const result = await this.options.llmClient.chat(prompt);
+      const name = (result?.message || '').trim().split('\n')[0].slice(0, 60);
+      return name || fallback;
+    } catch (e) {
+      this.options.log(`PERINGATAN: gagal minta nama dari LLM untuk landmark "${category}" (${e.message}) - pakai nama baku.`);
+      return fallback;
+    }
+  }
+
+  async recordPointLandmarks() {
+    const created = [];
+    const names = Object.keys(POINT_BLOCK_CATEGORIES);
+    const blocks = this.adapter.findBlocksByNames(names, { maxDistance: this.options.scanRadius });
+    for (const block of blocks) {
+      if (this.isAlreadyKnown(block.position)) continue;
+      const category = POINT_BLOCK_CATEGORIES[block.name];
+      const name = await this.nameFor(category, { blockName: block.name, position: block.position });
+      const landmark = makePointLandmark({ name, category, position: block.position });
+      addLandmark(landmark, this.options.log);
+      this.options.log(`[Explorer] Landmark baru: ${name} (${category}) di (${block.position.x},${block.position.y},${block.position.z})`);
+      created.push(landmark);
+    }
+    return created;
+  }
+
+  async recordAreaLandmarks() {
+    const created = [];
+    for (const [blockName, category] of Object.entries(AREA_BLOCK_CATEGORIES)) {
+      const blocks = this.adapter.findBlocksByNames([blockName], { maxDistance: this.options.scanRadius });
+      if (blocks.length === 0) continue;
+      const points = blocks.map((b) => ({ x: b.position.x, z: b.position.z }));
+      const centroid = centroidOf(points);
+      if (this.isAreaAlreadyKnown(category, centroid)) continue;
+      const boundary = convexHull(points);
+      if (boundary.length < 3) continue; // terlalu sedikit blok untuk membentuk area sungguhan
+      const name = await this.nameFor(category, { blockName, count: blocks.length, centroid });
+      const landmark = makeAreaLandmark({ name, category, boundary });
+      addLandmark(landmark, this.options.log);
+      this.options.log(`[Explorer] Landmark area baru: ${name} (${category}) - ${blocks.length} blok, ${boundary.length} titik batas`);
+      created.push(landmark);
+    }
+    return created;
+  }
+
+  async recordVillagerAreaLandmark() {
+    const villagers = this.adapter.getEntities().filter((e) => e.name === 'villager' || e.type === 'villager');
+    if (villagers.length === 0) return [];
+    const points = villagers.map((v) => ({ x: v.position.x, z: v.position.z }));
+    const centroid = centroidOf(points);
+    if (this.isAreaAlreadyKnown('villager_area', centroid)) return [];
+    let boundary = convexHull(points);
+    if (boundary.length < 3) {
+      // Terlalu sedikit villager untuk membentuk poligon sungguhan - buat kotak kecil di
+      // sekeliling titik-titik yang ada supaya tetap tercatat sebagai area yang bisa dihindari.
+      const xs = points.map((p) => p.x), zs = points.map((p) => p.z);
+      const pad = 4;
+      boundary = [
+        { x: Math.min(...xs) - pad, z: Math.min(...zs) - pad },
+        { x: Math.max(...xs) + pad, z: Math.min(...zs) - pad },
+        { x: Math.max(...xs) + pad, z: Math.max(...zs) + pad },
+        { x: Math.min(...xs) - pad, z: Math.max(...zs) + pad }
+      ];
+    }
+    const name = await this.nameFor('villager_area', { villagerCount: villagers.length, centroid });
+    const landmark = makeAreaLandmark({ name, category: 'villager_area', boundary });
+    addLandmark(landmark, this.options.log);
+    this.options.log(`[Explorer] Landmark area baru: ${name} (villager_area) - ${villagers.length} villager terdeteksi`);
+    return [landmark];
+  }
+
+  async tick() {
+    const waypoint = this.nextSpiralWaypoint();
+    const target = {
+      x: this.options.basePosition.x + waypoint.x,
+      y: this.options.basePosition.y,
+      z: this.options.basePosition.z + waypoint.z
+    };
+    await this.adapter.navigateNear(target, 3);
+    this.metrics.waypointsVisited++;
+
+    const pointLandmarks = await this.recordPointLandmarks();
+    const areaLandmarks = await this.recordAreaLandmarks();
+    const villagerLandmarks = await this.recordVillagerAreaLandmark();
+    const allNew = [...pointLandmarks, ...areaLandmarks, ...villagerLandmarks];
+    this.metrics.landmarksFound += allNew.length;
+    for (const landmark of allNew) this.emit('landmarkFound', landmark);
+
+    return { action: 'explore', waypoint: target, landmarksFound: allNew.length };
+  }
+}
+
+module.exports = { ExplorerEngine, convexHull };

@@ -97,6 +97,12 @@
         renderChestMap(msg.data?.chests || []);
         renderMisplacedNow(msg.data?.chests || []);
         break;
+      case 'LANDMARK_FOUND':
+        // Landmark baru ditemukan bot explorer - dorong ulang seluruh daftar (bukan cuma tempel
+        // satu baris) supaya badge jumlah dan urutan tetap konsisten dengan sumber kebenaran di
+        // server, sama pola seperti STORAGE_CHEST_MAP_UPDATE.
+        fetch('/api/landmarks').then(r => r.json()).then(res => { if (res.data?.landmarks) renderLandmarks(res.data.landmarks); }).catch(() => {});
+        break;
       case 'STORAGE_ASSIGNMENTS_UPDATE':
         // Dorong LANGSUNG lewat WS begitu engine belajar rumah baru untuk suatu item - permintaan
         // nyata pemilik: "use ws to update memory ui to memory is dynamic not just in every
@@ -589,6 +595,54 @@
       return `panen <b>${farm.harvested || 0}</b> · tanam <b>${farm.planted || 0}</b> · simpan <b>${farm.deposited || 0}</b>`;
     }
   });
+
+  createFleetController({
+    apiPrefix: 'explorer',
+    label: 'penjelajah',
+    listElId: 'explorer-fleet-list',
+    countElId: 'explorer-fleet-count',
+    startBtnId: 'btn-explorer-fleet-start',
+    stopAllBtnId: 'btn-explorer-fleet-stop-all',
+    defaultName: 'ExplorerWorker',
+    namePrefix: 'Explorer',
+    emptyText: 'Tidak ada penjelajah yang berjalan.',
+    statsRenderer: (m) => {
+      const explorer = m.explorer || {};
+      return `waypoint <b>${explorer.waypointsVisited || 0}</b> · landmark ditemukan <b>${explorer.landmarksFound || 0}</b>`;
+    }
+  });
+
+  // ── Landmark Dunia - temuan bot explorer ──
+  const landmarksList = document.getElementById('landmarks-list');
+  const landmarksCountBadge = document.getElementById('landmarks-count-badge');
+
+  function renderLandmarks(landmarks) {
+    if (!landmarksList || !Array.isArray(landmarks)) return;
+    if (landmarksCountBadge) landmarksCountBadge.textContent = `${landmarks.length} LANDMARK`;
+    if (landmarks.length === 0) {
+      landmarksList.innerHTML = '<p class="empty-row">Belum ada landmark yang ditemukan - jalankan armada penjelajah untuk mulai menandai.</p>';
+      return;
+    }
+    landmarksList.innerHTML = landmarks.map((l) => {
+      const locLabel = l.shape === 'point'
+        ? `(${l.position.x},${l.position.y},${l.position.z})`
+        : `poligon ${l.boundary.length} titik`;
+      return `
+        <div class="chest-map-card">
+          <div class="chest-map-card-header">
+            <span class="chest-map-category">${l.name}</span>
+            <span class="chest-map-badge chest-map-badge-clean">${l.category}</span>
+          </div>
+          <span class="chest-map-pos">${locLabel}</span>
+        </div>
+      `;
+    }).join('');
+  }
+
+  fetch('/api/landmarks')
+    .then(r => r.json())
+    .then(res => { if (res.data?.landmarks) renderLandmarks(res.data.landmarks); })
+    .catch(() => {});
 
   createFleetController({
     apiPrefix: 'guard',

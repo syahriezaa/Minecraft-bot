@@ -7,6 +7,14 @@
 
 const { describe, it } = require('node:test');
 const assert = require('node:assert/strict');
+const path = require('path');
+const os = require('os');
+// Diset SEBELUM require farmerEngine.js (yang me-require worldLandmarks.js secara transitif) -
+// worldLandmarks.js membaca env var ini SEKALI saja saat pertama di-require untuk menetapkan path
+// filenya. Tanpa ini, seluruh file tes ini diam-diam membaca/menulis data/worldLandmarks.json
+// SUNGGUHAN (file produksi), bukan data uji yang terisolasi.
+process.env.WORLD_LANDMARKS_FILE = path.join(os.tmpdir(), 'test_survival_role_world_landmarks.json');
+const worldLandmarks = require('../../src/ai/worldLandmarks');
 const { FarmerEngine } = require('../../src/ai/farmerEngine');
 const { AnimalHusbandryEngine } = require('../../src/ai/animalHusbandryEngine');
 const { MobFarmEngine } = require('../../src/ai/mobFarmEngine');
@@ -194,6 +202,34 @@ describe('FarmerEngine', () => {
     assert.deepEqual(adapter.actions, [
       { type: 'dig', name: 'wheat', position: { x: -190, y: 63, z: -390 } }
     ]);
+  });
+
+  it('crop matang DI DALAM area landmark berkategori villager_area (ditemukan bot explorer) HARUS diabaikan OTOMATIS, TANPA perlu avoidArea di-hardcode manual - permintaan nyata pemilik: "share memory tentang peti ke semua bot" diperluas ke landmark dunia ("bot nya tidak tau dimana lokasi lahan pertanian dimana villager farm") - explorer menandai sekali, semua bot lain otomatis menghindar', async () => {
+    worldLandmarks.saveLandmarks([
+      worldLandmarks.makeAreaLandmark({
+        name: 'Desa Villager',
+        category: 'villager_area',
+        boundary: [{ x: -200, z: -337 }, { x: -170, z: -337 }, { x: -170, z: -318 }, { x: -200, z: -318 }]
+      })
+    ]);
+    try {
+      const adapter = new FakeRoleAdapter({
+        blocks: [
+          { name: 'wheat', properties: { age: 7 }, position: { x: -190, y: 63, z: -327 } }, // di dalam landmark villager_area
+          { name: 'wheat', properties: { age: 7 }, position: { x: -190, y: 63, z: -390 } } // di luar, kebun sungguhan
+        ]
+      });
+      const engine = new FarmerEngine({ adapter }); // SENGAJA tanpa avoidArea manual sama sekali
+
+      const result = await engine.tick();
+
+      assert.equal(result.action, 'harvest');
+      assert.deepEqual(adapter.actions, [
+        { type: 'dig', name: 'wheat', position: { x: -190, y: 63, z: -390 } }
+      ]);
+    } finally {
+      worldLandmarks.saveLandmarks([]); // jangan bocor ke tes lain di file ini
+    }
   });
 
   it('harus menanam seed pada farmland kosong', async () => {

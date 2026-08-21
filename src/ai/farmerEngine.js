@@ -8,6 +8,7 @@
 const EventEmitter = require('node:events');
 const { MineflayerRoleAdapter, distance, HOE_NAMES } = require('./mineflayerRoleAdapter');
 const { parseChestPositionKey } = require('./storageMemory');
+const { isInsideAnyLandmarkOfCategory } = require('./worldLandmarks');
 
 const CROP_RULES = Object.freeze({
   wheat: { maxAge: 7, seed: 'wheat_seeds', harvest: ['wheat'] },
@@ -79,6 +80,13 @@ class FarmerEngine extends EventEmitter {
       // dari gudang lewat sharedChestAssignments kalau belum dibawa - lihat fetchRepairSupplies.
       repairEnabled: true,
       repairBatchSize: 4,
+      // Kategori landmark (worldLandmarks.js) yang OTOMATIS dihindari, di atas avoidArea manual -
+      // permintaan nyata pemilik: "bot nya tidak tau dimana lokasi lahan pertanian dimana
+      // villager farm" - dulu satu-satunya cara mengecualikan area villager adalah avoidArea
+      // hardcode manual (dan terbukti ada village KEDUA yang tidak pernah ter-hardcode). Begitu
+      // bot explorer menandai suatu area sebagai villager_area, SEMUA bot langsung menghindarinya
+      // tanpa perlu update kode/koordinat manual lagi.
+      avoidLandmarkCategories: ['villager_area'],
       ...options
     };
     this.metrics = {
@@ -100,12 +108,22 @@ class FarmerEngine extends EventEmitter {
     return Boolean(rule && blockAge(block) >= rule.maxAge);
   }
 
+  // Gabungan avoidArea manual (satu kotak, diset lewat kode) DAN landmark dunia berkategori
+  // avoidLandmarkCategories (ditandai bot explorer, bisa banyak & bentuk apa saja - lihat
+  // worldLandmarks.js) - permintaan nyata pemilik: "bot nya tidak tau dimana lokasi lahan
+  // pertanian dimana villager farm".
+  isOutsideAllAvoidance(pos) {
+    if (!isOutsideArea(pos, this.options.avoidArea)) return false;
+    if (isInsideAnyLandmarkOfCategory(pos, this.options.avoidLandmarkCategories)) return false;
+    return true;
+  }
+
   findMatureCrops() {
     return this.adapter
       .findBlocksByNames(Object.keys(CROP_RULES), { maxDistance: this.options.scanRadius })
       .filter(block => this.isMatureCrop(block))
       .filter(block => isInsideArea(block.position, this.options.farmArea))
-      .filter(block => isOutsideArea(block.position, this.options.avoidArea))
+      .filter(block => this.isOutsideAllAvoidance(block.position))
       .sort((a, b) => distance(this.adapter.getPosition(), a.position) - distance(this.adapter.getPosition(), b.position));
   }
 
@@ -113,7 +131,7 @@ class FarmerEngine extends EventEmitter {
     return this.adapter
       .findBlocksByNames(['farmland', 'soul_sand'], { maxDistance: this.options.scanRadius })
       .filter(block => isInsideArea(block.position, this.options.farmArea))
-      .filter(block => isOutsideArea(block.position, this.options.avoidArea));
+      .filter(block => this.isOutsideAllAvoidance(block.position));
   }
 
   findPlantingSpots() {
@@ -182,7 +200,7 @@ class FarmerEngine extends EventEmitter {
         const pos = { x: block.position.x + off.x, y: block.position.y, z: block.position.z + off.z };
         const key = `${pos.x},${pos.z}`;
         if (knownKeys.has(key) || seen.has(key)) continue;
-        if (!isInsideArea(pos, this.options.farmArea) || !isOutsideArea(pos, this.options.avoidArea)) continue;
+        if (!isInsideArea(pos, this.options.farmArea) || !this.isOutsideAllAvoidance(pos)) continue;
         seen.add(key);
         const ground = this.adapter.blockAt(pos);
         const above = this.adapter.blockAt({ x: pos.x, y: pos.y + 1, z: pos.z });

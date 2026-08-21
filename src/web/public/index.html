@@ -141,6 +141,36 @@
       </div>
     </section>
 
+    <!-- Armada Penjelajah - jelajah spiral dari base, tandai peti/mob spawner/lahan farming/sungai/
+         area villager ke memori landmark bersama - permintaan nyata pemilik: "mari kita buat bot
+         explorer yang menandai akan mengeksplor map area area dan tempat tempat penting" -->
+    <section class="row">
+      <div class="card full-width" id="explorer-fleet-panel">
+        <h2>Armada Penjelajah — jelajah spiral, tandai tempat penting ke memori bersama</h2>
+        <div class="fleet-controls">
+          <label for="explorer-fleet-count">Jumlah bot</label>
+          <input type="number" id="explorer-fleet-count" class="fleet-count-input" min="1" max="10" value="1">
+          <button class="btn btn-fleet-start" id="btn-explorer-fleet-start">Mulai Armada</button>
+          <button class="btn btn-fleet-stop-all" id="btn-explorer-fleet-stop-all">Hentikan Semua</button>
+        </div>
+        <div id="explorer-fleet-list"></div>
+      </div>
+    </section>
+
+    <!-- Landmark Dunia - semua titik/area yang sudah ditandai bot explorer (dan dipakai bot lain
+         untuk otomatis menghindari, mis. villager_area) -->
+    <section class="row">
+      <div class="card full-width" id="landmarks-panel">
+        <div class="card-header-flex">
+          <h2>Landmark Dunia — hasil temuan bot explorer</h2>
+          <span class="badge live-badge" id="landmarks-count-badge">0 LANDMARK</span>
+        </div>
+        <div id="landmarks-list" class="chest-map-grid">
+          <p class="empty-row">Belum ada landmark yang ditemukan - jalankan armada penjelajah untuk mulai menandai.</p>
+        </div>
+      </div>
+    </section>
+
     <!-- Armada Penjaga - jaga base dari mob hostile, perbaiki gear hilang/rusak dari besi gudang -->
     <section class="row">
       <div class="card full-width" id="guard-fleet-panel">
