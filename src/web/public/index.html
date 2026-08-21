@@ -21,7 +21,21 @@
     </div>
   </header>
 
+  <!-- Navigasi tab - permintaan nyata pemilik: "ui nya berantakan tata lagi menjadi lebih rapi".
+       Dulu 20 section ditumpuk vertikal dalam satu scroll panjang tanpa pengelompokan - sekarang
+       dikelompokkan jadi 4 tampilan (Ringkasan/Armada/Gudang/Uji & Log) yang bisa dipilih, TANPA
+       mengubah id/struktur elemen manapun yang dipakai app.js (cuma dibungkus ulang). -->
+  <nav id="tab-nav">
+    <div class="tab-nav-inner">
+      <button class="tab-btn active" data-tab-target="overview">Ringkasan</button>
+      <button class="tab-btn" data-tab-target="fleets">Armada &amp; Landmark</button>
+      <button class="tab-btn" data-tab-target="storage">Gudang</button>
+      <button class="tab-btn" data-tab-target="logs">Uji &amp; Log</button>
+    </div>
+  </nav>
+
   <main id="dashboard">
+    <div class="tab-view active" data-tab-view="overview">
     <!-- Baris 1: Status Bot + Metrik Real-Time -->
     <section class="row">
       <div class="card" id="bot-status-card">
@@ -126,10 +140,12 @@
         </div>
       </div>
     </section>
+    </div>
 
+    <div class="tab-view" data-tab-view="fleets">
     <!-- Armada Pekerja Tani - bisa banyak bot sekaligus, tiap bot bisa dihentikan sendiri-sendiri -->
     <section class="row">
-      <div class="card full-width" id="farmer-fleet-panel">
+      <div class="card" id="farmer-fleet-panel">
         <h2>Armada Pekerja Tani — panen, tanam, simpan, beri makan ternak</h2>
         <div class="fleet-controls">
           <label for="farmer-fleet-count">Jumlah bot</label>
@@ -139,13 +155,11 @@
         </div>
         <div id="farmer-fleet-list"></div>
       </div>
-    </section>
 
-    <!-- Armada Penjelajah - jelajah spiral dari base, tandai peti/mob spawner/lahan farming/sungai/
-         area villager ke memori landmark bersama - permintaan nyata pemilik: "mari kita buat bot
-         explorer yang menandai akan mengeksplor map area area dan tempat tempat penting" -->
-    <section class="row">
-      <div class="card full-width" id="explorer-fleet-panel">
+      <!-- Armada Penjelajah - jelajah spiral dari base, tandai peti/mob spawner/lahan farming/sungai/
+           area villager ke memori landmark bersama - permintaan nyata pemilik: "mari kita buat bot
+           explorer yang menandai akan mengeksplor map area area dan tempat tempat penting" -->
+      <div class="card" id="explorer-fleet-panel">
         <h2>Armada Penjelajah — jelajah spiral, tandai tempat penting ke memori bersama</h2>
         <div class="fleet-controls">
           <label for="explorer-fleet-count">Jumlah bot</label>
@@ -157,23 +171,9 @@
       </div>
     </section>
 
-    <!-- Landmark Dunia - semua titik/area yang sudah ditandai bot explorer (dan dipakai bot lain
-         untuk otomatis menghindari, mis. villager_area) -->
-    <section class="row">
-      <div class="card full-width" id="landmarks-panel">
-        <div class="card-header-flex">
-          <h2>Landmark Dunia — hasil temuan bot explorer</h2>
-          <span class="badge live-badge" id="landmarks-count-badge">0 LANDMARK</span>
-        </div>
-        <div id="landmarks-list" class="chest-map-grid">
-          <p class="empty-row">Belum ada landmark yang ditemukan - jalankan armada penjelajah untuk mulai menandai.</p>
-        </div>
-      </div>
-    </section>
-
     <!-- Armada Penjaga - jaga base dari mob hostile, perbaiki gear hilang/rusak dari besi gudang -->
     <section class="row">
-      <div class="card full-width" id="guard-fleet-panel">
+      <div class="card" id="guard-fleet-panel">
         <h2>Armada Penjaga — patroli, lawan mob, perbaiki gear dari besi gudang</h2>
         <div class="fleet-controls">
           <label for="guard-fleet-count">Jumlah bot</label>
@@ -183,11 +183,9 @@
         </div>
         <div id="guard-fleet-list"></div>
       </div>
-    </section>
 
-    <!-- Armada Peternak - beri makan ternak, dipisah dari pekerja tani -->
-    <section class="row">
-      <div class="card full-width" id="rancher-fleet-panel">
+      <!-- Armada Peternak - beri makan ternak, dipisah dari pekerja tani -->
+      <div class="card" id="rancher-fleet-panel">
         <h2>Armada Peternak — beri makan & panen surplus ternak</h2>
         <div class="fleet-controls">
           <label for="rancher-fleet-count">Jumlah bot</label>
@@ -201,7 +199,7 @@
 
     <!-- Armada Kuartermaster - kumpulkan chest di luar rumah, antar ke gudang, rapikan isi gudang -->
     <section class="row">
-      <div class="card full-width" id="storage-fleet-panel">
+      <div class="card" id="storage-fleet-panel">
         <h2>Armada Kuartermaster — kumpulkan & rapikan gudang</h2>
         <div class="fleet-controls">
           <label for="storage-fleet-count">Jumlah bot</label>
@@ -211,8 +209,22 @@
         </div>
         <div id="storage-fleet-list"></div>
       </div>
-    </section>
 
+      <!-- Landmark Dunia - semua titik/area yang sudah ditandai bot explorer (dan dipakai bot lain
+           untuk otomatis menghindari, mis. villager_area) -->
+      <div class="card" id="landmarks-panel">
+        <div class="card-header-flex">
+          <h2>Landmark Dunia — hasil temuan bot explorer</h2>
+          <span class="badge live-badge" id="landmarks-count-badge">0 LANDMARK</span>
+        </div>
+        <div id="landmarks-list" class="chest-map-grid">
+          <p class="empty-row">Belum ada landmark yang ditemukan - jalankan armada penjelajah untuk mulai menandai.</p>
+        </div>
+      </div>
+    </section>
+    </div>
+
+    <div class="tab-view" data-tab-view="storage">
     <!-- Kepatuhan Kategori Gudang - chest yang ketahuan belum sesuai aturan kategori, dicatat di sini -->
     <section class="row">
       <div class="card full-width" id="storage-compliance-panel">
@@ -297,7 +309,9 @@
         </div>
       </div>
     </section>
+    </div>
 
+    <div class="tab-view" data-tab-view="logs">
     <!-- Baris 3: Panel Benchmark Kurikulum -->
     <section class="row">
       <div class="card full-width" id="benchmark-panel">
@@ -385,10 +399,12 @@
         </div>
       </div>
     </section>
+    </div>
   </main>
 
   <script src="js/app.js"></script>
   <script src="js/visualizer2d.js"></script>
+  <script src="js/tabs.js"></script>
   <script src="js/aiTerminal.js"></script>
 </body>
 </html>

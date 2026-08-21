@@ -114,6 +114,46 @@ body {
   box-shadow: 0 0 6px var(--good);
 }
 
+/* ── Tab Navigation ────────────────────────────────────────── */
+/* Permintaan nyata pemilik: "ui nya berantakan tata lagi menjadi lebih rapi" - dulu 20 section
+   ditumpuk vertikal dalam satu scroll panjang tanpa pengelompokan sama sekali. Dikelompokkan jadi
+   4 tampilan (Ringkasan/Armada/Gudang/Uji & Log) TANPA mengubah id elemen manapun yang dipakai
+   app.js - cuma dibungkus ulang lewat .tab-view, ditampilkan/disembunyikan lewat js/tabs.js. */
+#tab-nav {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  position: sticky;
+  /* Diset lewat JS (js/tabs.js) dari tinggi #app-header sesungguhnya saat render - dihindari
+     angka px tebakan supaya tidak ada celah/tumpang tindih kalau tinggi header berubah. */
+  top: 0;
+  z-index: 90;
+}
+.tab-nav-inner {
+  max-width: 1320px;
+  margin: 0 auto;
+  padding: 0 2rem;
+  display: flex;
+  gap: 0.3rem;
+  overflow-x: auto;
+}
+.tab-btn {
+  font-family: var(--font);
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: var(--text-dim);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 0.75rem 0.9rem;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: color var(--transition), border-color var(--transition);
+}
+.tab-btn:hover { color: var(--text); }
+.tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
+.tab-view { display: none; flex-direction: column; gap: 1.1rem; }
+.tab-view.active { display: flex; }
+
 /* ── Dashboard Layout ──────────────────────────────────────── */
 #dashboard {
   max-width: 1320px;
