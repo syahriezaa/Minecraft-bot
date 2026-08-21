@@ -259,10 +259,27 @@ class MineflayerRoleAdapter {
     if (!block || typeof this.bot?.openChest !== 'function') return null;
     await this.navigateNear(pos, 3);
     const chest = await this.bot.openChest(block);
-    if (this.options.chestSettleMs > 0) {
-      await new Promise((resolve) => setTimeout(resolve, this.options.chestSettleMs));
-    }
+    await this.waitForStableChestItems(chest);
     return chest;
+  }
+
+  // Jangan percaya SATU jeda tunggal (chestSettleMs) lalu langsung anggap datanya sudah benar -
+  // kalau lag server lebih lama dari jeda itu, satu bacaan sesudahnya bisa saja masih data lama/
+  // belum lengkap. Baca ulang berkali-kali (dijeda chestSettleMs tiap kali) sampai dua bacaan
+  // BERTURUT-TURUT benar-benar sama, baru anggap stabil - ditemukan dari keluhan nyata pemilik:
+  // item salah tempat tetap tidak diambil karena data yang dicocokkan ke kategori seharusnya
+  // belum ter-update saat chest baru saja dibuka.
+  async waitForStableChestItems(chest) {
+    if (typeof chest?.containerItems !== 'function' || !(this.options.chestSettleMs > 0)) return;
+    const maxAttempts = this.options.chestSettleMaxAttempts ?? 4;
+    const snapshot = (items) => items.map((it) => `${it.name}x${it.count}`).sort().join('|');
+    let previous = snapshot(chest.containerItems());
+    for (let i = 0; i < maxAttempts; i++) {
+      await new Promise((resolve) => setTimeout(resolve, this.options.chestSettleMs));
+      const current = snapshot(chest.containerItems());
+      if (current === previous) return;
+      previous = current;
+    }
   }
 
   // Cari chest di sekitar yang SUDAH berisi salah satu dari itemNames - dipakai FarmerEngine

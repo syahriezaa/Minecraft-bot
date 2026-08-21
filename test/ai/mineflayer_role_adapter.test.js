@@ -571,4 +571,32 @@ describe('MineflayerRoleAdapter.openChestAt - harus beri jeda singkat setelah wi
 
     assert.ok(elapsed >= 30, `harus menunggu minimal chestSettleMs (30ms) sesudah open, tapi cuma ${elapsed}ms`);
   });
+
+  it('harus TERUS membaca ulang isi chest sampai dua bacaan berturut-turut SAMA (bukan cuma tunggu sekali lalu percaya) - kalau lag server lebih lama dari chestSettleMs, satu jeda tunggal saja bisa masih membaca data lama/belum lengkap - ditemukan dari keluhan nyata pemilik: item yang salah tempat tetap tidak diambil karena data chest yang dibaca belum ter-update saat dicocokkan dengan kategori seharusnya', async () => {
+    let callCount = 0;
+    const readings = [
+      [{ name: 'dirt', count: 1 }], // baca pertama: masih data lama/belum lengkap
+      [{ name: 'dirt', count: 1 }, { name: 'ink_sac', count: 3 }], // baca kedua: masih berubah (belum stabil)
+      [{ name: 'dirt', count: 1 }, { name: 'ink_sac', count: 3 }] // baca ketiga: sama dengan sebelumnya -> stabil
+    ];
+    const bot = {
+      entity: { position: { x: 0, y: 64, z: 0 } },
+      pathfinder: { goto: async () => {} },
+      blockAt: () => ({ name: 'chest', position: { x: 5, y: 64, z: 5 } }),
+      openChest: async () => ({
+        containerItems: () => {
+          const result = readings[Math.min(callCount, readings.length - 1)];
+          callCount += 1;
+          return result;
+        },
+        close: () => {}
+      })
+    };
+    const adapter = new MineflayerRoleAdapter(bot, { chestSettleMs: 5 });
+
+    const items = await adapter.getChestContents({ x: 5, y: 64, z: 5 });
+
+    assert.ok(callCount >= 3, `harus membaca ulang sampai stabil (minimal 3x baca), tapi cuma ${callCount}x`);
+    assert.deepEqual(items, [{ name: 'dirt', count: 1 }, { name: 'ink_sac', count: 3 }], 'harus pakai bacaan yang SUDAH stabil, bukan bacaan pertama yang masih berubah');
+  });
 });
