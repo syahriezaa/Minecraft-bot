@@ -331,7 +331,7 @@ function buildMovements(bot) {
   return movements;
 }
 
-function startStorageWorker({ host, port, botName, scanRadius = 48, baseGoal = DEFAULT_BASE_GOAL, houseBounds = DEFAULT_HOUSE_BOUNDS, log = (m) => console.log(m), onDisconnect = () => {}, onMisplaced = () => {}, onChestSnapshot = () => {} }) {
+function startStorageWorker({ host, port, botName, scanRadius = 48, baseGoal = DEFAULT_BASE_GOAL, houseBounds = DEFAULT_HOUSE_BOUNDS, log = (m) => console.log(m), onDisconnect = () => {}, onMisplaced = () => {}, onChestSnapshot = () => {}, onAssignmentsChanged = () => {} }) {
   const bot = mineflayer.createBot({
     host, port,
     username: botName || 'StorageWorker',
@@ -377,7 +377,13 @@ function startStorageWorker({ host, port, botName, scanRadius = 48, baseGoal = D
     engine.on('collected', ({ position, count }) => log(`Ambil ${count} item dari chest luar di (${position.x},${position.y},${position.z})`));
     engine.on('delivered', ({ position, count, name }) => {
       log(`Antar ${count}x ${name} ke chest gudang di (${position.x},${position.y},${position.z})`);
-      saveAssignments(engine.getChestAssignments(), log);
+      const assignments = engine.getChestAssignments();
+      saveAssignments(assignments, log);
+      // Dorong lewat WS LANGSUNG (bukan cuma disk) - permintaan nyata pemilik: "use ws to update
+      // memory ui to memory is dynamic not just in every restart" - panel "Memori Sortir Worker"
+      // di dashboard harus ikut berubah SAAT ITU JUGA kalau ada item baru yang belajar rumahnya
+      // (lewat resolveChestForItem), bukan cuma ter-refresh pas restart atau nebeng event lain.
+      onAssignmentsChanged(assignments);
     });
     engine.on('inspected', ({ position, items }) => log(`Periksa chest gudang di (${position.x},${position.y},${position.z}) - isi: ${items.map((i) => `${i.name}x${i.count}`).join(', ') || '(kosong)'}`));
     engine.on('deliverFailed', ({ position, error, name }) => log(`Gagal antar ${name} ke chest gudang di (${position.x},${position.y},${position.z}) - ${error} - coba chest lain di tick berikutnya.`));

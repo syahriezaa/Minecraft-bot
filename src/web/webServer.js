@@ -528,6 +528,13 @@ app.post('/api/storage/start', (req, res) => {
           status: 'RUNNING'
         }
       });
+    },
+    // Dorong memori sortir lewat WS begitu berubah (item baru belajar rumahnya lewat delivery) -
+    // permintaan nyata pemilik: "use ws to update memory ui to memory is dynamic not just in
+    // every restart" - panel "Memori Sortir Worker" jadi genuinely live, bukan cuma nebeng
+    // refresh event lain atau baru ter-update pas restart.
+    onAssignmentsChanged: (assignments) => {
+      broadcast({ type: 'STORAGE_ASSIGNMENTS_UPDATE', data: { assignments } });
     }
   });
   storageWorkers.set(name, handle);

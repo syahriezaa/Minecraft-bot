@@ -96,12 +96,13 @@
       case 'STORAGE_CHEST_MAP_UPDATE':
         renderChestMap(msg.data?.chests || []);
         renderMisplacedNow(msg.data?.chests || []);
-        // Memori sortir bisa saja baru saja berubah (item baru pertama kali ketemu rumahnya) -
-        // muat ulang supaya panel "Memori Sortir Worker" tetap persis sama dengan engine, bukan
-        // cuma snapshot sekali saat halaman dibuka.
-        fetch('/api/storage/assignments').then(r => r.json()).then(res => {
-          if (res.data?.assignments) renderAssignments(res.data.assignments);
-        }).catch(() => {});
+        break;
+      case 'STORAGE_ASSIGNMENTS_UPDATE':
+        // Dorong LANGSUNG lewat WS begitu engine belajar rumah baru untuk suatu item - permintaan
+        // nyata pemilik: "use ws to update memory ui to memory is dynamic not just in every
+        // restart" - panel "Memori Sortir Worker" genuinely live, bukan nebeng event lain atau
+        // cuma ter-update pas restart/reload halaman.
+        renderAssignments(msg.data?.assignments || {});
         break;
     }
   }
