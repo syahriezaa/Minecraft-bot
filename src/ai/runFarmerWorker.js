@@ -145,6 +145,14 @@ function startFarmerWorker({ host, port, botName, scanRadius = 32, baseGoal = DE
       log(`Panen ${crop} di (${position.x},${position.y},${position.z}) - total item hasil panen di inventaris sekarang: ${total}`);
     });
     engine.on('planted', ({ seed, position }) => log(`Tanam ${seed} di (${position.x},${position.y},${position.z})`));
+    // Log EKSPLISIT untuk perbaikan lahan - permintaan nyata pemilik: "it full of holes why not
+    // repairing" - tanpa log ini, perbaikan yang SUNGGUH terjadi tetap tidak terlihat sama sekali
+    // di dashboard/feed, jadi tidak ada cara membuktikan fitur ini benar-benar jalan atau tidak.
+    engine.on('repaired', ({ position, type }) => {
+      const label = type === 'fill' ? 'Isi lubang & cangkul' : 'Cangkul';
+      log(`${label} lahan di (${position.x},${position.y},${position.z})`);
+    });
+    engine.on('repairError', ({ step, error }) => log(`PERINGATAN: gagal ${step} untuk perbaikan lahan (${error}) - coba lagi tick berikutnya.`));
 
     log('Pekerja pertanian mulai bekerja.');
     lastAction = 'WORKING';
