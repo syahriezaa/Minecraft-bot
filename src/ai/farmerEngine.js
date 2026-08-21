@@ -7,6 +7,7 @@
 
 const EventEmitter = require('node:events');
 const { MineflayerRoleAdapter, distance } = require('./mineflayerRoleAdapter');
+const { parseChestPositionKey } = require('./storageMemory');
 
 const CROP_RULES = Object.freeze({
   wheat: { maxAge: 7, seed: 'wheat_seeds', harvest: ['wheat'] },
@@ -53,6 +54,12 @@ class FarmerEngine extends EventEmitter {
       plantBatchSize: 1,
       depositChest: null,
       autoMatchStorage: false,
+      // Memori sortir gudang DIBAGIKAN dari StorageWorker (lihat storageMemory.js) - permintaan
+      // nyata pemilik: "share memory tentang peti ke semua bot agar dapat mencari barang barang
+      // dan menaruh barang dengan tepat". Kalau jenis item yang mau disetor sudah dikenal di
+      // sini, langsung antar ke posisi itu TANPA memindai chest satu-satu (findMatchingChest) -
+      // lebih cepat DAN tidak mungkin salah pilih chest yang kebetulan sudah berisi barang nyasar.
+      sharedChestAssignments: null,
       depositWhenSlotsFreeBelow: 4,
       // Sisakan sejumlah ini di inventaris untuk item yang JUGA dipakai sebagai benih (carrot,
       // potato - item hasil panen yang sama persis dipakai lagi untuk menanam) sebelum menyetor
@@ -168,7 +175,8 @@ class FarmerEngine extends EventEmitter {
       for (const name of distinctNames) {
         let chestPos = this.depositChestCache.get(name);
         if (!chestPos) {
-          chestPos = await this.adapter.findMatchingChest([name]);
+          const sharedKey = this.options.sharedChestAssignments?.[name];
+          chestPos = sharedKey ? parseChestPositionKey(sharedKey) : await this.adapter.findMatchingChest([name]);
           if (chestPos) this.depositChestCache.set(name, chestPos);
         }
         if (!chestPos) continue;

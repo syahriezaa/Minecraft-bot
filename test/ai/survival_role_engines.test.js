@@ -187,6 +187,45 @@ describe('FarmerEngine', () => {
     assert.deepEqual(carrotDeposit.items, ['carrot']);
   });
 
+  it('dengan autoMatchStorage aktif DAN sharedChestAssignments diberikan (memori sortir gudang yang sama dengan StorageWorker), harus LANGSUNG antar ke posisi yang sudah diketahui - TANPA memindai chest satu-satu lewat findMatchingChest - permintaan nyata pemilik: "share memory tentang peti ke semua bot agar dapat mencari barang barang dan menaruh barang dengan tepat"', async () => {
+    const adapter = new FakeRoleAdapter({
+      items: { wheat: 5 }
+    });
+    // SENGAJA tidak diisi chest apapun (adapter.chests kosong) - kalau engine masih jatuh ke
+    // findMatchingChest, deposit ini akan GAGAL (tidak ketemu apa-apa), membuktikan jalur memori
+    // bersama-lah yang benar-benar dipakai, bukan cuma kebetulan lolos lewat live-scan.
+    const engine = new FarmerEngine({
+      adapter,
+      autoMatchStorage: true,
+      sharedChestAssignments: { wheat: '-181,73,-350' }
+    });
+
+    const result = await engine.tick();
+
+    assert.equal(result.action, 'deposit');
+    const deposits = adapter.actions.filter((a) => a.type === 'deposit');
+    assert.equal(deposits.length, 1);
+    assert.deepEqual(deposits[0].position, { x: -181, y: 73, z: -350 }, 'harus antar persis ke posisi dari memori bersama');
+    assert.ok(!adapter.actions.some((a) => a.type === 'findMatchingChest'), 'TIDAK BOLEH memindai chest satu-satu kalau posisinya sudah diketahui lewat memori bersama - lebih lambat dan bisa salah pilih');
+  });
+
+  it('dengan autoMatchStorage aktif, item yang TIDAK ADA di sharedChestAssignments harus tetap jatuh ke findMatchingChest (live-scan) seperti biasa - memori bersama HANYA jalur pintas untuk item yang sudah dikenal, bukan pengganti mutlak', async () => {
+    const adapter = new FakeRoleAdapter({
+      items: { wheat: 5 }
+    });
+    adapter.chests = [{ position: { x: -181, y: 73, z: -350 }, contents: ['wheat'] }];
+    const engine = new FarmerEngine({
+      adapter,
+      autoMatchStorage: true,
+      sharedChestAssignments: {} // kosong - wheat belum dikenal sama sekali di memori bersama
+    });
+
+    const result = await engine.tick();
+
+    assert.equal(result.action, 'deposit');
+    assert.ok(adapter.actions.some((a) => a.type === 'findMatchingChest'), 'item yang tidak dikenal memori bersama harus tetap dicari lewat live-scan seperti biasa');
+  });
+
   it('dengan autoMatchStorage aktif tapi TIDAK ADA chest yang cocok untuk suatu item, item itu TIDAK BOLEH dibuang ke chest sembarangan - biarkan di inventaris sampai chest yang cocok ditemukan', async () => {
     const adapter = new FakeRoleAdapter({ items: { potato: 2 } });
     adapter.chests = [{ position: { x: 0, y: 64, z: 0 }, contents: ['wheat'] }];

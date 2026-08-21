@@ -24,6 +24,12 @@ const { pathfinder, Movements } = require('mineflayer-pathfinder');
 const { MineflayerRoleAdapter } = require('./mineflayerRoleAdapter');
 const { FarmerEngine, CROP_RULES } = require('./farmerEngine');
 const { walkToBase } = require('./walkToBase');
+// Memori sortir gudang DIBAGIKAN dari StorageWorker - permintaan nyata pemilik: "share memory
+// tentang peti ke semua bot agar dapat mencari barang barang dan menaruh barang dengan tepat".
+// Dulu FarmerWorker terpaksa menebak lewat pemindaian chest satu-satu (findMatchingChest) setiap
+// kali mau menyimpan/mengambil barang - sekarang pakai memori yang SAMA persis dengan yang
+// dipakai StorageWorker untuk merapikan gudang.
+const { getSharedChestAssignments, parseChestPositionKey } = require('./storageMemory');
 
 const TICK_INTERVAL_MS = Number(process.env.FARMER_TICK_MS) || 2000;
 // Base sungguhan pemilik (dikoreksi live sesi ini - lihat commit sebelumnya, -175,71,-325 lama
@@ -60,11 +66,16 @@ function buildMovements(bot) {
 // dipanen dulu dari lapangan untuk dapat benihnya, dan kalau lapangannya sendiri didominasi wheat,
 // bot tidak pernah kebagian benih carrot/potato). Ambil sedikit dari gudang (kalau ada stok di sana
 // dari panen sebelumnya) supaya rotasi tanam benar-benar punya variasi untuk dipilih.
-async function restockSeedVarietyFromStorage(adapter, log) {
+async function restockSeedVarietyFromStorage(adapter, log, sharedChestAssignments) {
   const seedNames = Object.values(CROP_RULES).map((rule) => rule.seed);
   for (const seedName of seedNames) {
     if (adapter.hasItem(seedName)) continue; // sudah punya, tidak perlu restock jenis ini
-    const chestPos = await adapter.findMatchingChest([seedName]);
+    // Cari lewat memori bersama DULU (posisi sudah pasti benar, tidak perlu buka chest satu-satu)
+    // - permintaan nyata pemilik: "share memory tentang peti ke semua bot agar dapat mencari
+    // barang barang". Cuma jatuh ke live-scan (findMatchingChest) kalau jenis benih ini belum
+    // dikenal sama sekali di memori bersama.
+    const sharedKey = sharedChestAssignments?.[seedName];
+    const chestPos = sharedKey ? parseChestPositionKey(sharedKey) : await adapter.findMatchingChest([seedName]);
     if (!chestPos) continue; // tidak ada stok di gudang untuk jenis ini - lewati
     const result = await adapter.withdrawFromChest(chestPos, [seedName], 16);
     if (result.withdrawn > 0) log(`Ambil ${result.withdrawn}x ${seedName} dari gudang untuk variasi tanam.`);
@@ -109,13 +120,17 @@ function startFarmerWorker({ host, port, botName, scanRadius = 32, baseGoal = DE
     const bedResult = await adapter.setSpawnAtNearestBed();
     log(bedResult ? 'Spawn point diset di bed dekat base.' : 'Tidak ada bed dalam jangkauan - spawn point tidak diubah.');
 
-    await restockSeedVarietyFromStorage(adapter, log);
+    const sharedChestAssignments = getSharedChestAssignments(log);
+    log(`Muat memori sortir gudang bersama: ${Object.keys(sharedChestAssignments).length} jenis item sudah punya chest langganan (sama persis dengan yang dipakai StorageWorker).`);
+
+    await restockSeedVarietyFromStorage(adapter, log, sharedChestAssignments);
 
     engine = new FarmerEngine({
       adapter,
       scanRadius,
       avoidArea,
       autoMatchStorage: true,
+      sharedChestAssignments,
       harvestBatchSize: Number(process.env.FARM_HARVEST_BATCH) || 16,
       plantBatchSize: Number(process.env.FARM_PLANT_BATCH) || 16
     });
