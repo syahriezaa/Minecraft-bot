@@ -496,7 +496,7 @@ describe('StorageManagerEngine', () => {
     assert.ok(!booksChest.items.some((i) => i.name === 'dirt'), 'dirt tidak boleh nyasar ke chest buku');
   });
 
-  it('kalau item SUDAH punya assignment tapi rumahnya penuh, dan ADA chest lain yang genuinely kosong (bukan kategori lain) - boleh dipakai sebagai tujuan sementara (ini beda dari fallback "asal-asalan" - chest kosong aman dipakai siapapun)', async () => {
+  it('kalau item SUDAH punya assignment tapi rumahnya penuh, dan ADA chest lain yang genuinely kosong (bukan kategori lain, dan BUKAN chest yang baru saja dikosongkan reorganize) - boleh dipakai sebagai tujuan sementara (ini beda dari fallback "asal-asalan" - chest kosong aman dipakai siapapun)', async () => {
     const homeChest = { position: { x: -181, y: 74, z: -352 }, items: [] };
     const emptyChest = { position: { x: -181, y: 71, z: -350 }, items: [] };
     const adapter = new FakeStorageAdapter({
@@ -517,6 +517,30 @@ describe('StorageManagerEngine', () => {
     // rotten_flesh bolak-balik TANPA HENTI antara dua chest karena assignment permanennya
     // ke-timpa oleh chest kosong yang cuma dimaksudkan sebagai solusi sementara.
     assert.equal(engine.getChestAssignments().dirt, '-181,74,-352', 'rumah ASLI harus tetap tercatat, bukan tertimpa jadi chest kosong sementara itu');
+  });
+
+  it('kalau chest kosong yang cocok itu ternyata chest yang BARU SAJA dikosongkan oleh reorganize (source item ini sendiri, siklus ini juga), JANGAN dipakai sebagai tujuan sementara - HARUS menyerah dulu (tunggu) - ditemukan dari bug live nyata: redstone bolak-balik TANPA HENTI karena "chest kosong" yang dipilih justru chest yang SAMA baru saja dikosongkan reorganize-nya sendiri - begitu diisi lagi, jadi "salah tempat" lagi, reorganize ambil lagi, delivery jatuh ke fallback yang sama lagi, taruh balik lagi... berulang selamanya', async () => {
+    const wrongChest = { position: { x: -183, y: 72, z: -352 }, items: [{ name: 'redstone', count: 20 }] };
+    const homeChest = { position: { x: -185, y: 72, z: -352 }, items: [{ name: 'gold_nugget', count: 64 }] }; // penuh - tidak bisa terima redstone lagi
+    const adapter = new FakeStorageAdapter({
+      chests: { '-183,72,-352': wrongChest, '-185,72,-352': homeChest }
+    });
+    adapter.depositToChest = async () => { throw new Error('destination full'); };
+    const engine = new StorageManagerEngine({ adapter, houseBounds: HOUSE_BOUNDS, initialAssignments: { redstone: '-185,72,-352' } });
+
+    const first = await engine.tick(); // inspect wrongChest - redstone terdeteksi salah tempat, diambil
+    assert.equal(first.action, 'reorganize');
+    assert.ok(!wrongChest.items.some((i) => i.name === 'redstone'), 'redstone harus sudah diambil dari wrongChest - sekarang chest itu kosong');
+
+    // Lanjutkan sampai giliran deposit (masih mode collect - periksa homeChest dulu, baru deposit).
+    let deliverResult = null;
+    for (let i = 0; i < 5 && !deliverResult; i++) {
+      const r = await engine.tick();
+      if (r.action === 'deliver' || r.action === 'deliver_failed' || r.action === 'idle') deliverResult = r;
+    }
+
+    assert.notEqual(deliverResult?.action, 'deliver', 'tidak boleh berhasil mengantar ke wrongChest yang baru saja dikosongkan - itu penyebab bolak-balik tanpa henti');
+    assert.ok(!wrongChest.items.some((i) => i.name === 'redstone'), 'redstone tidak boleh ditaruh balik ke wrongChest (chest yang baru saja dikosongkan dari item ini sendiri)');
   });
 
   it('BOUNCING LOOP: kalau rumah asli MASIH penuh, item yang baru ditaruh di chest kosong sementara TIDAK BOLEH langsung ditandai "salah tempat" lagi - ditemukan dari bug live nyata: rotten_flesh bolak-balik TANPA HENTI 2+ menit antara dua chest karena reorganize terus mencoba memindahkannya kembali ke rumah yang TERNYATA MASIH penuh, gagal, balik lagi ke sementara, dianggap salah tempat lagi... berulang selamanya', async () => {

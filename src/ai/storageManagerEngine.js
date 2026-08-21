@@ -91,6 +91,11 @@ class StorageManagerEngine extends EventEmitter {
     // fullChestPositions, supaya tiap kali mengantar barang tidak berulang kali mencoba membuka
     // chest yang sudah diketahui rusak (masing-masing percobaan menunggu ~20 detik sebelum gagal).
     this.brokenPositions = new Set();
+    // Chest yang BARU SAJA dikosongkan oleh reorganize (isinya diambil karena salah tempat) -
+    // dikecualikan dari fallback "chest kosong sembarangan" di resolveChestForItem, supaya item
+    // yang baru diambil tidak langsung ditaruh balik ke chest yang SAMA (bug bolak-balik tanpa
+    // henti - lihat resolveChestForItem untuk detail).
+    this.recentlyVacatedPositions = new Set();
     // Memori "jenis item ini pergi ke chest itu" (posKey string) - dipertahankan SELAMA proses ini
     // berjalan, dan bisa dimuat ulang lewat initialAssignments (disimpan/dipulihkan pemanggil lewat
     // getChestAssignments()) supaya sortir tetap KONSISTEN lintas restart worker, bukan pilih
@@ -222,6 +227,13 @@ class StorageManagerEngine extends EventEmitter {
     const assignedElsewhere = new Set(this.chestAssignments.values());
     for (const pos of candidates) {
       if (assignedElsewhere.has(posKey(pos))) continue;
+      // JANGAN pakai chest yang BARU SAJA dikosongkan oleh reorganize sebagai tujuan sementara -
+      // ditemukan dari bug live nyata (dua kali - dulu rotten_flesh, sekarang redstone): chest
+      // "kosong" yang kebetulan cocok itu SERING KALI adalah chest yang barusan diambil isinya
+      // OLEH REORGANIZE PADA SIKLUS INI JUGA (source-nya sendiri) - begitu diisi lagi di sini,
+      // jadi "salah tempat" lagi tick berikutnya, reorganize ambil lagi, delivery jatuh ke
+      // fallback yang SAMA lagi, taruh balik lagi... bolak-balik tanpa akhir.
+      if (this.recentlyVacatedPositions.has(posKey(pos))) continue;
       const items = await this.safeGetChestContents(pos);
       if (!items) continue;
       if (items.length === 0) {
@@ -413,6 +425,7 @@ class StorageManagerEngine extends EventEmitter {
         }
         // JANGAN tandai chest ini "sudah diperiksa" - periksa ulang tick berikutnya untuk
         // memastikan benar-benar bersih (mis. kalau ada stack lain dari jenis yang sama).
+        if (relocated.length > 0) this.recentlyVacatedPositions.add(posKey(nextToInspect));
         this.switchToDepositIfCarryFull();
         return { action: 'reorganize', position: nextToInspect, items: relocated, count: relocated.reduce((s, i) => s + i.count, 0) };
       }
@@ -460,11 +473,12 @@ class StorageManagerEngine extends EventEmitter {
     // iron_ingot) kehabisan tujuan yang valid sama sekali - ditemukan dari keluhan nyata pemilik:
     // storage worker berhenti total mengantar walau membawa banyak item yang rumahnya sudah lama
     // benar, gara-gara rumahnya kena blacklist permanen dari SATU kegagalan lama.
-    if (this.collectedPositions.size > 0 || this.inspectedPositions.size > 0 || this.fullChestPositions.size > 0 || this.brokenPositions.size > 0) {
+    if (this.collectedPositions.size > 0 || this.inspectedPositions.size > 0 || this.fullChestPositions.size > 0 || this.brokenPositions.size > 0 || this.recentlyVacatedPositions.size > 0) {
       this.collectedPositions.clear();
       this.inspectedPositions.clear();
       this.fullChestPositions.clear();
       this.brokenPositions.clear();
+      this.recentlyVacatedPositions.clear();
     }
     // Tidak ada lagi yang bisa diambil (chest luar & dalam sudah habis untuk putaran ini) - kalau
     // tas masih membawa sesuatu, jangan tunggu sampai benar-benar penuh ATAU sampai tick idle
