@@ -121,6 +121,16 @@ describe('walkToBase - navigasi spawn->base memakai mineflayer-pathfinder langsu
     assert.equal(result.success, true, 'kedatangan akhir tetap harus dilaporkan sukses kalau goto() TERAKHIR (tujuan sesungguhnya) berhasil');
   });
 
+  it('goto() yang TIDAK PERNAH resolve/reject (mis. rute terus di-reset berulang-ulang oleh knockback mob, ditemukan dari bug live nyata: "mob farming not hitting" - bot masuk ruangan spawner penuh mob, tiap kena knockback pathfinder menghitung ulang rute dari posisi baru TANPA HENTI, CPU webServer.js terkunci ~100% dan SELURUH server berhenti merespons menit-menitan, MobFarmEngine.tick() bahkan belum sempat mulai karena masih terjebak di walkToBase()) HARUS tetap dibatasi waktu - jangan menggantung selamanya', async () => {
+    const neverResolves = () => new Promise(() => {}); // goto() yang menggantung selamanya
+    const bot = fakeBot({ gotoImpl: neverResolves });
+
+    const result = await walkToBase({ bot, goal: { x: 0, y: 64, z: 0 }, maxGotoMs: 50 });
+
+    assert.equal(result.success, false, 'harus tetap melaporkan gagal (bukan menggantung) begitu batas waktu terlampaui');
+    assert.match(result.reason, /timeout/i);
+  });
+
   it('bot yang belum punya bot.entity.position sama sekali (mis. tes lama/fake sederhana) harus JATUH KE PERILAKU LAMA (satu goto langsung) - jangan sampai fitur baru ini membuat kode yang belum tahu posisi bot menjadi crash', async () => {
     const bot = fakeBot(); // TANPA position sama sekali
     await walkToBase({ bot, goal: { x: 300, y: 71, z: 0 }, range: 2 });

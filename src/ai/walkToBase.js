@@ -59,9 +59,30 @@ function buildMovements(bot) {
  * @param {(message: string) => void} [options.log]
  * @returns {Promise<{success:boolean, reason?:string}>}
  */
-async function walkToBase({ bot, goal, range = 2, settleMs = 0, log = () => {} }) {
+// Batas waktu KERAS untuk SATU panggilan goto() - ditemukan dari bug live nyata: "mob farming not
+// hitting". Bot masuk ruangan mob spawner penuh zombie, tiap kena knockback pathfinder menghitung
+// ULANG rute dari posisi barunya TANPA HENTI (path_reset berulang-ulang) - goto() jadi tidak pernah
+// resolve MAUPUN reject, CPU webServer.js terkunci ~100% dan SELURUH server (termasuk tick semua
+// bot lain) berhenti merespons menit-menitan, sementara MobFarmEngine.tick() sendiri belum sempat
+// mulai sama sekali karena masih terjebak di walkToBase() ini. bot.pathfinder.thinkTimeout cuma
+// membatasi SATU kali pencarian A*, bukan jumlah total pengulangan pencarian - perlu batas terpisah
+// di luar goto() itu sendiri.
+const DEFAULT_MAX_GOTO_MS = 45000;
+
+async function walkToBase({ bot, goal, range = 2, settleMs = 0, maxGotoMs = DEFAULT_MAX_GOTO_MS, log = () => {} }) {
   if (!bot?.pathfinder) {
     throw new Error('Bot belum punya plugin pathfinder dimuat - panggil bot.loadPlugin(pathfinder) dulu.');
+  }
+  async function gotoWithTimeout(goalObj) {
+    let timeoutHandle;
+    const timeout = new Promise((_, reject) => {
+      timeoutHandle = setTimeout(() => reject(new Error(`goto timeout setelah ${maxGotoMs}ms - kemungkinan rute terus di-reset (mis. knockback berulang dari mob)`)), maxGotoMs);
+    });
+    try {
+      await Promise.race([bot.pathfinder.goto(goalObj), timeout]);
+    } finally {
+      clearTimeout(timeoutHandle);
+    }
   }
   if (settleMs > 0) {
     log(`Menunggu ${settleMs}ms supaya chunk sekitar sempat ter-load penuh sebelum mencari rute...`);
@@ -86,7 +107,7 @@ async function walkToBase({ bot, goal, range = 2, settleMs = 0, log = () => {} }
         const hopZ = currentPos.z + (goal.z - currentPos.z) * t;
         log(`Menuju titik antara (${hopX.toFixed(0)}, ~, ${hopZ.toFixed(0)}) - tahap ${i}/${stageCount - 1} sebelum ke base...`);
         try {
-          await bot.pathfinder.goto(new GoalNearXZ(hopX, hopZ, 8));
+          await gotoWithTimeout(new GoalNearXZ(hopX, hopZ, 8));
         } catch (e) {
           log(`Tahap ${i} gagal (${e.message}) - lanjut coba tahap berikutnya.`);
         }
@@ -96,7 +117,7 @@ async function walkToBase({ bot, goal, range = 2, settleMs = 0, log = () => {} }
 
   log(`Berjalan ke base (${goal.x}, ${goal.y}, ${goal.z})...`);
   try {
-    await bot.pathfinder.goto(new GoalNear(goal.x, goal.y, goal.z, range));
+    await gotoWithTimeout(new GoalNear(goal.x, goal.y, goal.z, range));
     log('Sampai di base.');
     return { success: true };
   } catch (e) {
