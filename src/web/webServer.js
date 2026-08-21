@@ -360,7 +360,7 @@ app.post('/api/explorer/start', (req, res) => {
     botName: name,
     scanRadius: scanRadius || 24,
     spiralStepSize: spiralStepSize || 8,
-    maxExploreRadius: maxExploreRadius || 48,
+    maxExploreRadius: maxExploreRadius || 64,
     log: (msg) => broadcast({ type: 'AI_ACTION_EVENT', data: { task: 'EXPLORER_WORKER', step: `[${name}] ${msg}`, status: 'RUNNING' } }),
     onDisconnect: () => {
       explorerWorkers.delete(name);

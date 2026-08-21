@@ -104,7 +104,10 @@ class ExplorerEngine extends EventEmitter {
       // Begitu spiral akan melompat lebih jauh dari radius ini, MENGULANG dari titik dekat base
       // lagi (bukan terus kabur menjelajah jauh) - landmark yang sudah dikenal otomatis dilewati
       // (isAlreadyKnown/isAreaAlreadyKnown), jadi mengulang aman, tidak spam duplikat.
-      maxExploreRadius: 48,
+      // 64, bukan 48 - permintaan nyata pemilik: "map area farming nya". Lahan farming
+      // sungguhan (dikonfirmasi lewat probe live sebelumnya) meluas sampai ~57 blok dari base ke
+      // arah selatan - radius 48 akan memotong ujung lahan itu sebelum sempat terpetakan.
+      maxExploreRadius: 64,
       scanRadius: 24,
       dedupeDistance: 12,
       llmClient: null,
