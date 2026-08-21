@@ -90,6 +90,16 @@ const CANONICAL_ORE_INGOT_ASSIGNMENTS = {
 // yang sebelumnya tidak kebagian slot sendiri.
 const NETHER_MATERIALS_CHEST = '-181,71,-353';
 const STONE_COBBLE_CHEST = '-181,71,-352';
+// Kolom baru z=-344 (pemilik menambahkan level double chest tambahan) - dipakai sebagai CADANGAN
+// untuk 3 kategori yang paling sering "destination full": drop mob, benih, dan batu/cobble.
+// Ditemukan dari keluhan nyata pemilik: ink_sac di chest y73,-350 tidak pernah dipindahkan -
+// rumah aslinya (MOB_DROPS_CHEST) memang benar tapi kronis penuh, dan pengaman anti-bolak-balik
+// (lihat storageManagerEngine.js) sengaja TIDAK memindahkan ke rumah yang diketahui masih penuh -
+// jadi ink_sac (dan item sejenis) butuh rumah KEDUA yang benar-benar berbeda secara fisik, bukan
+// cuma menunggu rumah pertama kosong (yang mungkin tidak pernah terjadi).
+const MOB_DROPS_OVERFLOW_CHEST = '-181,71,-344';
+const SEEDS_OVERFLOW_CHEST = '-181,72,-344';
+const STONE_COBBLE_OVERFLOW_CHEST = '-181,73,-344';
 // Armor, buku, dan perkakas SENGAJA disimpan di BARREL, bukan chest - permintaan nyata pemilik
 // ("i think tools armor and book shoud be store in barel"). Posisi barel diambil dari barel
 // sungguhan yang ditemukan di antara kolom chest (y71-73, z -351/-348).
@@ -162,11 +172,16 @@ const CANONICAL_GEAR_ASSIGNMENTS = {
   cod: FOOD_CHEST, cake: FOOD_CHEST, cookie: FOOD_CHEST, pumpkin_pie: FOOD_CHEST, egg: FOOD_CHEST,
 
   // Drop mob (bahan mentah dari membunuh/menjarah mob, BUKAN makanan/armor/senjata)
-  bone: MOB_DROPS_CHEST, string: MOB_DROPS_CHEST, spider_eye: MOB_DROPS_CHEST, slime_ball: MOB_DROPS_CHEST,
-  phantom_membrane: MOB_DROPS_CHEST, rotten_flesh: MOB_DROPS_CHEST, feather: MOB_DROPS_CHEST, gunpowder: MOB_DROPS_CHEST,
+  bone: MOB_DROPS_CHEST, string: MOB_DROPS_CHEST, spider_eye: MOB_DROPS_CHEST,
   leather: MOB_DROPS_CHEST, white_wool: MOB_DROPS_CHEST, black_wool: MOB_DROPS_CHEST, gray_wool: MOB_DROPS_CHEST,
-  ender_eye: MOB_DROPS_CHEST, glow_ink_sac: MOB_DROPS_CHEST, ink_sac: MOB_DROPS_CHEST, breeze_rod: MOB_DROPS_CHEST,
-  white_carpet: MOB_DROPS_CHEST, wind_charge: MOB_DROPS_CHEST,
+  white_carpet: MOB_DROPS_CHEST,
+  // Cadangan (chest fisik LAIN) - drop mob yang volumenya besar/sering menumpuk, supaya rumah
+  // utama tidak kronis penuh sampai item lain (mis. ink_sac) tidak pernah kebagian tempat sama
+  // sekali.
+  slime_ball: MOB_DROPS_OVERFLOW_CHEST, phantom_membrane: MOB_DROPS_OVERFLOW_CHEST,
+  rotten_flesh: MOB_DROPS_OVERFLOW_CHEST, feather: MOB_DROPS_OVERFLOW_CHEST, gunpowder: MOB_DROPS_OVERFLOW_CHEST,
+  ender_eye: MOB_DROPS_OVERFLOW_CHEST, glow_ink_sac: MOB_DROPS_OVERFLOW_CHEST, ink_sac: MOB_DROPS_OVERFLOW_CHEST,
+  breeze_rod: MOB_DROPS_OVERFLOW_CHEST, wind_charge: MOB_DROPS_OVERFLOW_CHEST,
 
   // Bibit pohon (SAPLINGS_PLANTS_CHEST) - HANYA bibit pohon (bagian dari tema kayu kolom z=-347),
   // jamur/tanaman nether/kaktus DIKELUARKAN (bukan "hasil kayu") - permintaan nyata pemilik: kolom
@@ -176,8 +191,11 @@ const CANONICAL_GEAR_ASSIGNMENTS = {
   cherry_sapling: SAPLINGS_PLANTS_CHEST, mangrove_propagule: SAPLINGS_PLANTS_CHEST,
 
   // Benih murni (SEEDS_CHEST) - beda dari hasil panen utama dan hasil sampingan panen
-  wheat_seeds: SEEDS_CHEST, beetroot_seeds: SEEDS_CHEST, melon_seeds: SEEDS_CHEST, pumpkin_seeds: SEEDS_CHEST,
-  torchflower_seeds: SEEDS_CHEST, pitcher_pod: SEEDS_CHEST,
+  wheat_seeds: SEEDS_CHEST,
+  // Cadangan - jenis benih lain, dipisah dari wheat_seeds (paling banyak volumenya) supaya rumah
+  // utama tidak kronis penuh.
+  beetroot_seeds: SEEDS_OVERFLOW_CHEST, melon_seeds: SEEDS_OVERFLOW_CHEST, pumpkin_seeds: SEEDS_OVERFLOW_CHEST,
+  torchflower_seeds: SEEDS_OVERFLOW_CHEST, pitcher_pod: SEEDS_OVERFLOW_CHEST,
 
   // Hasil sampingan bercocok tanam (bukan benih murni, bukan hasil panen utama wheat/carrot/potato)
   sugar_cane: FARMING_BYPRODUCTS_CHEST, sugar: FARMING_BYPRODUCTS_CHEST, glow_berries: FARMING_BYPRODUCTS_CHEST,
@@ -235,8 +253,12 @@ const CANONICAL_GEAR_ASSIGNMENTS = {
 
   // Batu/cobble bulk
   stone: STONE_COBBLE_CHEST, cobblestone: STONE_COBBLE_CHEST, mossy_cobblestone: STONE_COBBLE_CHEST,
-  cobbled_deepslate: STONE_COBBLE_CHEST, gravel: STONE_COBBLE_CHEST, tuff: STONE_COBBLE_CHEST,
-  granite: STONE_COBBLE_CHEST, diorite: STONE_COBBLE_CHEST, andesite: STONE_COBBLE_CHEST
+  cobbled_deepslate: STONE_COBBLE_CHEST,
+  // Cadangan - batu dekoratif/langka yang volumenya lebih kecil, dipisah dari stone/cobblestone
+  // (paling banyak volumenya) supaya rumah utama tidak kronis penuh - ditemukan dari keluhan nyata
+  // pemilik: cobblestone berulang kali gagal disetor ke chest utama karena selalu penuh.
+  gravel: STONE_COBBLE_OVERFLOW_CHEST, tuff: STONE_COBBLE_OVERFLOW_CHEST,
+  granite: STONE_COBBLE_OVERFLOW_CHEST, diorite: STONE_COBBLE_OVERFLOW_CHEST, andesite: STONE_COBBLE_OVERFLOW_CHEST
 };
 
 const DEFAULT_BASE_GOAL = { x: -185, y: 71, z: -352 };
