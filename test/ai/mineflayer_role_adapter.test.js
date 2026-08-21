@@ -512,6 +512,29 @@ describe('MineflayerRoleAdapter.getChestContents - buka satu chest, baca isinya,
     assert.equal(closeCalls.length, 1, 'chest harus ditutup lagi setelah dibaca - jangan tinggalkan window terbuka');
   });
 
+  it('urutan HARUS buka -> baca -> simpan ke memori (lewat callback onRead) -> BARU tutup - permintaan nyata pemilik: "log harus nya open -> get data -> save to memory -> close" - callback onRead harus selesai dipanggil SEBELUM chest.close(), bukan sesudahnya, supaya memori/dashboard sudah pasti tersimpan sebelum chest ditinggalkan', async () => {
+    const callOrder = [];
+    const bot = fakeBot({
+      chestBlocks: [{ position: { x: -181, y: 73, z: -350 } }],
+      chestContentsByKey: { '-181,73,-350': [{ name: 'iron_ingot', count: 4 }] }
+    });
+    const originalOpenChest = bot.openChest;
+    bot.openChest = async (block) => {
+      const chest = await originalOpenChest(block);
+      const originalClose = chest.close;
+      chest.close = () => { callOrder.push('close'); originalClose(); };
+      return chest;
+    };
+    const adapter = new MineflayerRoleAdapter(bot);
+
+    await adapter.getChestContents(
+      { x: -181, y: 73, z: -350 },
+      { onRead: async (items) => { callOrder.push('onRead:' + items[0].name); } }
+    );
+
+    assert.deepEqual(callOrder, ['onRead:iron_ingot', 'close'], 'onRead (simpan ke memori) harus selesai duluan, baru chest ditutup');
+  });
+
   it('harus mengembalikan array kosong kalau chest tidak bisa dibuka (mis. bukan blok chest di posisi itu)', async () => {
     const bot = fakeBot({ chestBlocks: [] });
     const adapter = new MineflayerRoleAdapter(bot);

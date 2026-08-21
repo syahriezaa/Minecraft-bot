@@ -391,11 +391,17 @@ class MineflayerRoleAdapter {
   // melihat isinya". Intipan seperti itu memakai verify:false - settle-poll pasif di openChestAt
   // saja sudah cukup untuk keputusan "sudah cocok / kosong / bukan", tidak butuh jaminan seketat
   // audit resmi.
-  async getChestContents(pos, { verify = true } = {}) {
+  // { onRead }: dipanggil dengan isi chest SEBELUM chest.close() - permintaan nyata pemilik: "log
+  // harus nya open -> get data -> save to memory -> close" - urutan ini memastikan data SUDAH
+  // tersimpan ke memori/dashboard sebelum chest ditinggalkan, bukan ditutup duluan baru diproses
+  // belakangan (yang sebelumnya membuat log "Ditutup" muncul SEBELUM log "Memori Gudang
+  // diperbarui", padahal seharusnya sebaliknya).
+  async getChestContents(pos, { verify = true, onRead } = {}) {
     const chest = await this.openChestAt(pos);
     if (!chest) return [];
     if (verify) await this.verifyChestContentsByRoundTrip(chest);
     const items = typeof chest.containerItems === 'function' ? chest.containerItems() : [];
+    if (typeof onRead === 'function') await onRead(items);
     if (typeof chest.close === 'function') chest.close();
     return items;
   }

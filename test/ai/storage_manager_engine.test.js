@@ -31,7 +31,9 @@ class FakeStorageAdapter {
   async getChestContents(pos, options = {}) {
     this.actions.push({ type: 'getChestContents', position: pos, options });
     const chest = this.chests[`${pos.x},${pos.y},${pos.z}`];
-    return chest ? chest.items : [];
+    const items = chest ? chest.items : [];
+    if (typeof options.onRead === 'function') await options.onRead(items);
+    return items;
   }
 
   async withdrawAllFromChest(pos) {
@@ -248,6 +250,23 @@ describe('StorageManagerEngine', () => {
     const peeks = adapter.actions.filter((a) => a.type === 'getChestContents');
     assert.ok(peeks.length > 0, 'harus benar-benar mengintip minimal satu chest untuk mencari yang cocok/kosong');
     assert.ok(peeks.every((a) => a.options.verify === false), 'SEMUA intipan resolveChestForItem harus verify:false - kalau tidak, mengintip banyak chest jadi lambat sekali (tiap chest kena probe ambil-taruh penuh)');
+  });
+
+  it('resolveChestForItem (lewat safeGetChestContents) HARUS TETAP emit "chestSnapshot" walau cuma mengintip (verify:false) - permintaan nyata pemilik: "bot wajib mengambil data peti ketika membuka peti dan mengupdate ke memory setiap kali membuka peti" - dulu chest yang diintip untuk cari tempat kosong/cocok TIDAK PERNAH memperbarui peta gudang di dashboard walau chest-nya benar-benar dibuka dan dibaca', async () => {
+    const chestA = { position: { x: -185, y: 72, z: -352 }, items: [{ name: 'dirt', count: 5 }] };
+    const adapter = new FakeStorageAdapter({
+      chests: { '-185,72,-352': chestA },
+      inventory: { stone: 4 } // item BELUM PERNAH punya assignment - memicu jalur pengintipan
+    });
+    const engine = new StorageManagerEngine({ adapter, houseBounds: HOUSE_BOUNDS });
+    const snapshots = [];
+    engine.on('chestSnapshot', (snap) => snapshots.push(snap));
+
+    await engine.tick();
+
+    assert.ok(snapshots.length > 0, 'intipan resolveChestForItem harus tetap memperbarui memori/dashboard, bukan diam-diam');
+    assert.deepEqual(snapshots[0].position, { x: -185, y: 72, z: -352 });
+    assert.deepEqual(snapshots[0].items, [{ name: 'dirt', count: 5 }], 'isi chest yang diintip harus tetap dilaporkan apa adanya');
   });
 
   it('harus menerima assignment awal (initialAssignments) supaya memori sortir bertahan lintas restart worker, dan mengekspos getChestAssignments() untuk disimpan lagi', async () => {

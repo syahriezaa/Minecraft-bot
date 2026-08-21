@@ -70,6 +70,14 @@ function saveAssignments(assignments, log) {
 // SUDAH diproses (ingot/blok/permata); chest "Bijih Mentah" (y73,z-353) untuk bijih mentah/redstone.
 const PROCESSED_ORE_CHEST = '-181,74,-353';
 const RAW_ORE_CHEST = '-181,73,-353';
+// Cadangan DARURAT untuk RAW_ORE_CHEST - ditemukan dari keluhan nyata pemilik lewat pemantauan
+// live langsung ("bot tidak melakukan apa apa antara membuka hingga menutup peti"): redstone
+// macet (RAW_ORE_CHEST kronis penuh) tanpa overflow memaksa resolveChestForItem scan SEMUA
+// chest gudang berulang-ulang tanpa hasil. Barel di x=-180,z=-351,y73 (mirror dari barel x=-181
+// yang sudah dipakai kategori lain, standalone/tidak pernah menyatu dengan blok manapun -
+// dikonfirmasi lewat probe: gudang punya barisan barel kedua di x=-180 yang belum dipakai
+// kategori apapun) dipakai sebagai tempat daruratnya.
+const RAW_ORE_OVERFLOW_CHEST = '-180,73,-351'; // barrel
 // Cadangan DARURAT untuk ore/ingot - dipakai HANYA kalau chest utama genuinely penuh (lihat
 // OVERFLOW_CHESTS + resolveChestForItem di storageManagerEngine.js), BUKAN rumah kedua yang
 // setara - permintaan nyata pemilik: "make the overflow chest is for emergency only when the
@@ -123,6 +131,14 @@ const STONE_COBBLE_OVERFLOW_CHEST = '-181,73,-344';
 const ARMOR_CHEST = '-181,71,-351'; // barrel
 const MOB_DROPS_CHEST = '-181,71,-349';
 const BOOKS_CHEST = '-181,72,-351'; // barrel
+// Cadangan DARURAT untuk BOOKS_CHEST - ditemukan dari keluhan nyata pemilik lewat pemantauan
+// live langsung ("bot tidak melakukan apa apa antara membuka hingga menutup peti"): tanpa
+// overflow, enchanted_book yang macet (BOOKS_CHEST kronis penuh) memaksa resolveChestForItem
+// mengulang scan SEMUA chest gudang (mencari yang genuinely kosong, yang tidak akan pernah
+// ketemu di gudang yang sudah rapi) di SETIAP percobaan - 130+ chest dibuka tanpa hasil apapun,
+// terlihat seperti bot "diam" padahal sedang sia-sia mencari. Barel di z=-351,y73 (standalone,
+// belum dipakai kategori manapun) dipakai sebagai tempat daruratnya.
+const BOOKS_OVERFLOW_CHEST = '-181,73,-351'; // barrel
 const TOOLS_CHEST = '-181,71,-348'; // barrel
 const FOOD_CHEST = '-181,71,-345';
 
@@ -299,7 +315,8 @@ const OVERFLOW_CHESTS = {
   [MOB_DROPS_CHEST]: MOB_DROPS_OVERFLOW_CHEST,
   [SEEDS_CHEST]: SEEDS_OVERFLOW_CHEST,
   [STONE_COBBLE_CHEST]: STONE_COBBLE_OVERFLOW_CHEST,
-  [WOOD_BLOCKS_CHEST]: WOOD_BLOCKS_OVERFLOW_CHEST
+  [WOOD_BLOCKS_CHEST]: WOOD_BLOCKS_OVERFLOW_CHEST,
+  [BOOKS_CHEST]: BOOKS_OVERFLOW_CHEST
 };
 
 const DEFAULT_BASE_GOAL = { x: -185, y: 71, z: -352 };

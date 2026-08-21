@@ -185,14 +185,61 @@ class StorageManagerEngine extends EventEmitter {
   // kenapa: probe ambil-taruh di SETIAP chest yang diintip bikin resolveChestForItem lambat
   // sekali - ditemukan dari keluhan nyata pemilik: "worker nya membuka chest itu tapi sepertinya
   // tidak melihat isinya").
-  async safeGetChestContents(pos) {
+  async safeGetChestContents(pos, insideChests) {
     try {
-      return await this.adapter.getChestContents(pos, { verify: false });
+      return await this.adapter.getChestContents(pos, {
+        verify: false,
+        // Permintaan nyata pemilik: "bot wajib mengambil data peti ketika membuka peti dan
+        // mengupdate ke memory setiap kali membuka peti" - dulu intipan resolveChestForItem
+        // (dipakai buat cari chest kosong/cocok) diam-diam TIDAK PERNAH memperbarui peta gudang
+        // di dashboard walau chest-nya benar-benar dibuka dan dibaca - sekarang SETIAP chest yang
+        // dibuka (baik lewat inspect resmi maupun intipan ini) ikut memperbarui memori/dashboard.
+        onRead: (items) => this.emitChestSnapshot(pos, items, insideChests)
+      });
     } catch (e) {
       this.brokenPositions.add(posKey(pos));
       this.emit('chestError', { position: pos, error: e.message });
       return null;
     }
+  }
+
+  // "left"/"right"/"single" -> hasUsableHome/hereKey -> daftar item salah tempat, dipakai BAIK
+  // oleh inspect() resmi MAUPUN oleh intipan resolveChestForItem - satu logika yang sama supaya
+  // hasil "salah tempat atau tidak" konsisten di mana pun chest ini dibaca.
+  computeMisplacedItems(pos, items, insideChests) {
+    const getType = (p) => this.getChestHalfType(p);
+    const hereKey = canonicalKeyFor(pos, insideChests, getType);
+    const hasUsableHome = (assignedKey) => {
+      if (!this.fullChestPositions.has(assignedKey) && !this.brokenPositions.has(assignedKey)) return true;
+      const overflowKey = this.options.overflowChests?.[assignedKey];
+      return Boolean(overflowKey) && !this.fullChestPositions.has(overflowKey) && !this.brokenPositions.has(overflowKey);
+    };
+    return items.filter((it) => {
+      const assignedKey = this.chestAssignments.get(it.name);
+      if (!assignedKey) return false;
+      if (!hasUsableHome(assignedKey)) return false;
+      return canonicalKeyFor(parseKey(assignedKey), insideChests, getType) !== hereKey;
+    });
+  }
+
+  // Emit SELURUH isi chest ini plus rencana pemindahan (item salah tempat -> tujuannya) - dipakai
+  // panel peta gudang di dashboard (permintaan nyata pemilik: "tampilkan isi semua peti...dan
+  // bagaimana bot akan memindahkannya di tandai dengan panah panah", dan "bot wajib mengambil
+  // data peti ketika membuka peti dan mengupdate ke memory setiap kali membuka peti"). Dipanggil
+  // lewat onRead SEBELUM chest ditutup (permintaan nyata pemilik: "log harus nya open -> get data
+  // -> save to memory -> close").
+  emitChestSnapshot(pos, items, insideChests) {
+    this.emit('chestSnapshot', {
+      position: pos,
+      // Salin (bukan referensi langsung) - kode lain bisa memutasi objek item yang sama sesudah
+      // snapshot ini di-emit - snapshot yang sudah dikirim ke UI tidak boleh ikut berubah.
+      items: items.map((it) => ({ ...it })),
+      misplaced: this.computeMisplacedItems(pos, items, insideChests).map((it) => ({
+        name: it.name,
+        count: it.count,
+        targetPosition: parseKey(this.chestAssignments.get(it.name))
+      }))
+    });
   }
 
   async resolveChestForItem(insideChests, itemName) {
@@ -233,7 +280,7 @@ class StorageManagerEngine extends EventEmitter {
     // buku karena chest buku itu MASIH menyimpan leather_chestplate nyasar dari korupsi lama).
     if (!hasExistingAssignment) {
       for (const pos of candidates) {
-        const items = await this.safeGetChestContents(pos);
+        const items = await this.safeGetChestContents(pos, insideChests);
         if (!items) continue;
         if (items.some((it) => it.name === itemName)) {
           this.chestAssignments.set(itemName, posKey(pos));
@@ -252,7 +299,7 @@ class StorageManagerEngine extends EventEmitter {
       // jadi "salah tempat" lagi tick berikutnya, reorganize ambil lagi, delivery jatuh ke
       // fallback yang SAMA lagi, taruh balik lagi... bolak-balik tanpa akhir.
       if (this.recentlyVacatedPositions.has(posKey(pos))) continue;
-      const items = await this.safeGetChestContents(pos);
+      const items = await this.safeGetChestContents(pos, insideChests);
       if (!items) continue;
       if (items.length === 0) {
         // Chest kosong ini SEMENTARA saja (rumah asli sedang penuh) - kalau item ini SUDAH
@@ -382,7 +429,14 @@ class StorageManagerEngine extends EventEmitter {
     if (nextToInspect) {
       let items;
       try {
-        items = await this.adapter.getChestContents(nextToInspect);
+        // onRead: simpan ke memori/dashboard SEBELUM chest ditutup - permintaan nyata pemilik:
+        // "log harus nya open -> get data -> save to memory -> close" (dulu chest.close()
+        // terjadi DI DALAM getChestContents, sebelum data ini sempat diproses, jadi log
+        // "Ditutup" muncul lebih dulu daripada log "Memori Gudang diperbarui" - urutan yang
+        // salah).
+        items = await this.adapter.getChestContents(nextToInspect, {
+          onRead: (readItems) => this.emitChestSnapshot(nextToInspect, readItems, insideChests)
+        });
       } catch (e) {
         // Sama seperti chest luar - tandai "sudah dicoba" dulu supaya tidak mengulang posisi
         // yang persis sama selamanya kalau chest ini genuinely tidak bisa dibuka.
@@ -407,40 +461,7 @@ class StorageManagerEngine extends EventEmitter {
       // keluhan nyata pemilik ("dia tetap tidak mengambil apapun yang salah dalam mode collect"),
       // dikonfirmasi lewat pemantauan live: rotten_flesh terlihat jelas di log isi chest tapi tidak
       // pernah ditandai salah tempat.
-      const getType = (p) => this.getChestHalfType(p);
-      const hereKey = canonicalKeyFor(nextToInspect, insideChests, getType);
-      const hasUsableHome = (assignedKey) => {
-        if (!this.fullChestPositions.has(assignedKey) && !this.brokenPositions.has(assignedKey)) return true;
-        const overflowKey = this.options.overflowChests?.[assignedKey];
-        return Boolean(overflowKey) && !this.fullChestPositions.has(overflowKey) && !this.brokenPositions.has(overflowKey);
-      };
-      const misplacedItems = items.filter((it) => {
-        const assignedKey = this.chestAssignments.get(it.name);
-        if (!assignedKey) return false;
-        if (!hasUsableHome(assignedKey)) return false;
-        return canonicalKeyFor(parseKey(assignedKey), insideChests, getType) !== hereKey;
-      });
-
-      // Emit SELURUH isi chest ini plus rencana pemindahan (item salah tempat -> tujuannya) -
-      // dipakai panel peta gudang di dashboard (permintaan nyata pemilik: "tampilkan isi semua
-      // peti...dan bagaimana bot akan memindahkannya di tandai dengan panah panah"). Beda dari
-      // event 'inspected' (yang cuma jalan kalau chest-nya bersih) dan 'misplaced' (yang cuma
-      // berisi item yang benar-benar berhasil DIAMBIL, per item, bukan gambaran isi chest yang
-      // utuh) - snapshot ini selalu jalan setiap chest diperiksa, isinya utuh, dan sudah termasuk
-      // item yang TIDAK punya assignment sama sekali (dilaporkan apa adanya, bukan dianggap salah
-      // tempat - konsisten dengan aturan "jangan tebak" yang sama dipakai misplacedItems).
-      this.emit('chestSnapshot', {
-        position: nextToInspect,
-        // Salin (bukan referensi langsung) - withdrawFromChest di bawah bisa memutasi objek item
-        // yang sama sesudah snapshot ini di-emit (mis. adapter uji yang mengembalikan array chest
-        // aslinya, bukan salinan) - snapshot yang sudah dikirim ke UI tidak boleh ikut berubah.
-        items: items.map((it) => ({ ...it })),
-        misplaced: misplacedItems.map((it) => ({
-          name: it.name,
-          count: it.count,
-          targetPosition: parseKey(this.chestAssignments.get(it.name))
-        }))
-      });
+      const misplacedItems = this.computeMisplacedItems(nextToInspect, items, insideChests);
 
       if (misplacedItems.length > 0) {
         // Ambil SEMUA item salah tempat di chest ini dalam SATU kunjungan (bukan satu per
