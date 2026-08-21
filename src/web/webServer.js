@@ -530,6 +530,15 @@ app.get('/api/storage/chests', (req, res) => {
   res.json({ success: true, data: { chests: Array.from(storageChestMap.values()) } });
 });
 
+// Memori sortir MENTAH langsung dari engine yang sedang berjalan (bukan turunan/olahan) -
+// permintaan nyata pemilik: "harusnya yang tampil di web itu sama persis dengan memory worker
+// nya" - ambil dari worker PERTAMA yang berjalan (biasanya cuma satu kuartermaster aktif).
+app.get('/api/storage/assignments', (req, res) => {
+  const handle = storageWorkers.values().next().value;
+  const assignments = handle ? handle.getAssignments() : null;
+  res.json({ success: true, data: { assignments: assignments || {} } });
+});
+
 app.post('/api/storage/stop', (req, res) => {
   const { botName } = req.body || {};
   if (!botName) {

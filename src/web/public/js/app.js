@@ -95,6 +95,12 @@
         break;
       case 'STORAGE_CHEST_MAP_UPDATE':
         renderChestMap(msg.data?.chests || []);
+        // Memori sortir bisa saja baru saja berubah (item baru pertama kali ketemu rumahnya) -
+        // muat ulang supaya panel "Memori Sortir Worker" tetap persis sama dengan engine, bukan
+        // cuma snapshot sekali saat halaman dibuka.
+        fetch('/api/storage/assignments').then(r => r.json()).then(res => {
+          if (res.data?.assignments) renderAssignments(res.data.assignments);
+        }).catch(() => {});
         break;
     }
   }
@@ -256,6 +262,52 @@
     .then(r => r.json())
     .then(res => {
       if (res.data?.chests) renderChestMap(res.data.chests);
+    })
+    .catch(() => {});
+
+  // ── Memori Sortir Worker - persis engine.getChestAssignments(), tanpa olahan ──
+  const assignmentsContainer = document.getElementById('storage-assignments-map');
+  const assignmentsCountBadge = document.getElementById('assignments-count-badge');
+
+  function renderAssignments(assignments) {
+    if (!assignmentsContainer || !assignments || typeof assignments !== 'object') return;
+    const entries = Object.entries(assignments); // [itemName, "x,y,z"][] - PERSIS dari engine, tanpa diubah
+    if (assignmentsCountBadge) assignmentsCountBadge.textContent = `${entries.length} JENIS ITEM`;
+
+    if (entries.length === 0) {
+      assignmentsContainer.innerHTML = '<p class="empty-row">Belum ada memori sortir yang dimuat - jalankan kuartermaster untuk melihat isinya.</p>';
+      return;
+    }
+
+    // Kelompokkan per chest tujuan untuk keterbacaan - nilai yang ditampilkan (nama item, posisi
+    // chest) TETAP persis string yang sama dari engine.getChestAssignments(), cuma dikelompokkan.
+    const byChest = new Map();
+    entries.forEach(([itemName, chestKey]) => {
+      if (!byChest.has(chestKey)) byChest.set(chestKey, []);
+      byChest.get(chestKey).push(itemName);
+    });
+
+    const sortedChests = [...byChest.keys()].sort();
+
+    assignmentsContainer.innerHTML = sortedChests.map(chestKey => {
+      const items = byChest.get(chestKey).sort();
+      const rows = items.map(name => `<div class="chest-map-item-row"><span class="chest-map-item-name">${name}</span></div>`).join('');
+      return `
+        <div class="chest-map-card">
+          <div class="chest-map-card-header">
+            <span class="chest-map-pos">(${chestKey})</span>
+            <span class="chest-map-badge chest-map-badge-clean">${items.length} JENIS</span>
+          </div>
+          <div class="chest-map-items">${rows}</div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  fetch('/api/storage/assignments')
+    .then(r => r.json())
+    .then(res => {
+      if (res.data?.assignments) renderAssignments(res.data.assignments);
     })
     .catch(() => {});
 

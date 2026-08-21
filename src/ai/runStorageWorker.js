@@ -460,6 +460,14 @@ function startStorageWorker({ host, port, botName, scanRadius = 48, baseGoal = D
       if (!engine) return null;
       return { storage: engine.metrics };
     },
+    // Memori sortir MENTAH, verbatim dari engine.getChestAssignments() - permintaan nyata
+    // pemilik: "harusnya yang tampil di web itu sama persis dengan memory worker nya". Dipakai
+    // dashboard supaya yang ditampilkan bukan turunan/olahan, tapi persis objek yang sama yang
+    // engine pakai sendiri untuk memutuskan ke mana tiap jenis item pergi.
+    getAssignments() {
+      if (!engine) return null;
+      return engine.getChestAssignments();
+    },
     getStatus() {
       return {
         role: 'Kuartermaster',
