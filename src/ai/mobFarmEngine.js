@@ -132,7 +132,12 @@ class MobFarmEngine extends EventEmitter {
 
     const targetDistance = distance(this.adapter.getPosition(), target.position);
     if (targetDistance > this.options.attackRange) {
-      await this.adapter.navigateNear(target.position, Math.max(1, this.options.attackRange - 0.5));
+      // GoalFollow DINAMIS, bukan navigateNear/GoalNear ke posisi sesaat - permintaan nyata
+      // pemilik: "ketika kena hit dia tidak maju lagi". Target hostile terus bergerak (apalagi
+      // bot sendiri kena knockback tiap dipukul), goto() ke titik statis lama jadi mengejar posisi
+      // yang sudah basi dan harus menunggu penuh sampai timeout sebelum sempat mencoba lagi - dari
+      // luar terlihat seperti "berhenti maju". Lihat komentar followEntity di mineflayerRoleAdapter.js.
+      await this.adapter.followEntity(target, Math.max(1, this.options.attackRange - 0.5));
       return { action: 'approach', target: type };
     }
 

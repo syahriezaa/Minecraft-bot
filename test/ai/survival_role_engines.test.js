@@ -73,6 +73,10 @@ class FakeRoleAdapter {
     this.actions.push({ type: 'navigate', position: pos, range });
     return true;
   }
+  async followEntity(entity, range) {
+    this.actions.push({ type: 'followEntity', entity: entity.name || entity.type, id: entity.id, range });
+    return true;
+  }
   async eatBestFood() {
     this.actions.push({ type: 'eat' });
     this.food = 20;
@@ -809,6 +813,22 @@ describe('MobFarmEngine', () => {
     assert.ok(adapter.actions.some(a => a.type === 'equip' && a.destination === 'off-hand'));
     assert.ok(adapter.actions.some(a => a.type === 'shield'));
     assert.ok(adapter.actions.some(a => a.type === 'attack' && a.id === 10));
+  });
+
+  it('kalau target masih di luar attackRange, harus MENGEJAR pakai followEntity (GoalFollow dinamis), BUKAN navigateNear ke posisi sesaat - permintaan nyata pemilik: "ketika kena hit dia tidak maju lagi". Target hostile terus bergerak (apalagi bot sendiri kena knockback tiap dipukul) - goto() ke titik statis lama jadi mengejar posisi basi dan menunggu penuh sampai timeout sebelum sempat mencoba lagi, dari luar terlihat seperti berhenti maju', async () => {
+    const adapter = new FakeRoleAdapter({
+      items: { iron_sword: 1 },
+      entities: [
+        { id: 12, name: 'zombie', position: { x: 10, y: 64, z: 0 } }
+      ]
+    });
+    const engine = new MobFarmEngine({ adapter, attackRange: 3.6 });
+
+    const result = await engine.tick();
+
+    assert.equal(result.action, 'approach');
+    assert.ok(adapter.actions.some((a) => a.type === 'followEntity' && a.id === 12), 'harus mengejar lewat followEntity, bukan navigateNear/goto statis');
+    assert.ok(!adapter.actions.some((a) => a.type === 'navigate'), 'JANGAN pakai navigateNear statis untuk mengejar target bergerak');
   });
 
   it('harus makan atau retreat saat health rendah sebelum menyerang', async () => {
