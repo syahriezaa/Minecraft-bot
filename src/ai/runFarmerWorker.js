@@ -29,7 +29,7 @@ const { walkToBase } = require('./walkToBase');
 // Dulu FarmerWorker terpaksa menebak lewat pemindaian chest satu-satu (findMatchingChest) setiap
 // kali mau menyimpan/mengambil barang - sekarang pakai memori yang SAMA persis dengan yang
 // dipakai StorageWorker untuk merapikan gudang.
-const { getSharedChestAssignments, parseChestPositionKey } = require('./storageMemory');
+const { getSharedChestAssignments, parseChestPositionKey, OVERFLOW_CHESTS } = require('./storageMemory');
 
 const TICK_INTERVAL_MS = Number(process.env.FARMER_TICK_MS) || 2000;
 // Base sungguhan pemilik (dikoreksi live sesi ini - lihat commit sebelumnya, -175,71,-325 lama
@@ -151,6 +151,7 @@ function startFarmerWorker({ host, port, botName, scanRadius = 32, baseGoal = DE
       farmArea,
       autoMatchStorage: true,
       sharedChestAssignments,
+      overflowChests: OVERFLOW_CHESTS,
       harvestBatchSize: Number(process.env.FARM_HARVEST_BATCH) || 16,
       plantBatchSize: Number(process.env.FARM_PLANT_BATCH) || 16
     });

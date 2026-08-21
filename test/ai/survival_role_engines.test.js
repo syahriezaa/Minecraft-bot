@@ -86,6 +86,7 @@ class FakeRoleAdapter {
     const matched = this.getInventoryItems().filter(predicate);
     this.actions.push({ type: 'deposit', position: pos, items: matched.map((i) => i.name), maxPerItem });
     if (matched.some((it) => this.depositFailsFor?.has(it.name))) throw new Error('destination full');
+    if (this.depositFailsAtPosition?.has(`${pos.x},${pos.y},${pos.z}`)) throw new Error('destination full');
     let deposited = 0;
     for (const item of matched) {
       const reserve = maxPerItem[item.name];
@@ -389,6 +390,25 @@ describe('FarmerEngine', () => {
     const beetrootDeposit = adapter.actions.find((a) => a.type === 'deposit' && a.items.includes('beetroot'));
     assert.ok(beetrootDeposit, 'beetroot tetap harus dicoba disetor walau wheat gagal duluan');
     assert.equal(result.count, 3, 'cuma beetroot yang benar-benar berhasil dihitung');
+  });
+
+  it('kalau chest UTAMA genuinely penuh (bukan sekadar salah satu deposit call yang gagal, tapi posisi itu SENDIRI penuh) DAN ada chest CADANGAN terdaftar untuk chest itu (OVERFLOW_CHESTS, sama seperti yang dipakai StorageManagerEngine), harus coba setor SISANYA ke cadangan - permintaan nyata pemilik: "kenapa dia tidak bisa menaruh inventory nya sampai hampir kosong" - ditemukan lewat pemantauan live: SEEDS_CHEST sungguhan sudah 54/54 slot penuh (3292 item) padahal SEEDS_OVERFLOW_CHEST sudah lama terdaftar - FarmerEngine ternyata TIDAK PERNAH memakainya sama sekali, cuma StorageManagerEngine yang tahu soal overflow', async () => {
+    const adapter = new FakeRoleAdapter({ items: { wheat_seeds: 50 } });
+    adapter.chests = [{ position: { x: 0, y: 64, z: 0 }, contents: ['wheat_seeds'] }];
+    adapter.depositFailsAtPosition = new Set(['0,64,0']); // chest utama genuinely penuh
+    const engine = new FarmerEngine({
+      adapter,
+      autoMatchStorage: true,
+      sharedChestAssignments: { wheat_seeds: '0,64,0' },
+      overflowChests: { '0,64,0': '9,64,9' }
+    });
+
+    const result = await engine.tick();
+
+    assert.equal(result.action, 'deposit');
+    const overflowDeposit = adapter.actions.find((a) => a.type === 'deposit' && a.position.x === 9);
+    assert.ok(overflowDeposit, 'harus mencoba chest cadangan setelah chest utama gagal, bukan menyerah begitu saja');
+    assert.ok(result.count > 0, 'setoran ke cadangan harus benar-benar berhasil dihitung');
   });
 
   it('dengan autoMatchStorage aktif tapi TIDAK ADA chest yang cocok untuk suatu item, item itu TIDAK BOLEH dibuang ke chest sembarangan - biarkan di inventaris sampai chest yang cocok ditemukan', async () => {

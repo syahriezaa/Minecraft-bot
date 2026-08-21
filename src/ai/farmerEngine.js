@@ -87,6 +87,14 @@ class FarmerEngine extends EventEmitter {
       // bot explorer menandai suatu area sebagai villager_area, SEMUA bot langsung menghindarinya
       // tanpa perlu update kode/koordinat manual lagi.
       avoidLandmarkCategories: ['villager_area'],
+      // Chest UTAMA -> chest CADANGAN DARURAT (sama peta yang dipakai StorageManagerEngine,
+      // lihat storageMemory.js OVERFLOW_CHESTS) - permintaan nyata pemilik: "kenapa dia tidak
+      // bisa menaruh inventory nya sampai hampir kosong". Ditemukan lewat pemantauan live: chest
+      // benih (SEEDS_CHEST) sungguhan sudah 54/54 slot penuh - overflow-nya sudah lama terdaftar
+      // tapi FarmerEngine tidak pernah tahu soal itu sama sekali, cuma StorageManagerEngine yang
+      // pakai peta ini - jadi begitu chest utama genuinely penuh, item itu tersangkut di tas
+      // SELAMANYA walau ada tempat cadangan yang masih longgar.
+      overflowChests: {},
       ...options
     };
     this.metrics = {
@@ -100,6 +108,10 @@ class FarmerEngine extends EventEmitter {
     // tidak perlu membuka ulang semua chest di gudang - gudang nyata pemilik bisa berisi puluhan
     // chest (lihat komentar autoMatchStorage), membukanya satu-satu tiap tick jelas mahal.
     this.depositChestCache = new Map();
+    // Kunci string ASLI (mis. "-181,72,-350") per jenis item, dipakai untuk cari chest cadangan
+    // di overflowChests - depositChestCache sendiri menyimpan posisi yang SUDAH di-parse jadi
+    // objek {x,y,z}, tidak bisa dipakai langsung sebagai kunci lookup overflowChests.
+    this.depositChestKeyCache = new Map();
     this.plantRotationIndex = 0;
   }
 
@@ -309,10 +321,14 @@ class FarmerEngine extends EventEmitter {
     let totalDeposited = 0;
     for (const name of distinctNames) {
       let chestPos = this.depositChestCache.get(name);
+      let sharedKey = this.depositChestKeyCache.get(name);
       if (!chestPos) {
-        const sharedKey = this.options.sharedChestAssignments?.[name];
+        sharedKey = this.options.sharedChestAssignments?.[name];
         chestPos = sharedKey ? parseChestPositionKey(sharedKey) : await this.adapter.findMatchingChest([name]);
-        if (chestPos) this.depositChestCache.set(name, chestPos);
+        if (chestPos) {
+          this.depositChestCache.set(name, chestPos);
+          if (sharedKey) this.depositChestKeyCache.set(name, sharedKey);
+        }
       }
       if (!chestPos) continue;
       const isSeedItem = Object.values(CROP_RULES).some(rule => rule.seed === name);
@@ -327,6 +343,25 @@ class FarmerEngine extends EventEmitter {
         totalDeposited += result.deposited || 0;
       } catch (e) {
         this.emit('depositError', { name, position: chestPos, error: e.message });
+      }
+
+      // Kalau ada chest CADANGAN terdaftar untuk chest utama ini (OVERFLOW_CHESTS - peta yang
+      // SAMA dipakai StorageManagerEngine), coba setor SISANYA ke sana juga - permintaan nyata
+      // pemilik: "kenapa dia tidak bisa menaruh inventory nya sampai hampir kosong". Ditemukan
+      // lewat pemantauan live: chest benih genuinely sudah 54/54 slot penuh, overflow-nya sudah
+      // lama terdaftar tapi FarmerEngine tidak pernah tahu soal itu - item tersangkut di tas
+      // SELAMANYA walau tempat cadangan masih longgar. Selalu aman dicoba: kalau chest utama
+      // sudah cukup menampung semuanya, sisa yang perlu disetor di sini otomatis 0 (tidak ada
+      // efek apa-apa).
+      const overflowKey = sharedKey && this.options.overflowChests[sharedKey];
+      if (overflowKey) {
+        const overflowPos = parseChestPositionKey(overflowKey);
+        try {
+          const overflowResult = await this.adapter.depositToChest(overflowPos, item => item.name === name, maxPerItem);
+          totalDeposited += overflowResult.deposited || 0;
+        } catch (e) {
+          this.emit('depositError', { name, position: overflowPos, error: e.message });
+        }
       }
     }
     this.metrics.deposited += totalDeposited;
