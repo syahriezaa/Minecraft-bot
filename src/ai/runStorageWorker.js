@@ -56,6 +56,15 @@ function saveAssignments(assignments, log) {
 // SUDAH diproses (ingot/blok/permata); chest "Bijih Mentah" (y73,z-353) untuk bijih mentah/redstone.
 const PROCESSED_ORE_CHEST = '-181,74,-353';
 const RAW_ORE_CHEST = '-181,73,-353';
+// Cadangan DARURAT untuk RAW_ORE_CHEST (yang sekarang juga menampung BUILDING_MATERIALS_CHEST
+// hasil alias merge fisik - lihat komentar di dekat deklarasi BUILDING_MATERIALS_CHEST) -
+// ditemukan dari bug live nyata: redstone bolak-balik TANPA HENTI ke chest yang salah karena
+// RAW_ORE_CHEST kebetulan penuh dan TIDAK punya overflow terdaftar, jadi jatuh ke fallback
+// "chest kosong sembarangan" yang kebetulan memilih chest SALAH yang baru saja dikosongkan
+// (chest yang sama yang barusan diambil darinya) - persis bolak-balik tanpa akhir. Barel di
+// z=-351,y73 (satu-satunya yang belum dipakai kategori manapun di kolom itu) dipakai sebagai
+// tempat daruratnya.
+const RAW_ORE_OVERFLOW_CHEST = '-181,73,-351'; // barrel
 // Cadangan DARURAT untuk ore/ingot - dipakai HANYA kalau chest utama genuinely penuh (lihat
 // OVERFLOW_CHESTS + resolveChestForItem di storageManagerEngine.js), BUKAN rumah kedua yang
 // setara - permintaan nyata pemilik: "make the overflow chest is for emergency only when the
@@ -305,7 +314,8 @@ const OVERFLOW_CHESTS = {
   [MOB_DROPS_CHEST]: MOB_DROPS_OVERFLOW_CHEST,
   [SEEDS_CHEST]: SEEDS_OVERFLOW_CHEST,
   [STONE_COBBLE_CHEST]: STONE_COBBLE_OVERFLOW_CHEST,
-  [WOOD_BLOCKS_CHEST]: WOOD_BLOCKS_OVERFLOW_CHEST
+  [WOOD_BLOCKS_CHEST]: WOOD_BLOCKS_OVERFLOW_CHEST,
+  [RAW_ORE_CHEST]: RAW_ORE_OVERFLOW_CHEST
 };
 
 const DEFAULT_BASE_GOAL = { x: -185, y: 71, z: -352 };
@@ -405,6 +415,11 @@ function startStorageWorker({ host, port, botName, scanRadius = 48, baseGoal = D
       } catch (e) {
         log(`ERROR di tick gudang (non-fatal, lanjut tick berikutnya): ${e.message}`);
       }
+      // Cek lagi SESUDAH await (bukan cuma di awal fungsi) - koneksi bisa saja terputus SAAT
+      // engine.tick() sedang menunggu (mis. chest open yang macet 20 detik lalu timeout tepat
+      // ketika bot disconnect) - tanpa ini, satu tick tambahan tetap terjadwal walau worker
+      // sebenarnya sudah berhenti.
+      if (stopped) return;
       timer = setTimeout(tick, TICK_INTERVAL_MS);
     }
     tick();
