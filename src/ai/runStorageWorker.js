@@ -144,6 +144,14 @@ const SAPLINGS_PLANTS_CHEST = '-181,72,-347';
 // bebas (dipindah dari buku ke barrel) - dipakai untuk kayu batang bercorak/olahan lain (stripped
 // log, trapdoor kayu, dst) supaya seluruh kolom murni kayu.
 const WOOD_BLOCKS_CHEST = '-181,71,-347';
+// Cadangan DARURAT untuk WOOD_BLOCKS_CHEST - ditemukan dari keluhan nyata pemilik langsung lewat
+// pemantauan live ("-181,71,-347 punya banyak item yang salah tempat itu juga harus menjadi
+// pertimbangan algoritma kita"): chest ini kronis penuh ("destination full" berulang saat
+// mengantar spruce_slab), tapi TIDAK PERNAH punya overflow terdaftar seperti 4 kategori lain yang
+// sudah dikasih (ore/ingot, mob drop, benih, batu/cobble) - barel di z=-346 (satu-satunya barel
+// tersisa di kolom itu yang belum dipakai kategori manapun, standalone/tidak pernah menyatu
+// dengan chest/barel lain) dipakai sebagai tempat daruratnya.
+const WOOD_BLOCKS_OVERFLOW_CHEST = '-181,71,-346'; // barrel
 const TRINKETS_CHEST = '-181,72,-345';
 const SEEDS_OVERFLOW_CHEST = TRINKETS_CHEST; // ALIAS - satu Large Chest fisik dengan TRINKETS_CHEST (y72)
 
@@ -296,7 +304,8 @@ const OVERFLOW_CHESTS = {
   [PROCESSED_ORE_CHEST]: PROCESSED_ORE_OVERFLOW_CHEST,
   [MOB_DROPS_CHEST]: MOB_DROPS_OVERFLOW_CHEST,
   [SEEDS_CHEST]: SEEDS_OVERFLOW_CHEST,
-  [STONE_COBBLE_CHEST]: STONE_COBBLE_OVERFLOW_CHEST
+  [STONE_COBBLE_CHEST]: STONE_COBBLE_OVERFLOW_CHEST,
+  [WOOD_BLOCKS_CHEST]: WOOD_BLOCKS_OVERFLOW_CHEST
 };
 
 const DEFAULT_BASE_GOAL = { x: -185, y: 71, z: -352 };
