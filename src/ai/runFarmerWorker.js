@@ -247,7 +247,12 @@ function startFarmerWorker({ host, port, botName, scanRadius = 32, baseGoal = DE
     // oleh bot ini - TANPA perlu jalan kaki sama sekali, karena bot ini sudah lama bekerja persis
     // di area gudang/farming. Dipakai untuk verifikasi cepat batas area (mis. "apakah kotak
     // koordinat ini benar-benar lahan farming?") tanpa harus spawn bot baru yang jalan dari nol.
-    queryBlockBox({ minX, maxX, minZ, maxZ, y }) {
+    // Async DAN yield tiap baris x (setImmediate) - ditemukan dari insiden live nyata: pemanggilan
+    // beruntun cepat ke endpoint ini (banyak kotak kecil satu-satu, dulu untuk menyisir posisi
+    // chest/composter) sempat membuat CPU webServer.js terkunci 98%+ dan SELURUH server (termasuk
+    // tick semua bot lain) berhenti merespons selama menit-menit - kotak besar SATU KALI panggil,
+    // bukan banyak kotak kecil, sekarang aman dipakai berulang tanpa membekukan proses.
+    async queryBlockBox({ minX, maxX, minZ, maxZ, y }) {
       const { Vec3 } = require('vec3');
       const counts = {};
       let total = 0;
@@ -258,6 +263,7 @@ function startFarmerWorker({ host, port, botName, scanRadius = 32, baseGoal = DE
           const name = block ? block.name : 'unloaded';
           counts[name] = (counts[name] || 0) + 1;
         }
+        await new Promise((resolve) => setImmediate(resolve));
       }
       return { total, counts };
     }
