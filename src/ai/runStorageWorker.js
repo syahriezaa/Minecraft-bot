@@ -251,12 +251,22 @@ const CANONICAL_GEAR_ASSIGNMENTS = {
 
   // Pernak-pernik/curio biasa (dekorasi umum, bukan drop langka)
   dandelion: TRINKETS_CHEST, white_banner: TRINKETS_CHEST, glass_bottle: TRINKETS_CHEST, calcite: TRINKETS_CHEST,
-  ender_pearl: TRINKETS_CHEST, flint: TRINKETS_CHEST, iron_nugget: TRINKETS_CHEST,
+  ender_pearl: TRINKETS_CHEST, flint: TRINKETS_CHEST, iron_nugget: TRINKETS_CHEST, cactus: TRINKETS_CHEST,
 
   // Bahan bangunan olahan (bata/tangga/lempeng/dinding/kaca)
   stone_bricks: BUILDING_MATERIALS_CHEST, deepslate: BUILDING_MATERIALS_CHEST, glowstone: NETHER_MATERIALS_CHEST,
   glowstone_dust: NETHER_MATERIALS_CHEST, blaze_rod: RARE_DROPS_CHEST,
-  netherite_upgrade_smithing_template: RARE_DROPS_CHEST,
+  netherite_upgrade_smithing_template: RARE_DROPS_CHEST, obsidian: RAW_ORE_CHEST,
+
+  // Tumbuhan/jamur nether (bukan kayu, bukan log/stem - ditemukan nyasar di chest bibit pohon
+  // lewat pemantauan live: mushroom_stem, weeping_vines, warped_wart_block, crimson/warped
+  // roots & fungus tidak pernah dikategorikan sebelumnya, jadi tidak pernah terdeteksi salah
+  // tempat walau jelas bukan bibit pohon) - digabung dengan bahan nether lain (glowstone dst).
+  mushroom_stem: NETHER_MATERIALS_CHEST, weeping_vines: NETHER_MATERIALS_CHEST,
+  warped_wart_block: NETHER_MATERIALS_CHEST, crimson_roots: NETHER_MATERIALS_CHEST,
+  warped_roots: NETHER_MATERIALS_CHEST, crimson_fungus: NETHER_MATERIALS_CHEST,
+  warped_fungus: NETHER_MATERIALS_CHEST, nether_sprouts: NETHER_MATERIALS_CHEST,
+  twisting_vines: NETHER_MATERIALS_CHEST,
 
   // Kayu batang (log) - dikunci eksplisit ke LOGS_CHEST supaya tidak nyasar lagi
   oak_log: LOGS_CHEST, spruce_log: LOGS_CHEST, birch_log: LOGS_CHEST, jungle_log: LOGS_CHEST,
