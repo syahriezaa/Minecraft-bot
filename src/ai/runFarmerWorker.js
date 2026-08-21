@@ -165,6 +165,10 @@ function startFarmerWorker({ host, port, botName, scanRadius = 32, baseGoal = DE
       log(`Panen ${crop} di (${position.x},${position.y},${position.z}) - total item hasil panen di inventaris sekarang: ${total}`);
     });
     engine.on('planted', ({ seed, position }) => log(`Tanam ${seed} di (${position.x},${position.y},${position.z})`));
+    // Log EKSPLISIT untuk makan - permintaan nyata pemilik: "kenapa farming workernya tidak bisa
+    // menaruh barangnya di peti" - tanpa log ini, tidak mungkin membuktikan apakah bot terjebak
+    // bolak-balik makan terus (hunger tidak pernah naik cukup untuk sempat panen/tanam/setor).
+    engine.on('ate', ({ foodBefore, foodAfter }) => log(`Makan (food ${foodBefore} -> ${foodAfter})`));
     // Log EKSPLISIT untuk perbaikan lahan - permintaan nyata pemilik: "it full of holes why not
     // repairing" - tanpa log ini, perbaikan yang SUNGGUH terjadi tetap tidak terlihat sama sekali
     // di dashboard/feed, jadi tidak ada cara membuktikan fitur ini benar-benar jalan atau tidak.

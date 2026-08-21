@@ -135,6 +135,20 @@ class FakeRoleAdapter {
 }
 
 describe('FarmerEngine', () => {
+  it('makan harus emit event "ate" berisi food SEBELUM dan SESUDAH - permintaan nyata pemilik: "kenapa farming workernya tidak bisa menaruh barangnya di peti" - dulu aksi makan sama sekali tidak tercatat/terlihat (tidak ada event, tidak ada log), jadi tidak mungkin membuktikan APAKAH bot benar-benar terjebak bolak-balik makan terus (hunger tidak pernah naik cukup tinggi, sehingga tidak pernah sempat panen/tanam/setor) atau cuma kebetulan makan sekali lalu lanjut kerja normal', async () => {
+    const adapter = new FakeRoleAdapter({ food: 5, items: { carrot: 5 } });
+    const engine = new FarmerEngine({ adapter });
+    let ateEvent = null;
+    engine.on('ate', (e) => { ateEvent = e; });
+
+    const result = await engine.tick();
+
+    assert.equal(result.action, 'eat');
+    assert.ok(ateEvent, 'harus emit event "ate"');
+    assert.equal(ateEvent.foodBefore, 5);
+    assert.equal(ateEvent.foodAfter, 20, 'food SESUDAH makan harus dicatat, supaya bisa dibuktikan apakah benar-benar naik atau tidak');
+  });
+
   it('harus memanen crop matang dan mengabaikan crop muda', async () => {
     const adapter = new FakeRoleAdapter({
       blocks: [

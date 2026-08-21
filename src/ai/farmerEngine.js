@@ -335,9 +335,16 @@ class FarmerEngine extends EventEmitter {
 
   async tick() {
     if (this.adapter.getFood() <= this.options.autoEatFoodThreshold) {
+      const foodBefore = this.adapter.getFood();
       const ate = await this.adapter.eatBestFood();
       if (ate) {
         this.metrics.eaten++;
+        // Catat food SEBELUM dan SESUDAH - permintaan nyata pemilik: "kenapa farming workernya
+        // tidak bisa menaruh barangnya di peti". Dulu aksi makan sama sekali tidak tercatat/
+        // terlihat, jadi tidak mungkin membuktikan apakah bot benar-benar terjebak bolak-balik
+        // makan terus-menerus (hunger tidak pernah naik cukup, sehingga tidak pernah sempat
+        // panen/tanam/setor) atau cuma kebetulan makan sekali lalu lanjut kerja normal.
+        this.emit('ate', { foodBefore, foodAfter: this.adapter.getFood() });
         return { action: 'eat' };
       }
     }
