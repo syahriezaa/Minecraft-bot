@@ -137,33 +137,37 @@ class MineflayerRoleAdapter {
     return distance(this.getPosition(), pos) <= range;
   }
 
-  // Kejar entity yang BERGERAK (mob hostile) pakai GoalFollow dinamis, BUKAN GoalNear statis ke
-  // posisi sesaat - ditemukan dari keluhan nyata pemilik: "ketika kena hit dia tidak maju lagi".
-  // GoalNear/goto() menghitung rute ke SATU titik tetap dan tidak pernah dievaluasi ulang sampai
-  // selesai/timeout - kalau mob terus bergerak (apalagi bot kena knockback tiap kali dipukul,
-  // posisinya sendiri ikut berubah paksa di tengah jalan), goto() lama itu jadi mengejar hantu
-  // (target sudah pindah) dan harus menunggu penuh sampai navigateTimeoutMs (15 detik) sebelum
-  // sempat mencoba lagi - dari luar terlihat persis "berhenti maju".
-  //
-  // SENGAJA TIDAK di-await/di-block sampai selesai (beda dari navigateNear) - versi PERTAMA fix
-  // ini malah membungkus GoalFollow dengan Promise.race dan menunggu penuh SETIAP tick, LALU
-  // mereset goal-nya (setGoal(null)) begitu race selesai/timeout - persis kebalikan dari tujuan
-  // GoalFollow. Ditemukan dari bug live nyata: "tetap diam aja" - status APPROACH aktif TAPI
-  // posisi bot sama sekali tidak berubah bermenit-menit, karena goal terus-menerus di-reset
-  // sebelum sempat menghasilkan gerakan apapun (setiap tick 2 detik: pasang goal, tunggu sampai
-  // 15 detik ATAU timeout, lalu buang goal-nya lagi - siklus reset tanpa akhir). GoalFollow itu
-  // SENDIRI sudah jalan otomatis di latar belakang lewat physicsTick internal pathfinder-plugin,
-  // begitu goal dipasang - caller CUKUP memasangnya lalu langsung lanjut, jangan menunggu/reset.
-  followEntity(entity, range = 2) {
-    if (!entity || !this.bot?.pathfinder?.setGoal) return false;
-    this.bot.pathfinder.setGoal(new goals.GoalFollow(entity, range), true);
+  // Dekati target jarak dekat saat bertarung pakai GERAKAN LANGSUNG sederhana (lookAt + jalan
+  // maju), BUKAN mineflayer-pathfinder A* sama sekali - permintaan nyata pemilik setelah TIGA
+  // percobaan berbeda berbasis pathfinder (goto() statis, GoalFollow dinamis dengan blocking-wait,
+  // GoalFollow dinamis non-blocking) SEMUA berakhir sama: server membeku (~100% CPU, seluruh
+  // worker berhenti merespons menit-menitan) begitu bot berada di ruangan spawner sempit penuh
+  // mob - tiap kena knockback, pathfinder menghitung ULANG rute A* dari posisi baru tanpa henti.
+  // Pola gagal yang SAMA muncul di 3 pendekatan berbeda = tanda arsitekturnya yang salah untuk
+  // ruang sempit padat mob (lihat skill systematic-debugging: "3+ fixes failed -> question
+  // architecture"), bukan sekadar bug yang perlu ditambal lagi. Jalan LURUS sederhana TIDAK PERNAH
+  // memicu pencarian A* - ruangan dungeon spawner kecil & relatif terbuka, tidak butuh navigasi
+  // rumit menghindari rintangan untuk jarak dekat begini.
+  async simpleApproach(entity, durationMs = 400) {
+    if (!entity || typeof this.bot?.setControlState !== 'function') return false;
+    await this.lookAt(entity.position);
+    this.bot.setControlState('forward', true);
+    this.bot.setControlState('sprint', true);
+    this.bot.setControlState('jump', true);
+    await new Promise((resolve) => setTimeout(resolve, durationMs));
+    this.bot.setControlState('forward', false);
+    this.bot.setControlState('sprint', false);
+    this.bot.setControlState('jump', false);
     return true;
   }
 
-  // Hentikan goal dinamis followEntity - dipanggil begitu target sudah dalam attackRange (siap
-  // diserang) supaya pathfinder tidak terus mencoba bergerak SAAT bot sedang menebas di tempat.
-  stopFollowing() {
-    if (this.bot?.pathfinder?.setGoal) this.bot.pathfinder.setGoal(null);
+  // Hentikan gerakan maju - dipanggil begitu target sudah dalam attackRange (siap diserang),
+  // supaya bot tidak terus melangkah maju SAAT sedang menebas di tempat.
+  stopApproaching() {
+    if (typeof this.bot?.setControlState !== 'function') return;
+    this.bot.setControlState('forward', false);
+    this.bot.setControlState('sprint', false);
+    this.bot.setControlState('jump', false);
   }
 
   async equipItem(names, destination = 'hand') {

@@ -73,12 +73,12 @@ class FakeRoleAdapter {
     this.actions.push({ type: 'navigate', position: pos, range });
     return true;
   }
-  followEntity(entity, range) {
-    this.actions.push({ type: 'followEntity', entity: entity.name || entity.type, id: entity.id, range });
+  async simpleApproach(entity, durationMs) {
+    this.actions.push({ type: 'simpleApproach', entity: entity.name || entity.type, id: entity.id, durationMs });
     return true;
   }
-  stopFollowing() {
-    this.actions.push({ type: 'stopFollowing' });
+  stopApproaching() {
+    this.actions.push({ type: 'stopApproaching' });
   }
   async eatBestFood() {
     this.actions.push({ type: 'eat' });
@@ -818,7 +818,7 @@ describe('MobFarmEngine', () => {
     assert.ok(adapter.actions.some(a => a.type === 'attack' && a.id === 10));
   });
 
-  it('begitu target SUDAH dalam attackRange, harus menghentikan goal kejar-kejaran (stopFollowing) sebelum menyerang - supaya pathfinder tidak menarik bot bergerak SAAT sedang menebas di tempat, dan followEntity TIDAK boleh dipanggil lagi selama masih dalam jangkauan', async () => {
+  it('begitu target SUDAH dalam attackRange, harus menghentikan gerakan maju (stopApproaching) sebelum menyerang - supaya bot tidak terus melangkah SAAT sedang menebas di tempat, dan simpleApproach TIDAK boleh dipanggil lagi selama masih dalam jangkauan', async () => {
     const adapter = new FakeRoleAdapter({
       items: { iron_sword: 1 },
       entities: [
@@ -830,11 +830,11 @@ describe('MobFarmEngine', () => {
     const result = await engine.tick();
 
     assert.equal(result.action, 'attack');
-    assert.ok(adapter.actions.some((a) => a.type === 'stopFollowing'));
-    assert.ok(!adapter.actions.some((a) => a.type === 'followEntity'), 'JANGAN kejar lagi kalau sudah dalam jangkauan serang');
+    assert.ok(adapter.actions.some((a) => a.type === 'stopApproaching'));
+    assert.ok(!adapter.actions.some((a) => a.type === 'simpleApproach'), 'JANGAN mendekat lagi kalau sudah dalam jangkauan serang');
   });
 
-  it('kalau target masih di luar attackRange, harus MENGEJAR pakai followEntity (GoalFollow dinamis), BUKAN navigateNear ke posisi sesaat - permintaan nyata pemilik: "ketika kena hit dia tidak maju lagi". Target hostile terus bergerak (apalagi bot sendiri kena knockback tiap dipukul) - goto() ke titik statis lama jadi mengejar posisi basi dan menunggu penuh sampai timeout sebelum sempat mencoba lagi, dari luar terlihat seperti berhenti maju', async () => {
+  it('kalau target masih di luar attackRange, harus MENDEKAT pakai gerakan LANGSUNG sederhana (simpleApproach - lookAt + jalan maju), BUKAN mineflayer-pathfinder A* - permintaan nyata pemilik setelah TIGA pendekatan berbasis pathfinder berbeda semuanya berujung server membeku (~100% CPU) begitu bot ada di ruangan spawner sempit penuh mob: tiap kena knockback, pathfinder menghitung ULANG rute tanpa henti. Pola gagal yang SAMA di 3 percobaan berbeda = arsitekturnya yang salah untuk ruang sempit padat mob, bukan sekadar bug yang perlu ditambal lagi', async () => {
     const adapter = new FakeRoleAdapter({
       items: { iron_sword: 1 },
       entities: [
@@ -846,8 +846,8 @@ describe('MobFarmEngine', () => {
     const result = await engine.tick();
 
     assert.equal(result.action, 'approach');
-    assert.ok(adapter.actions.some((a) => a.type === 'followEntity' && a.id === 12), 'harus mengejar lewat followEntity, bukan navigateNear/goto statis');
-    assert.ok(!adapter.actions.some((a) => a.type === 'navigate'), 'JANGAN pakai navigateNear statis untuk mengejar target bergerak');
+    assert.ok(adapter.actions.some((a) => a.type === 'simpleApproach' && a.id === 12), 'harus mendekat lewat simpleApproach, bukan navigateNear/goto/GoalFollow berbasis pathfinder');
+    assert.ok(!adapter.actions.some((a) => a.type === 'navigate'), 'JANGAN pakai navigateNear/pathfinder untuk mendekati target jarak dekat di ruang sempit');
   });
 
   it('harus makan atau retreat saat health rendah sebelum menyerang', async () => {

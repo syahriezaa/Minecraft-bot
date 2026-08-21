@@ -132,21 +132,18 @@ class MobFarmEngine extends EventEmitter {
 
     const targetDistance = distance(this.adapter.getPosition(), target.position);
     if (targetDistance > this.options.attackRange) {
-      // GoalFollow DINAMIS, bukan navigateNear/GoalNear ke posisi sesaat - permintaan nyata
-      // pemilik: "ketika kena hit dia tidak maju lagi". Target hostile terus bergerak (apalagi
-      // bot sendiri kena knockback tiap dipukul), goto() ke titik statis lama jadi mengejar posisi
-      // yang sudah basi dan harus menunggu penuh sampai timeout sebelum sempat mencoba lagi - dari
-      // luar terlihat seperti "berhenti maju". TIDAK di-await - followEntity cuma memasang goal,
-      // pathfinder-nya sendiri yang jalan otomatis di latar belakang lewat physicsTick, BUKAN
-      // menunggu sampai tercapai/timeout di sini (versi pertama begitu, malah bikin bot benar-benar
-      // diam - lihat komentar lengkap di mineflayerRoleAdapter.js: "tetap diam aja").
-      this.adapter.followEntity(target, Math.max(1, this.options.attackRange - 0.5));
+      // Gerakan LANGSUNG sederhana, BUKAN mineflayer-pathfinder A* - permintaan nyata pemilik
+      // setelah TIGA pendekatan berbasis pathfinder berbeda (goto() statis, GoalFollow dinamis
+      // blocking, GoalFollow dinamis non-blocking) semuanya berakhir sama: server membeku begitu
+      // bot ada di ruangan spawner sempit penuh mob - tiap kena knockback, pathfinder menghitung
+      // ULANG rute tanpa henti. Lihat komentar lengkap di simpleApproach (mineflayerRoleAdapter.js).
+      await this.adapter.simpleApproach(target);
       return { action: 'approach', target: type };
     }
 
-    // Sudah dalam attackRange - hentikan goal kejar-kejaran supaya pathfinder tidak menarik bot
-    // bergerak SAAT sedang menebas di tempat.
-    this.adapter.stopFollowing?.();
+    // Sudah dalam attackRange - hentikan gerakan maju supaya bot tidak terus melangkah SAAT
+    // sedang menebas di tempat.
+    this.adapter.stopApproaching?.();
 
     const now = Date.now();
     if (now - this.lastAttackAt < this.options.attackCooldownMs) {
