@@ -174,6 +174,24 @@ const BEETROOT_CHEST = '-181,74,-349';
 const LOGS_CHEST = '-181,74,-347';
 const RARE_DROPS_CHEST = '-181,74,-345';
 
+// Double chest & barel TAMBAHAN yang ditaruh pemilik langsung ("saya menaruh beberapa lagi double
+// peti di area itu kamu bisa ekspan lagi storage nya terutama untuk item yang jumlah nya banyak") -
+// dikonfirmasi lewat query-blocks live (bukan tebakan): 7 double chest baru + 3 barel baru,
+// SEMUANYA di kolom z yang sebelumnya kosong pada x=-181/-180 (bukan kolom/x baru). Diprioritaskan
+// untuk item hasil panen bervolume tinggi (potato/carrot/wheat/beetroot - sudah 3 FarmerWorker
+// jalan paralel sekarang, panen jauh lebih cepat dari sebelumnya) dan kategori lain yang selama ini
+// TIDAK PUNYA cadangan darurat sama sekali (dirt/log/hasil sampingan panen).
+const POTATO_OVERFLOW_CHEST = '-181,71,-350';
+const CARROT_OVERFLOW_CHEST = '-181,72,-348';
+const WHEAT_OVERFLOW_CHEST = '-181,72,-346';
+const DIRT_SAND_OVERFLOW_CHEST = '-181,73,-348';
+const LOGS_OVERFLOW_CHEST = '-181,73,-346';
+const FARMING_BYPRODUCTS_OVERFLOW_CHEST = '-181,74,-348';
+const BEETROOT_OVERFLOW_CHEST = '-181,74,-346';
+const ARMOR_OVERFLOW_CHEST = '-180,71,-351'; // barrel
+const TOOLS_OVERFLOW_CHEST = '-180,71,-348'; // barrel
+const TRINKETS_OVERFLOW_CHEST = '-180,71,-346'; // barrel
+
 // Nama kategori manusiawi per posisi chest - permintaan nyata pemilik: "di ui tampilan peti nya
 // rapikan urut baris dan kolom nya dan berikan nama kategorinya". `mirror: false` untuk barel
 // (armor/buku/perkakas/cadangan) karena barel TIDAK PERNAH menyatu fisik dengan blok lain (lihat
@@ -214,7 +232,17 @@ const CHEST_CATEGORIES = [
   { pos: POTATO_CHEST, label: 'Kentang' },
   { pos: BEETROOT_CHEST, label: 'Beetroot' },
   { pos: LOGS_CHEST, label: 'Kayu Gelondongan (Log)' },
-  { pos: RARE_DROPS_CHEST, label: 'Drop Langka' }
+  { pos: RARE_DROPS_CHEST, label: 'Drop Langka' },
+  { pos: POTATO_OVERFLOW_CHEST, label: 'Cadangan Kentang' },
+  { pos: CARROT_OVERFLOW_CHEST, label: 'Cadangan Wortel' },
+  { pos: WHEAT_OVERFLOW_CHEST, label: 'Cadangan Gandum' },
+  { pos: DIRT_SAND_OVERFLOW_CHEST, label: 'Cadangan Tanah & Pasir' },
+  { pos: LOGS_OVERFLOW_CHEST, label: 'Cadangan Kayu Gelondongan' },
+  { pos: FARMING_BYPRODUCTS_OVERFLOW_CHEST, label: 'Cadangan Hasil Sampingan Panen' },
+  { pos: BEETROOT_OVERFLOW_CHEST, label: 'Cadangan Beetroot' },
+  { pos: ARMOR_OVERFLOW_CHEST, label: 'Cadangan Armor', mirror: false },
+  { pos: TOOLS_OVERFLOW_CHEST, label: 'Cadangan Perkakas', mirror: false },
+  { pos: TRINKETS_OVERFLOW_CHEST, label: 'Cadangan Pernak-pernik', mirror: false }
 ];
 
 function buildChestCategoryLabels() {
@@ -381,7 +409,22 @@ const OVERFLOW_CHESTS = {
   [SEEDS_CHEST]: SEEDS_OVERFLOW_CHEST,
   [STONE_COBBLE_CHEST]: STONE_COBBLE_OVERFLOW_CHEST,
   [WOOD_BLOCKS_CHEST]: WOOD_BLOCKS_OVERFLOW_CHEST,
-  [BOOKS_CHEST]: BOOKS_OVERFLOW_CHEST
+  [BOOKS_CHEST]: BOOKS_OVERFLOW_CHEST,
+  // Cadangan BARU dari double chest/barel tambahan yang ditaruh pemilik - permintaan nyata
+  // pemilik: "saya menaruh beberapa lagi double peti di area itu kamu bisa ekspan lagi storage
+  // nya terutama untuk item yang jumlah nya banyak". POTATO_CHEST/CARROT_CHEST sebelumnya SAMA
+  // SEKALI tidak punya cadangan darurat (celah yang sudah diketahui sejak sesi sebelumnya) -
+  // sekarang 3 FarmerWorker jalan paralel jadi panen jauh lebih cepat menumpuk.
+  [POTATO_CHEST]: POTATO_OVERFLOW_CHEST,
+  [CARROT_CHEST]: CARROT_OVERFLOW_CHEST,
+  [WHEAT_CHEST]: WHEAT_OVERFLOW_CHEST,
+  [DIRT_SAND_CHEST]: DIRT_SAND_OVERFLOW_CHEST,
+  [LOGS_CHEST]: LOGS_OVERFLOW_CHEST,
+  [FARMING_BYPRODUCTS_CHEST]: FARMING_BYPRODUCTS_OVERFLOW_CHEST,
+  [BEETROOT_CHEST]: BEETROOT_OVERFLOW_CHEST,
+  [ARMOR_CHEST]: ARMOR_OVERFLOW_CHEST,
+  [TOOLS_CHEST]: TOOLS_OVERFLOW_CHEST,
+  [TRINKETS_CHEST]: TRINKETS_OVERFLOW_CHEST
 };
 
 // Terjemahkan posisi dari memori bersama (string "x,y,z") jadi objek {x,y,z} yang dipahami adapter
