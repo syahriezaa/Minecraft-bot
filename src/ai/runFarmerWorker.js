@@ -49,8 +49,20 @@ function buildMovements(bot) {
   const movements = new Movements(bot);
   movements.canDig = false;
   movements.canOpenDoors = true;
-  movements.allowParkour = true;
+  // Parkour DIMATIKAN - permintaan nyata pemilik: "bot nya ngawur seperti tidak paham map
+  // sekitar base". Parkour bikin pathfinder berani lompat/turun lewat rute pendek yang berisiko
+  // (mis. langsung melintasi lubang ledakan creeper di lahan farming) alih-alih memutar jalan
+  // aman - terbukti lewat log live: metrics.eaten melonjak drastis (17->26 dalam beberapa menit)
+  // persis saat fitur perbaikan lahan sedang aktif bekerja di dekat lubang, tanda bot berulang
+  // kali kena damage (regenerasi HP menguras hunger cepat) - fall damage, bukan navigasi acak.
+  movements.allowParkour = false;
   movements.allowSprinting = true;
+  // Batasi jatuh maksimal 3 blok (default library 4) - di Minecraft, jatuh SAMPAI 3 blok TIDAK
+  // kena damage sama sekali, jatuh 4 blok pasti kena 1 damage. Defaultnya (4) berarti pathfinder
+  // BOLEH memilih rute yang PASTI menyakiti bot sebagai "jalan pintas" - sering terpilih di dekat
+  // tepi lubang/medan tidak rata sekitar base, persis skenario "tidak paham map sekitar base" di
+  // atas. Menurunkan ke 3 membuat pathfinder cuma memilih rute turun yang benar-benar aman.
+  movements.maxDropDown = 3;
   // Jangan pernah menaruh blok (mis. dirt/cobblestone) untuk membangun jalan/tower - kebun dan
   // chest gudang semuanya sudah terjangkau jalan kaki biasa, taruh blok cuma buang-buang bahan
   // dan bisa merusak tampilan base - ditemukan dari keluhan nyata pemilik ("kenapa dia selalu
@@ -218,7 +230,7 @@ function startFarmerWorker({ host, port, botName, scanRadius = 32, baseGoal = DE
   };
 }
 
-module.exports = { startFarmerWorker };
+module.exports = { startFarmerWorker, buildMovements };
 
 if (require.main === module) {
   startFarmerWorker({
