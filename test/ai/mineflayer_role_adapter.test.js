@@ -455,6 +455,63 @@ describe('MineflayerRoleAdapter.getChestContents - buka satu chest, baca isinya,
 
     assert.deepEqual(items, []);
   });
+
+  it('harus AMBIL 1 item lalu TARUH lagi (round-trip nyata, bukan cuma tunggu pasif) untuk memastikan data yang dicocokkan benar-benar sudah ter-update - permintaan nyata pemilik: "dia harus mengambil mengupdate dan pastikan isinya berubah lalu menaruh lagi lalu tunggu hingga ter update" - dipakai supaya item salah tempat yang sebelumnya luput (data belum sinkron) sekarang benar-benar terdeteksi', async () => {
+    let liveItems = [{ name: 'ink_sac', type: 77, metadata: null, count: 3 }, { name: 'wheat_seeds', type: 12, metadata: null, count: 5 }];
+    const calls = [];
+    const bot = {
+      entity: { position: { x: 0, y: 64, z: 0 } },
+      pathfinder: { goto: async () => {} },
+      inventory: { items: () => [{ name: 'stone', count: 1 }] }, // 1 slot terpakai, banyak slot kosong
+      blockAt: () => ({ name: 'chest', position: { x: 5, y: 64, z: 5 } }),
+      openChest: async () => ({
+        containerItems: () => liveItems,
+        withdraw: async (type, metadata, count) => {
+          calls.push({ action: 'withdraw', type, metadata, count });
+          liveItems = liveItems.map((it) => (it.type === type ? { ...it, count: it.count - count } : it)).filter((it) => it.count > 0);
+        },
+        deposit: async (type, metadata, count) => {
+          calls.push({ action: 'deposit', type, metadata, count });
+          const existing = liveItems.find((it) => it.type === type);
+          if (existing) existing.count += count;
+          else liveItems.push({ name: 'ink_sac', type, metadata, count });
+        },
+        close: () => {}
+      })
+    };
+    const adapter = new MineflayerRoleAdapter(bot, { chestSettleMs: 5 });
+
+    const items = await adapter.getChestContents({ x: 5, y: 64, z: 5 });
+
+    assert.equal(calls.length, 2, 'harus persis 1x withdraw lalu 1x deposit sebagai verifikasi round-trip');
+    assert.equal(calls[0].action, 'withdraw');
+    assert.equal(calls[0].count, 1, 'cuma ambil 1 biji sebagai probe, bukan seluruh stack');
+    assert.equal(calls[1].action, 'deposit');
+    assert.equal(calls[1].count, 1, 'harus ditaruh KEMBALI persis sejumlah yang diambil - jangan sampai malah mengurangi isi chest asli');
+    assert.equal(calls[1].type, calls[0].type, 'item yang ditaruh kembali harus jenis yang SAMA dengan yang diambil');
+    assert.deepEqual(items, [{ name: 'ink_sac', type: 77, metadata: null, count: 3 }, { name: 'wheat_seeds', type: 12, metadata: null, count: 5 }], 'isi akhir yang dilaporkan harus utuh sama seperti semula (barang sudah dikembalikan)');
+  });
+
+  it('kalau slot inventaris bot TIDAK cukup longgar (kurang dari 2 slot bebas), JANGAN coba probe ambil-taruh - permintaan nyata pemilik: sisakan 2 slot untuk melakukan verifikasi ini, jangan sampai malah bikin inventaris kepenuhan gara-gara probe', async () => {
+    const calls = [];
+    const bot = {
+      entity: { position: { x: 0, y: 64, z: 0 } },
+      pathfinder: { goto: async () => {} },
+      inventory: { items: () => new Array(35).fill(0).map((_, i) => ({ name: `filler_${i}`, count: 1 })) }, // nyaris penuh
+      blockAt: () => ({ name: 'chest', position: { x: 5, y: 64, z: 5 } }),
+      openChest: async () => ({
+        containerItems: () => [{ name: 'ink_sac', type: 77, metadata: null, count: 3 }],
+        withdraw: async (type, metadata, count) => { calls.push({ action: 'withdraw', type, metadata, count }); },
+        deposit: async (type, metadata, count) => { calls.push({ action: 'deposit', type, metadata, count }); },
+        close: () => {}
+      })
+    };
+    const adapter = new MineflayerRoleAdapter(bot, { chestSettleMs: 5 });
+
+    await adapter.getChestContents({ x: 5, y: 64, z: 5 });
+
+    assert.equal(calls.length, 0, 'tidak boleh mencoba probe kalau slot bebas kurang dari cadangan yang diminta pemilik (2 slot)');
+  });
 });
 
 describe('MineflayerRoleAdapter.withdrawAllFromChest - ambil SEMUA isi chest apapun jenisnya - dipakai StorageManagerEngine untuk "kumpulkan semua chest di luar rumah", beda dari withdrawFromChest yang butuh filter nama item spesifik', () => {

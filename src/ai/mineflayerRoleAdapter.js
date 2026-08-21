@@ -326,9 +326,51 @@ class MineflayerRoleAdapter {
   async getChestContents(pos) {
     const chest = await this.openChestAt(pos);
     if (!chest) return [];
+    await this.verifyChestContentsByRoundTrip(chest);
     const items = typeof chest.containerItems === 'function' ? chest.containerItems() : [];
     if (typeof chest.close === 'function') chest.close();
     return items;
+  }
+
+  // Menunggu pasif (waitForStableChestItems) saja belum cukup meyakinkan - dua bacaan yang sama-
+  // sama masih basi/salah tetap akan dianggap "stabil". Cara yang lebih pasti: benar-benar AMBIL 1
+  // biji item (transaksi nyata yang dikonfirmasi server), pastikan datanya berubah, lalu TARUH
+  // KEMBALI persis sejumlah yang diambil dan tunggu konfirmasi itu juga - permintaan nyata pemilik:
+  // "dia harus mengambil mengupdate dan pastikan isinya berubah lalu menaruh lagi lalu tunggu
+  // hingga ter update". Cuma jalan kalau chest ada isinya (tidak ada yang perlu diverifikasi kalau
+  // kosong) DAN inventaris bot masih longgar (>= chestVerifyReserveSlots, permintaan pemilik:
+  // sisakan 2 slot) - supaya probe ini tidak pernah bikin inventaris kepenuhan.
+  async verifyChestContentsByRoundTrip(chest) {
+    if (typeof chest?.containerItems !== 'function') return;
+    if (typeof chest?.withdraw !== 'function' || typeof chest?.deposit !== 'function') return;
+    const items = chest.containerItems();
+    if (items.length === 0) return;
+    const reserve = this.options.chestVerifyReserveSlots ?? 2;
+    if (this.getInventoryFreeSlotCount() < reserve) return;
+
+    const probe = items[0];
+    try {
+      await chest.withdraw(probe.type, probe.metadata ?? null, 1);
+      await this.waitForStableChestItems(chest);
+      await chest.deposit(probe.type, probe.metadata ?? null, 1);
+      await this.waitForStableChestItems(chest);
+    } catch (e) {
+      // Probe gagal (mis. server menolak klik) - biarkan pembacaan settle-poll biasa yang dipakai,
+      // jangan sampai error di sini menggagalkan seluruh inspeksi chest.
+    }
+  }
+
+  // Perkiraan jumlah slot kosong di inventaris utama bot (hotbar + inventory, di luar armor/
+  // offhand/crafting) - dipakai verifyChestContentsByRoundTrip untuk memastikan probe ambil-taruh
+  // tidak pernah dilakukan saat inventaris nyaris penuh.
+  getInventoryFreeSlotCount() {
+    const inv = this.bot?.inventory;
+    if (!inv) return 0;
+    if (typeof inv.emptySlotCount === 'function') return inv.emptySlotCount();
+    const total = (Number.isFinite(inv.inventoryEnd) && Number.isFinite(inv.inventoryStart))
+      ? inv.inventoryEnd - inv.inventoryStart
+      : 36;
+    return Math.max(0, total - this.getInventoryItems().length);
   }
 
   // Tarik SEMUA isi chest apapun jenisnya - dipakai StorageManagerEngine untuk "kumpulkan semua

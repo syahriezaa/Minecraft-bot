@@ -110,6 +110,18 @@ class StorageManagerEngine extends EventEmitter {
     // sampai kebetulan tas penuh/putaran collect habis.
     this.mode = this.adapter.getInventoryItems().length > 0 ? 'deposit' : 'collect';
     if (this.options.maxCarrySlots === undefined) this.options.maxCarrySlots = 30;
+    // Permintaan nyata pemilik: sisakan 2 slot inventaris selama mode collect, khusus supaya
+    // verifyChestContentsByRoundTrip (adapter, saat memeriksa isi chest) selalu punya ruang aman
+    // untuk probe ambil-taruh-kembali-nya, tidak pernah terhalang inventaris penuh.
+    if (this.options.chestVerifyReserveSlots === undefined) this.options.chestVerifyReserveSlots = 2;
+  }
+
+  // Berapa slot inventaris yang masih kosong sekarang - Infinity kalau adapter tidak menyediakan
+  // info ini (mis. adapter uji yang belum diperbarui), supaya tidak tiba-tiba memblokir collect.
+  getFreeInventorySlotCount() {
+    return typeof this.adapter.getInventoryFreeSlotCount === 'function'
+      ? this.adapter.getInventoryFreeSlotCount()
+      : Infinity;
   }
 
   getChestAssignments() {
@@ -129,7 +141,9 @@ class StorageManagerEngine extends EventEmitter {
   switchToDepositIfCarryFull() {
     if (this.mode !== 'collect') return;
     const carriedNow = this.adapter.getInventoryItems();
-    if (carriedNow.length >= this.options.maxCarrySlots) {
+    const carryFull = carriedNow.length >= this.options.maxCarrySlots;
+    const outOfReserve = this.getFreeInventorySlotCount() < this.options.chestVerifyReserveSlots;
+    if (carryFull || outOfReserve) {
       this.mode = 'deposit';
     }
   }

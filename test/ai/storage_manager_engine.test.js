@@ -837,6 +837,21 @@ describe('StorageManagerEngine', () => {
     assert.equal(engine.mode, 'deposit', 'tas sudah mencapai batas (maxCarrySlots:1) setelah SATU kali ambil - harus langsung beralih ke mode menaruh, JANGAN lanjut ambil chest luar kedua');
   });
 
+  it('MODE COLLECT: begitu slot inventaris bebas kurang dari chestVerifyReserveSlots (walau belum mencapai maxCarrySlots), HARUS berhenti mengumpulkan dan beralih ke mode "deposit" - permintaan nyata pemilik: sisakan 2 slot supaya verifikasi ambil-taruh chest (round-trip) di adapter selalu punya ruang aman', async () => {
+    const outside1 = { position: { x: -200, y: 64, z: -360 }, items: [{ name: 'oak_log', count: 5 }] };
+    const outside2 = { position: { x: -201, y: 64, z: -360 }, items: [{ name: 'iron_ingot', count: 3 }] };
+    const insideChest = { position: { x: -185, y: 72, z: -352 }, items: [] };
+    const adapter = new FakeStorageAdapter({
+      chests: { '-200,64,-360': outside1, '-201,64,-360': outside2, '-185,72,-352': insideChest }
+    });
+    adapter.getInventoryFreeSlotCount = () => 1; // inventaris nyaris penuh dari sumber lain, walau maxCarrySlots (default 30) belum tercapai
+    const engine = new StorageManagerEngine({ adapter, houseBounds: HOUSE_BOUNDS });
+
+    const first = await engine.tick();
+    assert.equal(first.action, 'collect');
+    assert.equal(engine.mode, 'deposit', 'slot bebas (1) sudah di bawah cadangan (2) - harus langsung beralih ke mode menaruh walau maxCarrySlots masih jauh');
+  });
+
   it('MODE DEPOSIT: harus TERUS menaruh (bukan kembali mengumpulkan di tengah jalan) sampai tas BENAR-BENAR kosong - baru setelah itu kembali ke mode "collect"', async () => {
     const chestA = { position: { x: -185, y: 72, z: -352 }, items: [] };
     const chestB = { position: { x: -186, y: 72, z: -352 }, items: [] };
