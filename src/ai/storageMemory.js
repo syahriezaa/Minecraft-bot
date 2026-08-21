@@ -479,5 +479,6 @@ module.exports = {
   OVERFLOW_CHESTS,
   CHEST_CATEGORY_LABELS,
   getSharedChestAssignments,
-  parseChestPositionKey
+  parseChestPositionKey,
+  TOOLS_CHEST
 };

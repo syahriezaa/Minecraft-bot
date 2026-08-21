@@ -662,6 +662,22 @@
   });
 
   createFleetController({
+    apiPrefix: 'mobfarm',
+    label: 'pemburu spawner',
+    listElId: 'mobfarm-fleet-list',
+    countElId: 'mobfarm-fleet-count',
+    startBtnId: 'btn-mobfarm-fleet-start',
+    stopAllBtnId: 'btn-mobfarm-fleet-stop-all',
+    defaultName: 'MobFarmWorker',
+    namePrefix: 'MobFarm',
+    emptyText: 'Tidak ada pemburu spawner yang berjalan.',
+    statsRenderer: (m) => {
+      const combat = m.combat || {};
+      return `serang <b>${combat.attacks || 0}</b> · mundur <b>${combat.retreats || 0}</b>`;
+    }
+  });
+
+  createFleetController({
     apiPrefix: 'rancher',
     label: 'peternak',
     listElId: 'rancher-fleet-list',

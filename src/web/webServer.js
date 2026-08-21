@@ -28,6 +28,7 @@ const { startFarmerWorker } = require('../ai/runFarmerWorker');
 const { startExplorerWorker } = require('../ai/runExplorerWorker');
 const { loadLandmarks } = require('../ai/worldLandmarks');
 const { startGuardWorker } = require('../ai/runGuardWorker');
+const { startMobFarmWorker } = require('../ai/runMobFarmWorker');
 const { startRancherWorker } = require('../ai/runRancherWorker');
 const { startStorageWorker, CHEST_CATEGORY_LABELS } = require('../ai/runStorageWorker');
 
@@ -91,7 +92,7 @@ function buildRealSwarmList() {
   // rancherWorkers/storageWorkers/explorerWorkers dideklarasikan lebih bawah di file ini (const) -
   // aman diakses di sini karena fungsi ini cuma benar-benar DIPANGGIL belakangan (lewat
   // setInterval/endpoint), bukan saat baris ini pertama dieksekusi.
-  for (const workerMap of [farmerWorkers, guardWorkers, rancherWorkers, storageWorkers, explorerWorkers]) {
+  for (const workerMap of [farmerWorkers, guardWorkers, rancherWorkers, storageWorkers, explorerWorkers, mobFarmWorkers]) {
     for (const [name, handle] of workerMap) {
       const status = typeof handle.getStatus === 'function' ? handle.getStatus() : null;
       if (!status?.position) continue;
@@ -488,6 +489,75 @@ app.get('/api/guard/status', (req, res) => {
       running: guardWorkers.size > 0,
       count: guardWorkers.size,
       workers: Array.from(guardWorkers.entries()).map(([name, handle]) => ({
+        botName: name,
+        metrics: handle.getMetrics()
+      }))
+    }
+  });
+});
+
+// Pekerja pemburu spawner (lihat runMobFarmWorker.js) - farming rotten_flesh di mob spawner,
+// jarah chest di sekitarnya, antar barang yang dikenal pulang ke gudang. Permintaan nyata pemilik:
+// "buat bot lagi untuk farming rotenflesh di spawner zombie dan disana ada banyak peti barang
+// barang jelek nya bisa kamu hancurkan".
+const mobFarmWorkers = new Map(); // botName -> handle
+
+app.post('/api/mobfarm/start', (req, res) => {
+  const { host, port, botName, scanRadius, spawnerGoal } = req.body || {};
+  const name = botName || 'MobFarmWorker';
+  if (mobFarmWorkers.has(name)) {
+    return res.status(409).json({ success: false, error: { code: 'ALREADY_RUNNING', message: `Pemburu spawner '${name}' sudah berjalan` } });
+  }
+  broadcast({ type: 'AI_ACTION_EVENT', data: { task: 'MOBFARM_WORKER', step: `Memulai pemburu spawner '${name}'...`, status: 'RUNNING' } });
+
+  const handle = startMobFarmWorker({
+    host: host || 'atoms-girl.tun.ply.gg',
+    port: port || 25565,
+    botName: name,
+    scanRadius: scanRadius || 16,
+    spawnerGoal: spawnerGoal || undefined,
+    log: (msg) => broadcast({ type: 'AI_ACTION_EVENT', data: { task: 'MOBFARM_WORKER', step: `[${name}] ${msg}`, status: 'RUNNING' } }),
+    onDisconnect: () => {
+      mobFarmWorkers.delete(name);
+      broadcast({ type: 'AI_ACTION_EVENT', data: { task: 'MOBFARM_WORKER', step: `[${name}] Koneksi terputus - dihapus dari daftar armada.`, status: 'STOPPED' } });
+    }
+  });
+  mobFarmWorkers.set(name, handle);
+
+  res.json({ success: true, data: { message: `Pemburu spawner '${name}' dimulai` } });
+});
+
+app.post('/api/mobfarm/stop', (req, res) => {
+  const { botName } = req.body || {};
+  if (!botName) {
+    const count = mobFarmWorkers.size;
+    if (count === 0) {
+      return res.status(409).json({ success: false, error: { code: 'NOT_RUNNING', message: 'Tidak ada pemburu spawner yang berjalan' } });
+    }
+    for (const [name, handle] of mobFarmWorkers) {
+      handle.stop();
+      broadcast({ type: 'AI_ACTION_EVENT', data: { task: 'MOBFARM_WORKER', step: `[${name}] Dihentikan dari dashboard.`, status: 'STOPPED' } });
+    }
+    mobFarmWorkers.clear();
+    return res.json({ success: true, data: { message: `${count} pemburu spawner dihentikan` } });
+  }
+  const handle = mobFarmWorkers.get(botName);
+  if (!handle) {
+    return res.status(409).json({ success: false, error: { code: 'NOT_RUNNING', message: `Pemburu spawner '${botName}' tidak ditemukan` } });
+  }
+  handle.stop();
+  mobFarmWorkers.delete(botName);
+  broadcast({ type: 'AI_ACTION_EVENT', data: { task: 'MOBFARM_WORKER', step: `[${botName}] Dihentikan dari dashboard.`, status: 'STOPPED' } });
+  res.json({ success: true, data: { message: `Pemburu spawner '${botName}' dihentikan` } });
+});
+
+app.get('/api/mobfarm/status', (req, res) => {
+  res.json({
+    success: true,
+    data: {
+      running: mobFarmWorkers.size > 0,
+      count: mobFarmWorkers.size,
+      workers: Array.from(mobFarmWorkers.entries()).map(([name, handle]) => ({
         botName: name,
         metrics: handle.getMetrics()
       }))
