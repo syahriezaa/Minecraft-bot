@@ -514,6 +514,28 @@ describe('MineflayerRoleAdapter.getChestContents - buka satu chest, baca isinya,
 
     assert.equal(calls.length, 0, 'tidak boleh mencoba probe kalau slot bebas kurang dari cadangan yang diminta pemilik (2 slot)');
   });
+
+  it('getChestContents(pos, { verify: false }) HARUS lewati probe ambil-taruh - ditemukan dari keluhan nyata pemilik: "worker nya membuka chest itu tapi sepertinya tidak melihat isinya" - root cause-nya resolveChestForItem di storageManagerEngine.js cuma "mengintip" isi BANYAK chest sekaligus (cari yang sudah cocok/kosong) memakai getChestContents yang sama dengan yang dipakai audit gudang, jadi probe ambil-taruh (mahal, tiap chest butuh beberapa ratus ms) ikut jalan di SETIAP chest yang diintip, bukan cuma sekali saat benar-benar mengaudit - membuat resolveChestForItem lambat sekali dan terlihat seperti macet. verify:false dipakai untuk intipan cepat semacam itu; default (tanpa opsi) tetap verify:true untuk audit sungguhan', async () => {
+    const calls = [];
+    const bot = {
+      entity: { position: { x: 0, y: 64, z: 0 } },
+      pathfinder: { goto: async () => {} },
+      inventory: { items: () => [] },
+      blockAt: () => ({ name: 'chest', position: { x: 5, y: 64, z: 5 } }),
+      openChest: async () => ({
+        containerItems: () => [{ name: 'ink_sac', type: 77, metadata: null, count: 3 }],
+        withdraw: async (type, metadata, count) => { calls.push({ action: 'withdraw', type, metadata, count }); },
+        deposit: async (type, metadata, count) => { calls.push({ action: 'deposit', type, metadata, count }); },
+        close: () => {}
+      })
+    };
+    const adapter = new MineflayerRoleAdapter(bot, { chestSettleMs: 5 });
+
+    const items = await adapter.getChestContents({ x: 5, y: 64, z: 5 }, { verify: false });
+
+    assert.equal(calls.length, 0, 'verify:false harus benar-benar lewati probe ambil-taruh, walau chest ada isinya dan slot bebas cukup');
+    assert.deepEqual(items, [{ name: 'ink_sac', type: 77, metadata: null, count: 3 }], 'isi tetap harus dikembalikan dengan benar, cuma tanpa probe tambahan');
+  });
 });
 
 describe('MineflayerRoleAdapter.withdrawAllFromChest - ambil SEMUA isi chest apapun jenisnya - dipakai StorageManagerEngine untuk "kumpulkan semua chest di luar rumah", beda dari withdrawFromChest yang butuh filter nama item spesifik', () => {

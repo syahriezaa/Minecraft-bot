@@ -28,7 +28,8 @@ class FakeStorageAdapter {
     return Object.values(this.chests).map((c) => c.position);
   }
 
-  async getChestContents(pos) {
+  async getChestContents(pos, options = {}) {
+    this.actions.push({ type: 'getChestContents', position: pos, options });
     const chest = this.chests[`${pos.x},${pos.y},${pos.z}`];
     return chest ? chest.items : [];
   }
@@ -200,6 +201,22 @@ describe('StorageManagerEngine', () => {
     const second = await engine.tick();
 
     assert.equal(second.deliveries[0].position.x, assignedPos.x, 'jenis item yang sama harus tetap ke chest yang SAMA (dari memori), bukan chest lain yang kebetulan juga kosong');
+  });
+
+  it('resolveChestForItem (lewat safeGetChestContents) HARUS mengintip tiap chest dengan verify:false, BUKAN verify penuh - permintaan nyata pemilik ("worker nya membuka chest itu tapi sepertinya tidak melihat isinya"): probe ambil-taruh yang mahal cuma untuk audit gudang sungguhan, bukan intipan cepat "sudah cocok/kosong belum" yang bisa terjadi di BANYAK chest sekaligus tiap kali resolve dipanggil', async () => {
+    const chestA = { position: { x: -185, y: 72, z: -352 }, items: [] };
+    const chestB = { position: { x: -186, y: 72, z: -352 }, items: [] };
+    const adapter = new FakeStorageAdapter({
+      chests: { '-185,72,-352': chestA, '-186,72,-352': chestB },
+      inventory: { stone: 4 } // item BELUM PERNAH punya assignment - memicu jalur pengintipan
+    });
+    const engine = new StorageManagerEngine({ adapter, houseBounds: HOUSE_BOUNDS });
+
+    await engine.tick();
+
+    const peeks = adapter.actions.filter((a) => a.type === 'getChestContents');
+    assert.ok(peeks.length > 0, 'harus benar-benar mengintip minimal satu chest untuk mencari yang cocok/kosong');
+    assert.ok(peeks.every((a) => a.options.verify === false), 'SEMUA intipan resolveChestForItem harus verify:false - kalau tidak, mengintip banyak chest jadi lambat sekali (tiap chest kena probe ambil-taruh penuh)');
   });
 
   it('harus menerima assignment awal (initialAssignments) supaya memori sortir bertahan lintas restart worker, dan mengekspos getChestAssignments() untuk disimpan lagi', async () => {

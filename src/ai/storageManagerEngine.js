@@ -157,9 +157,14 @@ class StorageManagerEngine extends EventEmitter {
   // Bungkus getChestContents supaya chest yang gagal dibuka (windowOpen timeout dsb) tidak
   // menjatuhkan seluruh tick - ditandai rusak (dilewati permanen) dan dilaporkan lewat event,
   // bukan dilempar sebagai exception yang bisa merembet sampai ke luar tick() tanpa tertangani.
+  // Dipakai HANYA untuk "mengintip" (cari chest yang sudah cocok/kosong) - selalu verify:false
+  // supaya intipan cepat, bukan audit penuh (lihat komentar getChestContents di adapter untuk
+  // kenapa: probe ambil-taruh di SETIAP chest yang diintip bikin resolveChestForItem lambat
+  // sekali - ditemukan dari keluhan nyata pemilik: "worker nya membuka chest itu tapi sepertinya
+  // tidak melihat isinya").
   async safeGetChestContents(pos) {
     try {
-      return await this.adapter.getChestContents(pos);
+      return await this.adapter.getChestContents(pos, { verify: false });
     } catch (e) {
       this.brokenPositions.add(posKey(pos));
       this.emit('chestError', { position: pos, error: e.message });

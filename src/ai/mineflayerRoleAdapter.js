@@ -327,10 +327,20 @@ class MineflayerRoleAdapter {
   // Buka satu chest, baca isinya, tutup lagi - dipakai StorageManagerEngine untuk audit "buka
   // semua chest dan cek barang" saat merapikan gudang. Beda dari findMatchingChest (yang berhenti
   // di chest PERTAMA yang cocok) - ini baca isi SATU chest tertentu secara lengkap.
-  async getChestContents(pos) {
+  //
+  // { verify = true }: jalankan probe ambil-taruh (verifyChestContentsByRoundTrip) sebelum
+  // membaca - PENTING untuk audit sungguhan (misplaced-item detection), tapi MAHAL (beberapa
+  // ratus ms per chest). resolveChestForItem di storageManagerEngine.js juga memakai fungsi ini
+  // untuk "mengintip" isi BANYAK chest sekaligus (cari yang sudah cocok/kosong) - kalau probe ikut
+  // jalan di situ juga, mengintip 20+ chest jadi lambat sekali dan terlihat seperti macet -
+  // ditemukan dari keluhan nyata pemilik: "worker nya membuka chest itu tapi sepertinya tidak
+  // melihat isinya". Intipan seperti itu memakai verify:false - settle-poll pasif di openChestAt
+  // saja sudah cukup untuk keputusan "sudah cocok / kosong / bukan", tidak butuh jaminan seketat
+  // audit resmi.
+  async getChestContents(pos, { verify = true } = {}) {
     const chest = await this.openChestAt(pos);
     if (!chest) return [];
-    await this.verifyChestContentsByRoundTrip(chest);
+    if (verify) await this.verifyChestContentsByRoundTrip(chest);
     const items = typeof chest.containerItems === 'function' ? chest.containerItems() : [];
     if (typeof chest.close === 'function') chest.close();
     return items;
