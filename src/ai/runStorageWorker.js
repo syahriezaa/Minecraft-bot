@@ -56,25 +56,24 @@ function saveAssignments(assignments, log) {
 // SUDAH diproses (ingot/blok/permata); chest "Bijih Mentah" (y73,z-353) untuk bijih mentah/redstone.
 const PROCESSED_ORE_CHEST = '-181,74,-353';
 const RAW_ORE_CHEST = '-181,73,-353';
-// Cadangan untuk ore/ingot - chest utama juga kronis penuh (banyak jenis, tumpukan besar) persis
-// pola yang sama dengan drop mob/benih/batu - ditemukan dari keluhan nyata pemilik: diamond &
-// iron_ingot berhenti total terkirim (bukan lagi gara-gara brokenPositions yang sudah diperbaiki,
-// tapi genuinely chest utama penuh). Pakai slot y74,-344 yang sengaja dibiarkan bebas sebelumnya.
+// Cadangan DARURAT untuk ore/ingot - dipakai HANYA kalau chest utama genuinely penuh (lihat
+// OVERFLOW_CHESTS + resolveChestForItem di storageManagerEngine.js), BUKAN rumah kedua yang
+// setara - permintaan nyata pemilik: "make the overflow chest is for emergency only when the
+// actual cest is full". Semua ore/ingot TETAP terdaftar ke chest utama; overflow cuma jalan
+// keluar sementara saat chest utama tidak bisa menerima.
 const PROCESSED_ORE_OVERFLOW_CHEST = '-181,74,-344';
 const CANONICAL_ORE_INGOT_ASSIGNMENTS = {
-  // Item bervolume tertinggi tetap di chest utama.
   coal: PROCESSED_ORE_CHEST,
   coal_block: PROCESSED_ORE_CHEST,
   iron_ingot: PROCESSED_ORE_CHEST,
   iron_block: PROCESSED_ORE_CHEST,
-  // Cadangan - jenis lain, dipisah supaya chest utama tidak kronis penuh.
-  copper_ingot: PROCESSED_ORE_OVERFLOW_CHEST,
-  waxed_copper_block: PROCESSED_ORE_OVERFLOW_CHEST,
-  lapis_lazuli: PROCESSED_ORE_OVERFLOW_CHEST,
-  diamond: PROCESSED_ORE_OVERFLOW_CHEST,
-  gold_ingot: PROCESSED_ORE_OVERFLOW_CHEST,
-  emerald_block: PROCESSED_ORE_OVERFLOW_CHEST,
-  netherite_ingot: PROCESSED_ORE_OVERFLOW_CHEST,
+  copper_ingot: PROCESSED_ORE_CHEST,
+  waxed_copper_block: PROCESSED_ORE_CHEST,
+  lapis_lazuli: PROCESSED_ORE_CHEST,
+  diamond: PROCESSED_ORE_CHEST,
+  gold_ingot: PROCESSED_ORE_CHEST,
+  emerald_block: PROCESSED_ORE_CHEST,
+  netherite_ingot: PROCESSED_ORE_CHEST,
   redstone: RAW_ORE_CHEST,
   redstone_block: RAW_ORE_CHEST,
   raw_iron: RAW_ORE_CHEST,
@@ -178,17 +177,17 @@ const CANONICAL_GEAR_ASSIGNMENTS = {
   enchanted_golden_apple: FOOD_CHEST, cooked_salmon: FOOD_CHEST, salmon: FOOD_CHEST, cooked_cod: FOOD_CHEST,
   cod: FOOD_CHEST, cake: FOOD_CHEST, cookie: FOOD_CHEST, pumpkin_pie: FOOD_CHEST, egg: FOOD_CHEST,
 
-  // Drop mob (bahan mentah dari membunuh/menjarah mob, BUKAN makanan/armor/senjata)
+  // Drop mob (bahan mentah dari membunuh/menjarah mob, BUKAN makanan/armor/senjata) - SEMUA
+  // terdaftar ke chest utama; MOB_DROPS_OVERFLOW_CHEST cuma dipakai DARURAT lewat OVERFLOW_CHESTS
+  // (lihat di bawah) saat chest utama genuinely penuh - permintaan nyata pemilik: overflow hanya
+  // untuk darurat, bukan rumah kedua yang setara.
   bone: MOB_DROPS_CHEST, string: MOB_DROPS_CHEST, spider_eye: MOB_DROPS_CHEST,
   leather: MOB_DROPS_CHEST, white_wool: MOB_DROPS_CHEST, black_wool: MOB_DROPS_CHEST, gray_wool: MOB_DROPS_CHEST,
   white_carpet: MOB_DROPS_CHEST,
-  // Cadangan (chest fisik LAIN) - drop mob yang volumenya besar/sering menumpuk, supaya rumah
-  // utama tidak kronis penuh sampai item lain (mis. ink_sac) tidak pernah kebagian tempat sama
-  // sekali.
-  slime_ball: MOB_DROPS_OVERFLOW_CHEST, phantom_membrane: MOB_DROPS_OVERFLOW_CHEST,
-  rotten_flesh: MOB_DROPS_OVERFLOW_CHEST, feather: MOB_DROPS_OVERFLOW_CHEST, gunpowder: MOB_DROPS_OVERFLOW_CHEST,
-  ender_eye: MOB_DROPS_OVERFLOW_CHEST, glow_ink_sac: MOB_DROPS_OVERFLOW_CHEST, ink_sac: MOB_DROPS_OVERFLOW_CHEST,
-  breeze_rod: MOB_DROPS_OVERFLOW_CHEST, wind_charge: MOB_DROPS_OVERFLOW_CHEST,
+  slime_ball: MOB_DROPS_CHEST, phantom_membrane: MOB_DROPS_CHEST,
+  rotten_flesh: MOB_DROPS_CHEST, feather: MOB_DROPS_CHEST, gunpowder: MOB_DROPS_CHEST,
+  ender_eye: MOB_DROPS_CHEST, glow_ink_sac: MOB_DROPS_CHEST, ink_sac: MOB_DROPS_CHEST,
+  breeze_rod: MOB_DROPS_CHEST, wind_charge: MOB_DROPS_CHEST,
 
   // Bibit pohon (SAPLINGS_PLANTS_CHEST) - HANYA bibit pohon (bagian dari tema kayu kolom z=-347),
   // jamur/tanaman nether/kaktus DIKELUARKAN (bukan "hasil kayu") - permintaan nyata pemilik: kolom
@@ -197,12 +196,11 @@ const CANONICAL_GEAR_ASSIGNMENTS = {
   jungle_sapling: SAPLINGS_PLANTS_CHEST, acacia_sapling: SAPLINGS_PLANTS_CHEST, dark_oak_sapling: SAPLINGS_PLANTS_CHEST,
   cherry_sapling: SAPLINGS_PLANTS_CHEST, mangrove_propagule: SAPLINGS_PLANTS_CHEST,
 
-  // Benih murni (SEEDS_CHEST) - beda dari hasil panen utama dan hasil sampingan panen
+  // Benih murni (SEEDS_CHEST) - beda dari hasil panen utama dan hasil sampingan panen. SEMUA
+  // terdaftar ke chest utama; overflow cuma darurat lewat OVERFLOW_CHESTS di bawah.
   wheat_seeds: SEEDS_CHEST,
-  // Cadangan - jenis benih lain, dipisah dari wheat_seeds (paling banyak volumenya) supaya rumah
-  // utama tidak kronis penuh.
-  beetroot_seeds: SEEDS_OVERFLOW_CHEST, melon_seeds: SEEDS_OVERFLOW_CHEST, pumpkin_seeds: SEEDS_OVERFLOW_CHEST,
-  torchflower_seeds: SEEDS_OVERFLOW_CHEST, pitcher_pod: SEEDS_OVERFLOW_CHEST,
+  beetroot_seeds: SEEDS_CHEST, melon_seeds: SEEDS_CHEST, pumpkin_seeds: SEEDS_CHEST,
+  torchflower_seeds: SEEDS_CHEST, pitcher_pod: SEEDS_CHEST,
 
   // Hasil sampingan bercocok tanam (bukan benih murni, bukan hasil panen utama wheat/carrot/potato)
   sugar_cane: FARMING_BYPRODUCTS_CHEST, sugar: FARMING_BYPRODUCTS_CHEST, glow_berries: FARMING_BYPRODUCTS_CHEST,
@@ -258,14 +256,23 @@ const CANONICAL_GEAR_ASSIGNMENTS = {
   // Dirt/sand/gravel bulk
   dirt: DIRT_SAND_CHEST, grass_block: DIRT_SAND_CHEST,
 
-  // Batu/cobble bulk
+  // Batu/cobble bulk - SEMUA terdaftar ke chest utama; overflow cuma darurat lewat
+  // OVERFLOW_CHESTS di bawah.
   stone: STONE_COBBLE_CHEST, cobblestone: STONE_COBBLE_CHEST, mossy_cobblestone: STONE_COBBLE_CHEST,
   cobbled_deepslate: STONE_COBBLE_CHEST,
-  // Cadangan - batu dekoratif/langka yang volumenya lebih kecil, dipisah dari stone/cobblestone
-  // (paling banyak volumenya) supaya rumah utama tidak kronis penuh - ditemukan dari keluhan nyata
-  // pemilik: cobblestone berulang kali gagal disetor ke chest utama karena selalu penuh.
-  gravel: STONE_COBBLE_OVERFLOW_CHEST, tuff: STONE_COBBLE_OVERFLOW_CHEST,
-  granite: STONE_COBBLE_OVERFLOW_CHEST, diorite: STONE_COBBLE_OVERFLOW_CHEST, andesite: STONE_COBBLE_OVERFLOW_CHEST
+  gravel: STONE_COBBLE_CHEST, tuff: STONE_COBBLE_CHEST,
+  granite: STONE_COBBLE_CHEST, diorite: STONE_COBBLE_CHEST, andesite: STONE_COBBLE_CHEST
+};
+
+// Pemetaan chest UTAMA -> chest CADANGAN DARURAT - dipakai StorageManagerEngine HANYA saat chest
+// utama genuinely tidak bisa menerima (penuh/rusak), tidak pernah jadi rumah permanen item apapun
+// (lihat resolveChestForItem) - permintaan nyata pemilik: "make the overflow chest is for
+// emergency only when the actual cest is full".
+const OVERFLOW_CHESTS = {
+  [PROCESSED_ORE_CHEST]: PROCESSED_ORE_OVERFLOW_CHEST,
+  [MOB_DROPS_CHEST]: MOB_DROPS_OVERFLOW_CHEST,
+  [SEEDS_CHEST]: SEEDS_OVERFLOW_CHEST,
+  [STONE_COBBLE_CHEST]: STONE_COBBLE_OVERFLOW_CHEST
 };
 
 const DEFAULT_BASE_GOAL = { x: -185, y: 71, z: -352 };
@@ -339,7 +346,7 @@ function startStorageWorker({ host, port, botName, scanRadius = 48, baseGoal = D
     if (Object.keys(initialAssignments).length > 0) {
       log(`Muat memori sortir gudang: ${Object.keys(initialAssignments).length} jenis item sudah punya chest langganan (termasuk rumah baku ore/ingot dan gear/makanan/buku).`);
     }
-    engine = new StorageManagerEngine({ adapter, scanRadius, houseBounds, initialAssignments });
+    engine = new StorageManagerEngine({ adapter, scanRadius, houseBounds, initialAssignments, overflowChests: OVERFLOW_CHESTS });
     engine.on('collected', ({ position, count }) => log(`Ambil ${count} item dari chest luar di (${position.x},${position.y},${position.z})`));
     engine.on('delivered', ({ position, count, name }) => {
       log(`Antar ${count}x ${name} ke chest gudang di (${position.x},${position.y},${position.z})`);

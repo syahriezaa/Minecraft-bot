@@ -137,10 +137,23 @@ class StorageManagerEngine extends EventEmitter {
     if (assignedKey) {
       const stillValid = candidates.find((pos) => posKey(pos) === assignedKey);
       if (stillValid) return stillValid;
-      // Rumah yang sudah diketahui BENAR untuk item ini kebetulan sedang penuh - lanjut cari
-      // ALTERNATIF AMAN di bawah (chest lain yang sudah berisi jenis sama, atau yang benar-benar
-      // kosong) SEBELUM menyerah - tapi kalau tidak ada alternatif aman, JANGAN paksa ke chest
-      // sembarangan (lihat penjelasan di bawah kenapa itu berbahaya).
+      // Rumah utama kebetulan sedang penuh - kalau chest utama ini SUDAH punya overflow yang
+      // secara eksplisit didaftarkan untuknya (options.overflowChests), pakai ITU DULU sebelum
+      // tebak-tebakan generik di bawah - permintaan nyata pemilik: "make the overflow chest is
+      // for emergency only when the actual cest is full". Overflow eksplisit BOLEH dipakai
+      // BERSAMA oleh banyak jenis item berbeda yang berbagi chest utama yang sama (beda dari
+      // fallback "chest kosong" generik di bawah, yang cuma muat SATU jenis sampai chest itu
+      // terisi) - assignment PERMANEN item tetap ke chest utama, TIDAK pernah ditimpa jadi
+      // overflow (lihat return langsung tanpa chestAssignments.set di bawah).
+      const overflowKey = this.options.overflowChests?.[assignedKey];
+      if (overflowKey && !this.fullChestPositions.has(overflowKey) && !this.brokenPositions.has(overflowKey)) {
+        const overflowPos = candidates.find((pos) => posKey(pos) === overflowKey);
+        if (overflowPos) return overflowPos;
+      }
+      // Tidak ada overflow eksplisit (atau overflow-nya sendiri juga penuh/rusak) - lanjut cari
+      // ALTERNATIF AMAN generik di bawah (chest lain yang sudah berisi jenis sama, atau yang
+      // benar-benar kosong) SEBELUM menyerah - tapi kalau tidak ada alternatif aman, JANGAN paksa
+      // ke chest sembarangan (lihat penjelasan di bawah kenapa itu berbahaya).
     }
 
     if (candidates.length === 0) return null;

@@ -676,4 +676,101 @@ describe('StorageManagerEngine', () => {
     }
     assert.ok(delivered, 'diamond harus akhirnya berhasil terkirim setelah brokenPositions di-reset - chest itu sebenarnya baik-baik saja, cuma pernah gagal sesaat');
   });
+
+  it('OVERFLOW DARURAT: item harus tetap diantar ke chest UTAMA kalau masih ada ruang - overflow HANYA dipakai kalau chest utama BENAR-BENAR penuh, bukan rumah kedua yang setara - permintaan nyata pemilik: "make the overflow chest is for emergency only when the actual cest is full"', async () => {
+    const primaryChest = { position: { x: -181, y: 74, z: -353 }, items: [{ name: 'iron_ingot', count: 10 }] };
+    const overflowChest = { position: { x: -181, y: 74, z: -344 }, items: [] };
+    const WIDE_HOUSE = { min: { x: -190, y: 70, z: -360 }, max: { x: -179, y: 76, z: -340 } };
+    const adapter = new FakeStorageAdapter({
+      chests: { '-181,74,-353': primaryChest, '-181,74,-344': overflowChest },
+      inventory: { diamond: 4 }
+    });
+    const engine = new StorageManagerEngine({
+      adapter,
+      houseBounds: WIDE_HOUSE,
+      initialAssignments: { diamond: '-181,74,-353' },
+      overflowChests: { '-181,74,-353': '-181,74,-344' }
+    });
+
+    const result = await engine.tick();
+
+    assert.equal(result.action, 'deliver');
+    assert.equal(result.deliveries[0].position.x, -181);
+    assert.equal(result.deliveries[0].position.z, -353, 'chest utama MASIH ada ruang - harus tetap ke sana, BUKAN langsung ke overflow');
+    assert.ok(!overflowChest.items.some((i) => i.name === 'diamond'), 'overflow tidak boleh dipakai kalau chest utama belum benar-benar penuh');
+  });
+
+  it('OVERFLOW DARURAT: begitu chest UTAMA benar-benar penuh, HARUS beralih ke overflow yang sudah didaftarkan secara spesifik untuknya - tanpa menimpa memori sortir permanen (item tetap "milik" chest utama untuk sesi berikutnya)', async () => {
+    const primaryChest = { position: { x: -181, y: 74, z: -353 }, items: [{ name: 'iron_ingot', count: 64 }] };
+    const overflowChest = { position: { x: -181, y: 74, z: -344 }, items: [] };
+    const WIDE_HOUSE = { min: { x: -190, y: 70, z: -360 }, max: { x: -179, y: 76, z: -340 } };
+    const adapter = new FakeStorageAdapter({
+      chests: { '-181,74,-353': primaryChest, '-181,74,-344': overflowChest },
+      inventory: { diamond: 4 }
+    });
+    adapter.depositToChest = async (pos, predicate) => {
+      if (pos.x === -181 && pos.z === -353) throw new Error('destination full');
+      const chest = adapter.chests[`${pos.x},${pos.y},${pos.z}`];
+      let deposited = 0;
+      for (const [name, count] of Array.from(adapter.inventory.entries())) {
+        if (!predicate({ name, count })) continue;
+        if (chest) chest.items.push({ name, count });
+        deposited += count;
+        adapter.inventory.delete(name);
+      }
+      return { deposited };
+    };
+    const engine = new StorageManagerEngine({
+      adapter,
+      houseBounds: WIDE_HOUSE,
+      initialAssignments: { diamond: '-181,74,-353' },
+      overflowChests: { '-181,74,-353': '-181,74,-344' }
+    });
+
+    const first = await engine.tick(); // chest utama penuh - gagal, ditandai penuh
+    assert.equal(first.action, 'deliver_failed');
+
+    const second = await engine.tick(); // tick berikutnya harus beralih ke overflow yang terdaftar
+    assert.equal(second.action, 'deliver');
+    assert.equal(second.deliveries[0].position.z, -344, 'harus beralih ke overflow yang SUDAH didaftarkan untuk chest utama ini');
+    // Memori sortir permanen TETAP menunjuk ke chest utama - overflow cuma solusi darurat kali ini.
+    assert.equal(engine.getChestAssignments().diamond, '-181,74,-353');
+  });
+
+  it('OVERFLOW DARURAT: dua jenis item BERBEDA yang berbagi chest utama sama-sama penuh harus BISA sama-sama numpang di overflow terdaftar yang SAMA - bukan cuma satu jenis pertama yang kebetulan dapat tempat (fallback "chest kosong" generik gagal begitu overflow sudah kemasukan jenis lain - overflowChests eksplisit harus tetap bisa dipakai siapa saja yang terdaftar untuknya)', async () => {
+    const primaryChest = { position: { x: -181, y: 74, z: -353 }, items: [{ name: 'iron_ingot', count: 64 }] };
+    const overflowChest = { position: { x: -181, y: 74, z: -344 }, items: [{ name: 'diamond', count: 4 }] }; // sudah kemasukan diamond duluan
+    const WIDE_HOUSE = { min: { x: -190, y: 70, z: -360 }, max: { x: -179, y: 76, z: -340 } };
+    const adapter = new FakeStorageAdapter({
+      chests: { '-181,74,-353': primaryChest, '-181,74,-344': overflowChest },
+      inventory: { copper_ingot: 5 }
+    });
+    adapter.depositToChest = async (pos, predicate) => {
+      if (pos.x === -181 && pos.z === -353) throw new Error('destination full');
+      const chest = adapter.chests[`${pos.x},${pos.y},${pos.z}`];
+      let deposited = 0;
+      for (const [name, count] of Array.from(adapter.inventory.entries())) {
+        if (!predicate({ name, count })) continue;
+        if (chest) chest.items.push({ name, count });
+        deposited += count;
+        adapter.inventory.delete(name);
+      }
+      return { deposited };
+    };
+    const engine = new StorageManagerEngine({
+      adapter,
+      houseBounds: WIDE_HOUSE,
+      // copper_ingot juga sudah mapan ke chest utama yang SAMA (persis skenario nyata: banyak
+      // jenis ore/ingot berbagi satu chest utama).
+      initialAssignments: { copper_ingot: '-181,74,-353' },
+      overflowChests: { '-181,74,-353': '-181,74,-344' }
+    });
+
+    const first = await engine.tick();
+    assert.equal(first.action, 'deliver_failed');
+
+    const second = await engine.tick();
+    assert.equal(second.action, 'deliver', 'copper_ingot HARUS tetap bisa numpang di overflow yang sama walau sudah ada diamond di sana - overflow eksplisit bukan "chest kosong" generik yang cuma muat satu jenis');
+    assert.equal(second.deliveries[0].position.z, -344);
+  });
 });
