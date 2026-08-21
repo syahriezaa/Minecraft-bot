@@ -254,17 +254,29 @@ class FarmerEngine extends EventEmitter {
 
     let repaired = 0;
     for (const candidate of candidates) {
-      if (candidate.type === 'fill') {
-        if (!this.adapter.hasItem('dirt')) break; // kehabisan dirt di tengah jalan
-        const filled = await this.adapter.placeDirtAt(candidate.position);
-        if (!filled) continue; // mis. lubang lebih dari satu blok dalam, coba lubang lain dulu
-      }
-      if (!this.adapter.hasItem(HOE_NAMES)) break; // kehabisan cangkul di tengah jalan
-      const tilled = await this.adapter.tillFarmland(candidate.position);
-      if (tilled) {
-        repaired++;
-        this.metrics.repaired++;
-        this.emit('repaired', { position: candidate.position, type: candidate.type });
+      // Kandidat SATU-SATU dibungkus try/catch - pathfinder sungguhan (navigateNear di dalam
+      // tillFarmland/placeDirtAt) MELEMPAR "No path to the goal!" kalau posisinya tidak
+      // terjangkau, bukan gagal dengan tenang. Tanpa penjagaan ini SATU kandidat yang kebetulan
+      // sulit dijangkau (lazim untuk lubang di pinggir lahan) menjatuhkan SELURUH tick sebelum
+      // kandidat lain yang sebenarnya terjangkau sempat dicoba - ditemukan dari keluhan nyata
+      // pemilik: "repair worker nya belum spawn" (repair terlihat "tidak pernah jalan" karena
+      // exception ini merembet ke tick() dan tertangkap sebagai error generik, sebelum sempat
+      // mencatat progres apapun).
+      try {
+        if (candidate.type === 'fill') {
+          if (!this.adapter.hasItem('dirt')) break; // kehabisan dirt di tengah jalan
+          const filled = await this.adapter.placeDirtAt(candidate.position);
+          if (!filled) continue; // mis. lubang lebih dari satu blok dalam, coba lubang lain dulu
+        }
+        if (!this.adapter.hasItem(HOE_NAMES)) break; // kehabisan cangkul di tengah jalan
+        const tilled = await this.adapter.tillFarmland(candidate.position);
+        if (tilled) {
+          repaired++;
+          this.metrics.repaired++;
+          this.emit('repaired', { position: candidate.position, type: candidate.type });
+        }
+      } catch (e) {
+        this.emit('repairError', { step: 'repairCandidate', position: candidate.position, error: e.message });
       }
     }
     return repaired > 0 ? { action: 'repair', count: repaired } : null;

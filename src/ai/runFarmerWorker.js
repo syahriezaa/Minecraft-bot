@@ -152,7 +152,10 @@ function startFarmerWorker({ host, port, botName, scanRadius = 32, baseGoal = DE
       const label = type === 'fill' ? 'Isi lubang & cangkul' : 'Cangkul';
       log(`${label} lahan di (${position.x},${position.y},${position.z})`);
     });
-    engine.on('repairError', ({ step, error }) => log(`PERINGATAN: gagal ${step} untuk perbaikan lahan (${error}) - coba lagi tick berikutnya.`));
+    engine.on('repairError', ({ step, position, error }) => {
+      const posLabel = position ? ` di (${position.x},${position.y},${position.z})` : '';
+      log(`PERINGATAN: gagal ${step}${posLabel} untuk perbaikan lahan (${error}) - lewati, coba kandidat/tick lain.`);
+    });
 
     log('Pekerja pertanian mulai bekerja.');
     lastAction = 'WORKING';

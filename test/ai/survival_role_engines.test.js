@@ -111,10 +111,16 @@ class FakeRoleAdapter {
   }
   async tillFarmland(pos) {
     this.actions.push({ type: 'tillFarmland', position: pos });
+    // Meniru mineflayer-pathfinder sungguhan: bot.pathfinder.goto() (dipakai navigateNear di
+    // dalam tillFarmland/placeDirtAt) MELEMPAR "No path to the goal!" kalau posisi target tidak
+    // terjangkau, bukan gagal dengan tenang - dipakai membuktikan SATU kandidat yang tidak
+    // terjangkau tidak boleh menjatuhkan seluruh batch/tick.
+    if (this.unreachablePositions?.has(`${pos.x},${pos.y},${pos.z}`)) throw new Error('No path to the goal!');
     return true;
   }
   async placeDirtAt(pos) {
     this.actions.push({ type: 'placeDirtAt', position: pos });
+    if (this.unreachablePositions?.has(`${pos.x},${pos.y},${pos.z}`)) throw new Error('No path to the goal!');
     return true;
   }
 }
@@ -480,6 +486,28 @@ describe('FarmerEngine', () => {
 
       assert.equal(result.action, 'repair', 'lubang harus diperbaiki duluan walau ada spot kosong lain yang bisa ditanam sekarang');
       assert.ok(!adapter.actions.some((a) => a.type === 'placeSeed'), 'jangan menanam dulu kalau ada perbaikan yang lebih mendesak - spot kosong itu tetap aman untuk tick berikutnya');
+    });
+
+    it('kalau SATU kandidat perbaikan tidak terjangkau (pathfinder gagal, "No path to the goal!" - persis error live nyata), JANGAN jatuhkan seluruh tick - lewati kandidat itu dan tetap perbaiki kandidat lain yang terjangkau, jangan gagal diam-diam tanpa progres sama sekali - ditemukan dari keluhan nyata pemilik: "repair worker nya belum spawn" (repair terlihat "tidak pernah jalan" karena exception ini merembet sampai ke tick() dan tertangkap sebagai error generik, sebelum sempat mencatat progres apapun)', async () => {
+      const adapter = new FakeRoleAdapter({
+        items: { iron_hoe: 1 },
+        blocks: [
+          { name: 'farmland', position: { x: 0, y: 63, z: 0 } },
+          { name: 'dirt', position: { x: 1, y: 63, z: 0 } }, // TIDAK terjangkau
+          { name: 'dirt', position: { x: -1, y: 63, z: 0 } }, // terjangkau
+          { name: 'stone', position: { x: 0, y: 63, z: 1 } },
+          { name: 'stone', position: { x: 0, y: 63, z: -1 } }
+        ]
+      });
+      adapter.unreachablePositions = new Set(['1,63,0']);
+      const engine = new FarmerEngine({ adapter });
+
+      let result;
+      await assert.doesNotReject(async () => { result = await engine.tick(); }, 'satu kandidat yang tidak terjangkau TIDAK BOLEH membuat tick() crash total');
+
+      assert.equal(result.action, 'repair');
+      assert.ok(adapter.actions.some((a) => a.type === 'tillFarmland' && a.position.x === -1), 'kandidat lain yang terjangkau tetap harus diperbaiki, bukan ikut dilewati semua');
+      assert.equal(engine.metrics.repaired, 1, 'cuma yang benar-benar berhasil yang dihitung');
     });
   });
 });
