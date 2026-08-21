@@ -666,6 +666,35 @@ describe('MineflayerRoleAdapter.navigateNear - harus PUNYA BATAS WAKTU, jangan p
   });
 });
 
+describe('MineflayerRoleAdapter.getChestHalfType - baca properti blockstate "type" (left/right/single) chest - satu-satunya cara benar tahu pasangan double-chest SUNGGUHAN, bukan cuma kebetulan bersebelahan', () => {
+  it('harus mengembalikan properti "type" langsung dari block.getProperties()', () => {
+    const bot = {
+      blockAt: () => ({ name: 'chest', getProperties: () => ({ facing: 'east', type: 'right' }) })
+    };
+    const adapter = new MineflayerRoleAdapter(bot);
+
+    assert.equal(adapter.getChestHalfType({ x: -181, y: 71, z: -353 }), 'right');
+  });
+
+  it('harus mengembalikan "single" kalau properti type tidak ada (chest tanpa pasangan)', () => {
+    const bot = {
+      blockAt: () => ({ name: 'chest', getProperties: () => ({ facing: 'east' }) })
+    };
+    const adapter = new MineflayerRoleAdapter(bot);
+
+    assert.equal(adapter.getChestHalfType({ x: -181, y: 71, z: -347 }), 'single');
+  });
+
+  it('harus mengembalikan null kalau bukan blok chest sama sekali (mis. barrel)', () => {
+    const bot = {
+      blockAt: () => ({ name: 'barrel' })
+    };
+    const adapter = new MineflayerRoleAdapter(bot);
+
+    assert.equal(adapter.getChestHalfType({ x: -181, y: 71, z: -351 }), null);
+  });
+});
+
 describe('MineflayerRoleAdapter.findChestPositions / findMatchingChest - juga harus mencocokkan blok "barrel", bukan cuma "chest" - permintaan nyata pemilik: barel di antara chest gudang juga boleh dipakai untuk menyimpan', () => {
   it('findChestPositions harus mencocokkan blok chest MAUPUN barrel, tapi bukan blok lain (mis. furnace)', () => {
     let capturedMatcher;

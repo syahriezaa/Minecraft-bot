@@ -172,6 +172,23 @@ class MineflayerRoleAdapter {
     return this.bot.blockAt(asVec3(pos));
   }
 
+  // Properti blockstate "type" chest ('left'/'right'/'single') - SATU-SATUNYA cara benar untuk
+  // tahu apakah dua blok chest yang bersebelahan SUNGGUHAN pasangan double-chest fisik yang sama,
+  // atau cuma kebetulan berdiri berdampingan tanpa benar-benar tersambung - ditemukan dari bug
+  // live nyata (analisis mendalam pola dunia sungguhan): asumsi lama "dua chest bersebelahan pasti
+  // satu wadah" TERNYATA SALAH - di gudang ini pasangan sungguhan selalu di sepanjang sumbu X
+  // (chest 'right' di x=-181 berpasangan dengan chest 'left' di x=-180 pada z YANG SAMA), padahal
+  // banyak chest 'right' lain juga kebetulan bersebelahan di sepanjang sumbu Z (mis. z=-353 dan
+  // z=-352) TANPA benar-benar tersambung sebagai satu wadah - dua chest SAMA-SAMA 'right' (atau
+  // sama-sama 'left') TIDAK PERNAH benar-benar berpasangan di Minecraft, cuma pasangan left+right
+  // yang sungguhan. Chest tanpa pasangan (single) juga tidak pernah bergabung dengan apapun.
+  getChestHalfType(pos) {
+    const block = this.blockAt(pos);
+    if (!block || block.name !== 'chest') return null;
+    const props = typeof block.getProperties === 'function' ? block.getProperties() : block._properties;
+    return props?.type || 'single';
+  }
+
   findBlocksByNames(blockNames, options = {}) {
     if (this.worldAwareness && typeof this.worldAwareness.findBlocksByNames === 'function') {
       return this.worldAwareness.findBlocksByNames(blockNames, options);

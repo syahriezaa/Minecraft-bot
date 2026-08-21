@@ -105,6 +105,17 @@ class FakeStorageAdapter {
     if (!chest) return null;
     return { name: chest.blockType || 'chest' };
   }
+
+  // "left"/"right"/"single" per posisi chest (default 'single' - tidak bergabung dengan apapun
+  // kecuali tes secara eksplisit set chestHalfType) - persis MineflayerRoleAdapter.getChestHalfType
+  // sungguhan: cuma dua chest dengan tipe left+right (bukan sekadar bersebelahan) yang benar-benar
+  // satu wadah fisik yang sama.
+  getChestHalfType(pos) {
+    const chest = this.chests[`${pos.x},${pos.y},${pos.z}`];
+    if (!chest) return null;
+    if ((chest.blockType || 'chest') !== 'chest') return null;
+    return chest.chestHalfType || 'single';
+  }
 }
 
 describe('StorageManagerEngine', () => {
@@ -470,9 +481,9 @@ describe('StorageManagerEngine', () => {
     assert.deepEqual(snapshots[0].misplaced[0].targetPosition, { x: -185, y: 72, z: -352 });
   });
 
-  it('DOUBLE CHEST: dua blok chest yang bersebelahan (x berbeda 1, y/z sama) adalah SATU wadah fisik yang sama - item di sana TIDAK BOLEH dianggap "salah tempat" hanya karena assignment-nya mencatat koordinat blok SEBELAH (separuh chest yang lain)', async () => {
-    const halfA = { position: { x: -181, y: 72, z: -352 }, items: [{ name: 'iron_ingot', count: 8 }] };
-    const halfB = { position: { x: -180, y: 72, z: -352 }, items: [{ name: 'iron_ingot', count: 8 }] };
+  it('DOUBLE CHEST: dua blok chest bersebelahan yang blockstate-nya BENAR-BENAR pasangan left+right adalah SATU wadah fisik yang sama - item di sana TIDAK BOLEH dianggap "salah tempat" hanya karena assignment-nya mencatat koordinat blok SEBELAH (separuh chest yang lain)', async () => {
+    const halfA = { position: { x: -181, y: 72, z: -352 }, items: [{ name: 'iron_ingot', count: 8 }], chestHalfType: 'right' };
+    const halfB = { position: { x: -180, y: 72, z: -352 }, items: [{ name: 'iron_ingot', count: 8 }], chestHalfType: 'left' };
     const adapter = new FakeStorageAdapter({
       chests: { '-181,72,-352': halfA, '-180,72,-352': halfB }
     });
@@ -486,6 +497,23 @@ describe('StorageManagerEngine', () => {
     const result = await engine.tick();
 
     assert.notEqual(result.action, 'reorganize', 'separuh chest yang lain BUKAN "chest lain" - itu wadah fisik yang SAMA, jangan dipindah-pindah sia-sia');
+  });
+
+  it('DUA CHEST BERSEBELAHAN TAPI BUKAN PASANGAN SUNGGUHAN: dua blok chest yang bersebelahan TAPI blockstate-nya SAMA-SAMA "right" (atau sama-sama "left") BUKAN satu wadah fisik - di Minecraft double chest sungguhan selalu satu left + satu right, dua yang setipe cuma kebetulan berdampingan - ditemukan dari bug live nyata: nether_wart/sugar_cane/glow_berries bolak-balik TANPA HENTI antara dua chest yang dulu (keliru) dianggap satu wadah karena sekadar bersebelahan, padahal keduanya sama-sama chest type="right" (masing-masing punya pasangan SENDIRI di sisi lain yang berbeda) - item di dalamnya harus TETAP dianggap salah tempat kalau assignment menunjuk ke koordinat tetangganya', async () => {
+    const chestA = { position: { x: -181, y: 72, z: -353 }, items: [{ name: 'iron_ingot', count: 8 }], chestHalfType: 'right' };
+    const chestB = { position: { x: -181, y: 72, z: -352 }, items: [], chestHalfType: 'right' }; // bersebelahan (z beda 1) TAPI sama-sama "right" - bukan pasangan sungguhan
+    const adapter = new FakeStorageAdapter({
+      chests: { '-181,72,-353': chestA, '-181,72,-352': chestB }
+    });
+    const HOUSE = { min: { x: -190, y: 70, z: -355 }, max: { x: -179, y: 76, z: -348 } };
+    // Assignment mencatat chestB (z=-352) sebagai rumah iron_ingot yang benar - iron_ingot yang
+    // sekarang ada di chestA (z=-353) HARUS dianggap salah tempat, walau cuma 1 blok bersebelahan,
+    // karena keduanya BUKAN separuh dari wadah fisik yang sama (sama-sama "right").
+    const engine = new StorageManagerEngine({ adapter, houseBounds: HOUSE, initialAssignments: { iron_ingot: '-181,72,-352' } });
+
+    const result = await engine.tick();
+
+    assert.equal(result.action, 'reorganize', 'dua chest type="right" yang cuma kebetulan bersebelahan BUKAN wadah yang sama - iron_ingot di chest yang salah harus tetap dipindahkan, bukan dianggap "sudah di rumah yang sama"');
   });
 
   it('BARREL: barel yang bersebelahan PERSIS 1 blok dengan chest ("barel di antara chest" - permintaan nyata pemilik) TIDAK BOLEH dianggap wadah yang sama seperti double-chest - barel SELALU wadah tunggal, tidak pernah gabung fisik dengan blok lain walau posisinya bersebelahan', async () => {

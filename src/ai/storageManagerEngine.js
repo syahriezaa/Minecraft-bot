@@ -40,21 +40,32 @@ function parseKey(key) {
 // BARREL SELALU wadah tunggal (tidak pernah gabung fisik dengan blok lain di Minecraft, beda dari
 // chest) - tapi barel di gudang ini justru diletakkan PERSIS di antara dua kolom chest (permintaan
 // nyata pemilik: "the barel is in betwen cess"), artinya jarak 1 blok dari barel ke CHEST tetangga
-// SAMA PERSIS dengan jarak antar dua separuh chest yang sungguh berpasangan. Tanpa mengecek jenis
-// blok, penggabungan otomatis di atas akan SALAH mengira barel adalah bagian dari chest sebelahnya
-// - isChestFn (bergantung ke MineflayerRoleAdapter.blockAt) memastikan penggabungan HANYA terjadi
-// kalau KEDUA blok memang sama-sama chest.
-function canonicalKeyFor(pos, allPositions, isChestFn) {
+// SAMA PERSIS dengan jarak antar dua separuh chest yang sungguh berpasangan.
+//
+// PENTING (ditemukan lewat analisis mendalam pola dunia sungguhan, setelah beberapa kali salah
+// diagnosis di sesi ini): dua blok chest yang bersebelahan TIDAK OTOMATIS berarti satu wadah
+// fisik yang sama! Contoh nyata gudang ini: chest di x=-181 SEMUA berblockstate type="right",
+// berpasangan sungguhan dengan chest type="left" di x=-180 pada z YANG SAMA (sumbu X) - TAPI
+// chest di x=-181 pada z yang bersebelahan (mis. z=-353 dan z=-352) SAMA-SAMA "right" dan
+// TIDAK PERNAH benar-benar terhubung, walau sama-sama chest dan tepat bersebelahan. Di Minecraft,
+// double chest SUNGGUHAN selalu satu "left" + satu "right" - dua "right" (atau dua "left") yang
+// bersebelahan cuma kebetulan berdampingan, bukan wadah yang sama. getChestTypeFn (bergantung ke
+// MineflayerRoleAdapter.getChestHalfType) memastikan penggabungan HANYA terjadi kalau blockstate
+// KEDUA blok memang pasangan left+right yang valid - chest "single" (tanpa pasangan) atau barel
+// (getChestTypeFn mengembalikan null) tidak pernah bergabung dengan apapun.
+function canonicalKeyFor(pos, allPositions, getChestTypeFn) {
   const set = new Set(allPositions.map(posKey));
   const candidates = [pos];
-  if (isChestFn(pos)) {
+  const hereType = getChestTypeFn(pos);
+  const isValidPair = (a, b) => (a === 'left' && b === 'right') || (a === 'right' && b === 'left');
+  if (hereType && hereType !== 'single') {
     for (const neighbor of [
       { x: pos.x - 1, y: pos.y, z: pos.z },
       { x: pos.x + 1, y: pos.y, z: pos.z },
       { x: pos.x, y: pos.y, z: pos.z - 1 },
       { x: pos.x, y: pos.y, z: pos.z + 1 }
     ]) {
-      if (set.has(posKey(neighbor)) && isChestFn(neighbor)) candidates.push(neighbor);
+      if (set.has(posKey(neighbor)) && isValidPair(hereType, getChestTypeFn(neighbor))) candidates.push(neighbor);
     }
   }
   candidates.sort((a, b) => a.x - b.x || a.y - b.y || a.z - b.z);
@@ -133,10 +144,17 @@ class StorageManagerEngine extends EventEmitter {
     return Object.fromEntries(this.chestAssignments);
   }
 
-  // true HANYA untuk blok "chest" - dipakai canonicalKeyFor supaya barrel (yang bisa saja tepat
-  // bersebelahan 1 blok dengan chest) tidak pernah ikut dianggap "separuh chest yang sama".
+  // true HANYA untuk blok "chest" - dipakai di tempat yang cuma butuh tahu "ini chest atau
+  // bukan" (bukan penggabungan double-chest, lihat getChestHalfType untuk itu).
   isChestBlock(pos) {
     return this.adapter.blockAt(pos)?.name === 'chest';
+  }
+
+  // "left"/"right"/"single" dari blockstate chest sungguhan, null kalau bukan chest sama sekali -
+  // dipakai canonicalKeyFor untuk penggabungan double-chest yang BENAR (lihat komentar
+  // canonicalKeyFor untuk kenapa sekadar "bersebelahan" tidak cukup).
+  getChestHalfType(pos) {
+    return typeof this.adapter.getChestHalfType === 'function' ? this.adapter.getChestHalfType(pos) : null;
   }
 
   // Dipanggil SETELAH collect/reorganize berhasil mengambil sesuatu - kalau tas sekarang sudah
@@ -389,8 +407,8 @@ class StorageManagerEngine extends EventEmitter {
       // keluhan nyata pemilik ("dia tetap tidak mengambil apapun yang salah dalam mode collect"),
       // dikonfirmasi lewat pemantauan live: rotten_flesh terlihat jelas di log isi chest tapi tidak
       // pernah ditandai salah tempat.
-      const isChest = (p) => this.isChestBlock(p);
-      const hereKey = canonicalKeyFor(nextToInspect, insideChests, isChest);
+      const getType = (p) => this.getChestHalfType(p);
+      const hereKey = canonicalKeyFor(nextToInspect, insideChests, getType);
       const hasUsableHome = (assignedKey) => {
         if (!this.fullChestPositions.has(assignedKey) && !this.brokenPositions.has(assignedKey)) return true;
         const overflowKey = this.options.overflowChests?.[assignedKey];
@@ -400,7 +418,7 @@ class StorageManagerEngine extends EventEmitter {
         const assignedKey = this.chestAssignments.get(it.name);
         if (!assignedKey) return false;
         if (!hasUsableHome(assignedKey)) return false;
-        return canonicalKeyFor(parseKey(assignedKey), insideChests, isChest) !== hereKey;
+        return canonicalKeyFor(parseKey(assignedKey), insideChests, getType) !== hereKey;
       });
 
       // Emit SELURUH isi chest ini plus rencana pemindahan (item salah tempat -> tujuannya) -
