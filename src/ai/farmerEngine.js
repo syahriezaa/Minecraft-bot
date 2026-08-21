@@ -74,6 +74,12 @@ class FarmerEngine extends EventEmitter {
       // penuh tanpa batas.
       seedReserve: 32,
       autoEatFoodThreshold: 14,
+      // Mundur SEGERA ke retreatPosition kalau health di bawah ambang ini, sebelum panen/tanam/
+      // perbaikan apapun - ditemukan dari bug live nyata: "farmernya tenggelam terus", health
+      // sempat 2.8/20 sambil FarmerEngine cuma cek food, sama sekali tidak cek health mentah, jadi
+      // tidak pernah menyelamatkan diri walau nyaris mati. Pola sama seperti retreat MobFarmEngine.
+      retreatHealth: 6,
+      retreatPosition: null,
       // Perbaiki lahan farming yang rusak (dirt/grass yang belum dicangkul, atau lubang) di
       // PINGGIRAN farmland yang sudah ada - permintaan nyata pemilik: "farming bot harus bisa
       // memperbaiki tempat farming jadi bawa dirt dan hoe dari gudang". Cangkul & dirt diambil
@@ -369,6 +375,21 @@ class FarmerEngine extends EventEmitter {
   }
 
   async tick() {
+    if (this.adapter.getHealth() <= this.options.retreatHealth) {
+      if (this.options.retreatPosition) {
+        await this.adapter.navigateNear(this.options.retreatPosition, 1);
+        this.metrics.retreats = (this.metrics.retreats || 0) + 1;
+        return { action: 'retreat' };
+      }
+      const foodBefore = this.adapter.getFood();
+      const ate = await this.adapter.eatBestFood();
+      if (ate) {
+        this.metrics.eaten++;
+        this.emit('ate', { foodBefore, foodAfter: this.adapter.getFood() });
+        return { action: 'eat' };
+      }
+    }
+
     if (this.adapter.getFood() <= this.options.autoEatFoodThreshold) {
       const foodBefore = this.adapter.getFood();
       const ate = await this.adapter.eatBestFood();

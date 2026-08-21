@@ -136,6 +136,40 @@ class FakeRoleAdapter {
 }
 
 describe('FarmerEngine', () => {
+  it('kalau health sudah kritis (di bawah retreatHealth), harus MUNDUR ke retreatPosition SEGERA - jangan lanjut panen/tanam/perbaikan dulu, bisa langsung mati - ditemukan dari bug live nyata: "farmernya tenggelam terus" - health sempat 2.8/20 sambil FarmerEngine TIDAK PUNYA sama sekali mekanisme cek health, cuma cek food, jadi tidak pernah menyelamatkan diri walau nyaris mati', async () => {
+    const adapter = new FakeRoleAdapter({
+      health: 3,
+      blocks: [{ name: 'wheat', properties: { age: 7 }, position: { x: 1, y: 64, z: 0 } }] // ada crop matang, TAPI harus tetap mundur duluan
+    });
+    const engine = new FarmerEngine({ adapter, retreatHealth: 6, retreatPosition: { x: -185, y: 71, z: -352 } });
+
+    const result = await engine.tick();
+
+    assert.equal(result.action, 'retreat');
+    assert.ok(!adapter.actions.some((a) => a.type === 'dig'), 'jangan panen dulu kalau health kritis, walau ada crop matang di depan mata');
+  });
+
+  it('health kritis TAPI tidak ada retreatPosition diset - harus tetap coba makan sebagai upaya terakhir (sama seperti MobFarmEngine), bukan diam saja', async () => {
+    const adapter = new FakeRoleAdapter({ health: 3, items: { carrot: 5 } });
+    const engine = new FarmerEngine({ adapter, retreatHealth: 6 }); // retreatPosition SENGAJA tidak diset
+
+    const result = await engine.tick();
+
+    assert.equal(result.action, 'eat');
+  });
+
+  it('health normal - urutan kerja biasa (panen dulu) tetap berlaku, keselamatan tidak boleh menghalangi kerja normal kalau memang tidak darurat', async () => {
+    const adapter = new FakeRoleAdapter({
+      health: 20,
+      blocks: [{ name: 'wheat', properties: { age: 7 }, position: { x: 1, y: 64, z: 0 } }]
+    });
+    const engine = new FarmerEngine({ adapter, retreatPosition: { x: -185, y: 71, z: -352 } });
+
+    const result = await engine.tick();
+
+    assert.equal(result.action, 'harvest');
+  });
+
   it('makan harus emit event "ate" berisi food SEBELUM dan SESUDAH - permintaan nyata pemilik: "kenapa farming workernya tidak bisa menaruh barangnya di peti" - dulu aksi makan sama sekali tidak tercatat/terlihat (tidak ada event, tidak ada log), jadi tidak mungkin membuktikan APAKAH bot benar-benar terjebak bolak-balik makan terus (hunger tidak pernah naik cukup tinggi, sehingga tidak pernah sempat panen/tanam/setor) atau cuma kebetulan makan sekali lalu lanjut kerja normal', async () => {
     const adapter = new FakeRoleAdapter({ food: 5, items: { carrot: 5 } });
     const engine = new FarmerEngine({ adapter });

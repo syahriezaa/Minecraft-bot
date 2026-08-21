@@ -152,6 +152,10 @@ function startFarmerWorker({ host, port, botName, scanRadius = 32, baseGoal = DE
       autoMatchStorage: true,
       sharedChestAssignments,
       overflowChests: OVERFLOW_CHESTS,
+      // Mundur ke base begitu health kritis - ditemukan dari bug live nyata: "farmernya tenggelam
+      // terus", health sempat 2.8/20 sambil bot terus lanjut panen/tanam/perbaikan tanpa henti
+      // (FarmerEngine dulu cuma cek food, sama sekali tidak cek health mentah).
+      retreatPosition: baseGoal,
       harvestBatchSize: Number(process.env.FARM_HARVEST_BATCH) || 16,
       plantBatchSize: Number(process.env.FARM_PLANT_BATCH) || 16
     });
@@ -194,6 +198,7 @@ function startFarmerWorker({ host, port, botName, scanRadius = 32, baseGoal = DE
       try {
         const farmResult = await engine.tick();
         if (farmResult.action === 'deposit') log(`Simpan ${farmResult.count} item ke gudang.`);
+        if (farmResult.action === 'retreat') log(`PERINGATAN: health kritis - mundur ke base.`);
         if (farmResult.action !== 'idle') lastAction = farmResult.action.toUpperCase();
       } catch (e) {
         log(`ERROR di tick pertanian (non-fatal, lanjut tick berikutnya): ${e.message}`);
