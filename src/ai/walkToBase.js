@@ -12,7 +12,21 @@
  * Aturan Tim: Semua komentar, log, dan pesan error ditulis dalam Bahasa Indonesia.
  */
 
-const { goals: { GoalNear } } = require('mineflayer-pathfinder');
+const { goals: { GoalNear, GoalNearXZ } } = require('mineflayer-pathfinder');
+
+// Jarak maksimal per lompatan sebelum perjalanan dipecah bertahap - ditemukan dari bug live
+// nyata: ExplorerWorker (bot BARU, belum punya bed tersimpan) diam TOTAL tidak bergerak sama
+// sekali selama 4+ menit mencoba jalan 387 blok sekaligus dari world spawn ke base. Pathfinder
+// tidak bisa menghitung rute lewat chunk yang belum termuat, dan chunk BARU termuat kalau bot
+// mendekat - keduanya saling menunggu selamanya (deadlock). Bot yang SUDAH punya bed tersimpan
+// dekat base (Farmer/StorageWorker setelah sesi pertama) tidak pernah kena ini karena jaraknya
+// sudah pendek dari awal.
+const STAGE_DISTANCE = 64;
+
+function distanceXZ(a, b) {
+  const dx = a.x - b.x, dz = a.z - b.z;
+  return Math.sqrt(dx * dx + dz * dz);
+}
 
 function buildMovements(bot) {
   // mineflayer-pathfinder@2.x baca registry blok LANGSUNG dari bot.registry (diisi otomatis oleh
@@ -55,6 +69,31 @@ async function walkToBase({ bot, goal, range = 2, settleMs = 0, log = () => {} }
   }
   bot.pathfinder.setMovements(buildMovements(bot));
   bot.pathfinder.thinkTimeout = 30000; // server lambat butuh waktu berpikir lebih lama dari default 5 detik
+
+  // Perjalanan JAUH dipecah jadi beberapa lompatan bertahap MENUJU tujuan dulu (lihat komentar
+  // STAGE_DISTANCE) - pakai GoalNearXZ (abaikan Y persis, biar pathfinder cari ketinggian tanah
+  // sendiri di titik antara, yang belum tentu sama dengan Y tujuan akhir). Kalau posisi bot
+  // sekarang tidak diketahui (mis. caller lama yang belum menyediakan bot.entity.position), tidak
+  // mungkin menghitung lompatan - langsung ke goto() akhir seperti perilaku lama.
+  const currentPos = bot.entity?.position;
+  if (currentPos && typeof currentPos.x === 'number') {
+    const totalDist = distanceXZ(currentPos, goal);
+    if (totalDist > STAGE_DISTANCE) {
+      const stageCount = Math.ceil(totalDist / STAGE_DISTANCE);
+      for (let i = 1; i < stageCount; i++) {
+        const t = i / stageCount;
+        const hopX = currentPos.x + (goal.x - currentPos.x) * t;
+        const hopZ = currentPos.z + (goal.z - currentPos.z) * t;
+        log(`Menuju titik antara (${hopX.toFixed(0)}, ~, ${hopZ.toFixed(0)}) - tahap ${i}/${stageCount - 1} sebelum ke base...`);
+        try {
+          await bot.pathfinder.goto(new GoalNearXZ(hopX, hopZ, 8));
+        } catch (e) {
+          log(`Tahap ${i} gagal (${e.message}) - lanjut coba tahap berikutnya.`);
+        }
+      }
+    }
+  }
+
   log(`Berjalan ke base (${goal.x}, ${goal.y}, ${goal.z})...`);
   try {
     await bot.pathfinder.goto(new GoalNear(goal.x, goal.y, goal.z, range));

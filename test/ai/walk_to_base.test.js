@@ -2,7 +2,7 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert');
 const { walkToBase } = require('../../src/ai/walkToBase');
 
-function fakeBot({ gotoImpl } = {}) {
+function fakeBot({ gotoImpl, position } = {}) {
   const setMovementsCalls = [];
   const gotoCalls = [];
   return {
@@ -10,6 +10,7 @@ function fakeBot({ gotoImpl } = {}) {
     // mineflayer isi bot.registry otomatis saat spawn - Movements butuh registry NYATA (bukan mock),
     // jadi pakai minecraft-data langsung, sama seperti yang sungguhan dipakai mineflayer di balik layar.
     registry: require('minecraft-data')('1.21.1'),
+    entity: position ? { position } : undefined,
     pathfinder: {
       setMovements: (m) => setMovementsCalls.push(m),
       goto: async (goal) => {
@@ -75,5 +76,55 @@ describe('walkToBase - navigasi spawn->base memakai mineflayer-pathfinder langsu
     await walkToBase({ bot, goal: { x: 0, y: 64, z: 0 } });
     const elapsed = Date.now() - start;
     assert.ok(elapsed < 50, `tidak seharusnya menunggu tanpa settleMs eksplisit, malah ${elapsed}ms`);
+  });
+
+  it('perjalanan JAUH (bot baru, belum punya bed tersimpan) harus dipecah jadi beberapa lompatan bertahap MENUJU tujuan sebelum goto() akhir - ditemukan dari bug live nyata: ExplorerWorker diam TOTAL 4+ menit mencoba jalan 387 blok sekaligus dari world spawn - pathfinder tidak bisa hitung rute lewat chunk yang belum termuat, dan chunk baru termuat kalau bot mendekat, jadi saling menunggu selamanya (deadlock)', async () => {
+    const bot = fakeBot({ position: { x: 0, y: 64, z: 0 } });
+    await walkToBase({ bot, goal: { x: 300, y: 71, z: 0 }, range: 2 });
+
+    assert.ok(bot._gotoCalls.length > 1, 'perjalanan 300 blok harus dipecah jadi beberapa lompatan, bukan satu goto raksasa');
+    // Lompatan ANTARA (semua kecuali yang terakhir) harus GoalNearXZ - abaikan Y persis, biar
+    // pathfinder cari ketinggian tanah sendiri (Y tujuan akhir belum tentu sama dengan Y di
+    // tengah perjalanan).
+    const intermediateGoals = bot._gotoCalls.slice(0, -1);
+    for (const g of intermediateGoals) {
+      assert.equal(g.constructor.name, 'GoalNearXZ', 'lompatan antara harus GoalNearXZ, bukan GoalNear (Y di tengah jalan belum tentu sama dengan Y tujuan akhir)');
+    }
+    // Lompatan TERAKHIR harus tetap GoalNear presisi persis di koordinat tujuan akhir - perilaku
+    // lama tidak boleh berubah untuk kedatangan akhirnya.
+    const finalGoal = bot._gotoCalls[bot._gotoCalls.length - 1];
+    assert.equal(finalGoal.constructor.name, 'GoalNear');
+    assert.equal(finalGoal.x, 300);
+    assert.equal(finalGoal.z, 0);
+  });
+
+  it('perjalanan DEKAT (di bawah ambang lompatan bertahap) TIDAK BOLEH dipecah - langsung satu goto() seperti biasa, sama seperti bot yang sudah punya bed tersimpan dekat base', async () => {
+    const bot = fakeBot({ position: { x: 0, y: 64, z: 0 } });
+    await walkToBase({ bot, goal: { x: 10, y: 64, z: 10 }, range: 2 });
+
+    assert.equal(bot._gotoCalls.length, 1, 'perjalanan dekat tidak perlu lompatan bertahap sama sekali');
+  });
+
+  it('kalau SATU lompatan antara gagal, tetap harus lanjut ke lompatan berikutnya (bukan menyerah total) - jangan biarkan satu rintangan di tengah jalan membatalkan seluruh perjalanan', async () => {
+    let callCount = 0;
+    const bot = fakeBot({
+      position: { x: 0, y: 64, z: 0 },
+      gotoImpl: () => {
+        callCount++;
+        if (callCount === 1) throw new Error('No path to the goal'); // lompatan pertama gagal
+      }
+    });
+
+    const result = await walkToBase({ bot, goal: { x: 300, y: 71, z: 0 }, range: 2 });
+
+    assert.ok(bot._gotoCalls.length > 1, 'harus tetap mencoba lompatan-lompatan berikutnya walau satu gagal');
+    assert.equal(result.success, true, 'kedatangan akhir tetap harus dilaporkan sukses kalau goto() TERAKHIR (tujuan sesungguhnya) berhasil');
+  });
+
+  it('bot yang belum punya bot.entity.position sama sekali (mis. tes lama/fake sederhana) harus JATUH KE PERILAKU LAMA (satu goto langsung) - jangan sampai fitur baru ini membuat kode yang belum tahu posisi bot menjadi crash', async () => {
+    const bot = fakeBot(); // TANPA position sama sekali
+    await walkToBase({ bot, goal: { x: 300, y: 71, z: 0 }, range: 2 });
+
+    assert.equal(bot._gotoCalls.length, 1, 'tanpa tahu posisi sekarang, tidak mungkin menghitung lompatan bertahap - langsung satu goto seperti perilaku lama');
   });
 });
