@@ -289,6 +289,17 @@ class FarmerEngine extends EventEmitter {
       return { action: 'harvest', count: mature.length };
     }
 
+    // Perbaiki lubang/dirt belum dicangkul SEBELUM menanam - permintaan nyata pemilik: "it full
+    // of holes why not repairing". Dulu attemptRepair() cuma dipanggil kalau findPlantingSpots()
+    // BENAR-BENAR kosong (nol spot sama sekali) - di lahan luas selalu ada SATU saja spot kosong
+    // di tempat lain, jadi lubang di tempat lain tidak PERNAH kebagian giliran, walau bertahun-
+    // tahun (kelaparan giliran, sama persis pola bug lama di StorageManagerEngine: koleksi chest
+    // luar yang tidak berkesudahan membuat rapi-rapi gudang tidak pernah kebagian giliran). Aman
+    // didahulukan karena lubang yang sudah diperbaiki TETAP jadi spot kosong yang bisa ditanam -
+    // spot lain yang tertunda cuma mundur satu tick (2 detik), tidak pernah benar-benar hilang.
+    const repairResult = await this.attemptRepair();
+    if (repairResult) return repairResult;
+
     const spots = this.findPlantingSpots().slice(0, this.options.plantBatchSize);
     if (spots.length > 0) {
       let plantedCount = 0;
@@ -311,13 +322,6 @@ class FarmerEngine extends EventEmitter {
       }
       if (plantedCount > 0) return { action: 'plant', seed: lastSeed, count: plantedCount };
     }
-
-    // Lahan sudah "penuh" (tidak ada lagi farmland kosong yang bisa ditanam saat ini) - coba
-    // perbaiki/perluas dulu sebelum ke gudang, supaya siklus berikutnya punya lebih banyak petak
-    // untuk ditanami - permintaan nyata pemilik: "farming bot harus bisa memperbaiki tempat
-    // farming...untuk sop farming nya panen - tanam sampai full lahan - ke storage room".
-    const repairResult = await this.attemptRepair();
-    if (repairResult) return repairResult;
 
     // Gudang nyata pemilik sudah terorganisir per jenis item (mis. wheat dan carrot masing-masing
     // punya chest sendiri) - autoMatchStorage cari chest yang SUDAH berisi jenis item yang sama untuk

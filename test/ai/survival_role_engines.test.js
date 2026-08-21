@@ -452,6 +452,35 @@ describe('FarmerEngine', () => {
       await assert.doesNotReject(() => engine.tick(), 'tick() TIDAK BOLEH melempar/crash walau inventaris penuh saat repair butuh mengambil sesuatu');
       assert.ok(!adapter.actions.some((a) => a.type === 'withdrawFromChest'), 'tidak boleh bahkan MENCOBA mengambil apapun kalau jelas-jelas tidak ada tempat untuk menaruhnya');
     });
+
+    it('perbaikan TIDAK BOLEH kelaparan giliran selama masih ada spot kosong lain yang bisa ditanam - ditemukan dari keluhan nyata pemilik: "it full of holes why not repairing" - dulu attemptRepair() cuma dipanggil kalau findPlantingSpots() BENAR-BENAR kosong (nol sama sekali), jadi selama lahan lain masih ada satu saja spot kosong untuk ditanam (lazim di lahan luas), lubang di tempat lain tidak PERNAH diperbaiki, walau bertahun-tahun - lubang harus diperbaiki DULUAN, spot kosong lain tetap aman ditanam tick berikutnya (cuma tertunda, tidak hilang)', async () => {
+      const adapter = new FakeRoleAdapter({
+        items: { iron_hoe: 1, wheat_seeds: 5 },
+        blocks: [
+          { name: 'farmland', position: { x: 0, y: 63, z: 0 } },
+          { name: 'dirt', position: { x: 1, y: 63, z: 0 } },
+          { name: 'stone', position: { x: -1, y: 63, z: 0 } },
+          { name: 'stone', position: { x: 0, y: 63, z: 1 } },
+          { name: 'stone', position: { x: 0, y: 63, z: -1 } },
+          // Spot kosong yang SEPENUHNYA terpisah - membuktikan ini bukan sekadar kebetulan lokasi
+          // yang sama, tapi benar-benar spot lain yang tersedia untuk ditanam SEKARANG JUGA. Sisi-
+          // sisinya juga dipagari stone (persis seperti farmland utama di atas) supaya patch INI
+          // sendiri tidak ikut menyumbang kandidat perbaikan palsu - fokus tes ini murni ke
+          // prioritas repair-vs-plant, bukan ke jumlah kandidat.
+          { name: 'farmland', position: { x: 0, y: 63, z: 5 } },
+          { name: 'stone', position: { x: 1, y: 63, z: 5 } },
+          { name: 'stone', position: { x: -1, y: 63, z: 5 } },
+          { name: 'stone', position: { x: 0, y: 63, z: 6 } },
+          { name: 'stone', position: { x: 0, y: 63, z: 4 } }
+        ]
+      });
+      const engine = new FarmerEngine({ adapter });
+
+      const result = await engine.tick();
+
+      assert.equal(result.action, 'repair', 'lubang harus diperbaiki duluan walau ada spot kosong lain yang bisa ditanam sekarang');
+      assert.ok(!adapter.actions.some((a) => a.type === 'placeSeed'), 'jangan menanam dulu kalau ada perbaikan yang lebih mendesak - spot kosong itu tetap aman untuk tick berikutnya');
+    });
   });
 });
 
