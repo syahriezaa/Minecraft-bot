@@ -340,12 +340,21 @@ describe('StorageManagerEngine', () => {
     assert.equal(result.items[0].count, 8);
     assert.ok(!wrongChest.items.some((i) => i.name === 'iron_ingot'), 'iron_ingot harus SUDAH DIAMBIL dari chest yang salah');
 
-    // Tick berikutnya: item yang baru diambil sudah di tangan, harus diantar ke chest yang BENAR
-    // lewat jalur deliver biasa (memakai assignment yang sama).
+    // Mode COLLECT lanjut memeriksa chest lain dulu - tas belum penuh, masih ada yang bisa
+    // dicek - baru SETELAH semua habis diperiksa, beralih ke mode deposit dan mengantar item
+    // yang sudah dipegang lewat jalur deliver biasa (memakai assignment yang sama). wrongChest
+    // sendiri diperiksa ULANG dulu (bukan langsung ditandai bersih dari hasil reorganize) untuk
+    // memastikan benar-benar tidak ada stack lain yang salah tempat.
     const second = await engine.tick();
-    assert.equal(second.action, 'deliver');
-    assert.equal(second.deliveries[0].position.x, -185);
-    assert.equal(second.deliveries[0].count, 8);
+    assert.equal(second.action, 'inspect', 'masih mode collect - periksa ulang wrongChest dulu untuk pastikan benar-benar bersih');
+
+    const third = await engine.tick();
+    assert.equal(third.action, 'inspect', 'masih mode collect - periksa oreChest juga sebelum menaruh');
+
+    const fourth = await engine.tick();
+    assert.equal(fourth.action, 'deliver');
+    assert.equal(fourth.deliveries[0].position.x, -185);
+    assert.equal(fourth.deliveries[0].count, 8);
     assert.ok(oreChest.items.some((i) => i.name === 'iron_ingot' && i.count === 8), 'iron_ingot harus SUDAH SAMPAI di chest yang benar');
   });
 
@@ -772,5 +781,98 @@ describe('StorageManagerEngine', () => {
     const second = await engine.tick();
     assert.equal(second.action, 'deliver', 'copper_ingot HARUS tetap bisa numpang di overflow yang sama walau sudah ada diamond di sana - overflow eksplisit bukan "chest kosong" generik yang cuma muat satu jenis');
     assert.equal(second.deliveries[0].position.z, -344);
+  });
+
+  it('MODE: engine harus mulai di mode "collect" secara default', () => {
+    const adapter = new FakeStorageAdapter({});
+    const engine = new StorageManagerEngine({ adapter, houseBounds: HOUSE_BOUNDS });
+
+    assert.equal(engine.mode, 'collect');
+  });
+
+  it('MODE COLLECT: harus TERUS mengumpulkan (bukan langsung menaruh satu-satu) selama masih ada barang salah tempat yang bisa diambil - permintaan nyata pemilik: "ada mode mengambil ada mode menaruh...mengambil semua item yang tidak pada tempat nya hingga tas nya penuh"', async () => {
+    const outside1 = { position: { x: -200, y: 64, z: -360 }, items: [{ name: 'oak_log', count: 5 }] };
+    const outside2 = { position: { x: -201, y: 64, z: -360 }, items: [{ name: 'iron_ingot', count: 3 }] };
+    const cleanInsideChest = { position: { x: -185, y: 72, z: -352 }, items: [] };
+    const adapter = new FakeStorageAdapter({
+      chests: { '-200,64,-360': outside1, '-201,64,-360': outside2, '-185,72,-352': cleanInsideChest }
+    });
+    const engine = new StorageManagerEngine({ adapter, houseBounds: HOUSE_BOUNDS });
+
+    const first = await engine.tick();
+    assert.equal(first.action, 'collect');
+    assert.equal(engine.mode, 'collect', 'setelah kumpulkan SATU chest luar, masih ada chest luar lain - harus tetap mode collect, bukan langsung menaruh');
+
+    const second = await engine.tick();
+    assert.equal(second.action, 'collect');
+    assert.equal(engine.mode, 'collect', 'chest luar KEDUA baru saja dikumpulkan - masih ada chest dalam yang belum diperiksa, tetap mode collect');
+  });
+
+  it('MODE COLLECT: begitu SEMUA chest luar sudah dikumpulkan dan SEMUA chest dalam sudah diperiksa (tidak ada lagi yang bisa diambil), harus beralih ke mode "deposit" - walau tas belum penuh', async () => {
+    const outside1 = { position: { x: -200, y: 64, z: -360 }, items: [{ name: 'oak_log', count: 5 }] };
+    const cleanInsideChest = { position: { x: -185, y: 72, z: -352 }, items: [] };
+    const adapter = new FakeStorageAdapter({
+      chests: { '-200,64,-360': outside1, '-185,72,-352': cleanInsideChest }
+    });
+    const engine = new StorageManagerEngine({ adapter, houseBounds: HOUSE_BOUNDS });
+
+    await engine.tick(); // kumpulkan outside1
+    await engine.tick(); // periksa cleanInsideChest (bersih, tidak ada yang salah tempat)
+    await engine.tick(); // outside & inside SAMA-SAMA sudah habis - baru di sini terdeteksi
+
+    assert.equal(engine.mode, 'deposit', 'tidak ada lagi yang bisa diambil (chest luar & dalam habis) - harus beralih ke mode menaruh walau tas cuma bawa sedikit');
+  });
+
+  it('MODE COLLECT: begitu tas mencapai maxCarrySlots, HARUS berhenti mengumpulkan lebih lanjut dan beralih ke mode "deposit" - walau masih ada barang lain yang bisa diambil', async () => {
+    const outside1 = { position: { x: -200, y: 64, z: -360 }, items: [{ name: 'oak_log', count: 5 }] };
+    const outside2 = { position: { x: -201, y: 64, z: -360 }, items: [{ name: 'iron_ingot', count: 3 }] };
+    const insideChest = { position: { x: -185, y: 72, z: -352 }, items: [] };
+    const adapter = new FakeStorageAdapter({
+      chests: { '-200,64,-360': outside1, '-201,64,-360': outside2, '-185,72,-352': insideChest }
+    });
+    const engine = new StorageManagerEngine({ adapter, houseBounds: HOUSE_BOUNDS, maxCarrySlots: 1 });
+
+    const first = await engine.tick();
+    assert.equal(first.action, 'collect');
+    assert.equal(engine.mode, 'deposit', 'tas sudah mencapai batas (maxCarrySlots:1) setelah SATU kali ambil - harus langsung beralih ke mode menaruh, JANGAN lanjut ambil chest luar kedua');
+  });
+
+  it('MODE DEPOSIT: harus TERUS menaruh (bukan kembali mengumpulkan di tengah jalan) sampai tas BENAR-BENAR kosong - baru setelah itu kembali ke mode "collect"', async () => {
+    const chestA = { position: { x: -185, y: 72, z: -352 }, items: [] };
+    const chestB = { position: { x: -186, y: 72, z: -352 }, items: [] };
+    const adapter = new FakeStorageAdapter({
+      chests: { '-185,72,-352': chestA, '-186,72,-352': chestB },
+      inventory: { oak_log: 5, iron_ingot: 3 }
+    });
+    const engine = new StorageManagerEngine({
+      adapter,
+      houseBounds: HOUSE_BOUNDS,
+      initialAssignments: { oak_log: '-185,72,-352', iron_ingot: '-186,72,-352' }
+    });
+    engine.mode = 'deposit'; // simulasikan baru saja selesai mengumpulkan penuh
+
+    const first = await engine.tick();
+    assert.equal(first.action, 'deliver');
+    assert.equal(engine.mode, 'deposit', 'tas MASIH belum kosong (deliver hanya proses per jenis item, tapi keduanya diantar sekaligus tick ini - lihat tes lain untuk kasus tas benar-benar kosong)');
+  });
+
+  it('MODE DEPOSIT: begitu tas BENAR-BENAR kosong, HARUS kembali ke mode "collect"', async () => {
+    const chestA = { position: { x: -185, y: 72, z: -352 }, items: [] };
+    const adapter = new FakeStorageAdapter({
+      chests: { '-185,72,-352': chestA },
+      inventory: { oak_log: 5 }
+    });
+    const engine = new StorageManagerEngine({
+      adapter,
+      houseBounds: HOUSE_BOUNDS,
+      initialAssignments: { oak_log: '-185,72,-352' }
+    });
+    engine.mode = 'deposit';
+
+    await engine.tick(); // antar oak_log - tas jadi kosong
+    assert.equal(adapter.getInventoryItems().length, 0);
+
+    await engine.tick(); // tick berikutnya: tas sudah kosong di awal tick - harus deteksi & beralih
+    assert.equal(engine.mode, 'collect', 'tas sudah benar-benar kosong - harus kembali ke mode mengumpulkan');
   });
 });

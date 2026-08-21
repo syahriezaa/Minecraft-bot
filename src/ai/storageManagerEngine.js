@@ -98,6 +98,18 @@ class StorageManagerEngine extends EventEmitter {
     // keluhan nyata pemilik: kuartermaster "does not have any memory about storage chest" dan
     // "did not short the item well" (barang tercampur karena semua jenis ditumpuk ke satu chest).
     this.chestAssignments = new Map(Object.entries(options.initialAssignments || {}));
+    // Mode eksplisit "collect" (ambil semua yang belum pada tempatnya - dari luar rumah maupun
+    // yang salah tempat di dalam) vs "deposit" (taruh semua yang di tangan ke tempatnya) -
+    // permintaan nyata pemilik: algoritma konsisten, bukan bolak-balik ambil-satu-taruh-satu tiap
+    // tick. Tetap di mode collect sampai tas mencapai maxCarrySlots ATAU tidak ada lagi yang bisa
+    // diambil; tetap di mode deposit sampai tas BENAR-BENAR kosong.
+    //
+    // Kalau tas SUDAH membawa sesuatu sejak awal (mis. worker baru restart dan masih memegang
+    // barang dari sesi sebelumnya), mulai LANGSUNG di mode deposit - selesaikan dulu yang sudah
+    // dipegang sebelum keluar mengumpulkan lagi, bukan malah dibiarkan menganggur di tangan
+    // sampai kebetulan tas penuh/putaran collect habis.
+    this.mode = this.adapter.getInventoryItems().length > 0 ? 'deposit' : 'collect';
+    if (this.options.maxCarrySlots === undefined) this.options.maxCarrySlots = 30;
   }
 
   getChestAssignments() {
@@ -108,6 +120,18 @@ class StorageManagerEngine extends EventEmitter {
   // bersebelahan 1 blok dengan chest) tidak pernah ikut dianggap "separuh chest yang sama".
   isChestBlock(pos) {
     return this.adapter.blockAt(pos)?.name === 'chest';
+  }
+
+  // Dipanggil SETELAH collect/reorganize berhasil mengambil sesuatu - kalau tas sekarang sudah
+  // mencapai maxCarrySlots, langsung beralih ke mode deposit untuk tick BERIKUTNYA (permintaan
+  // nyata pemilik: berhenti mengumpulkan begitu tas penuh, jangan terus ambil sampai benar-benar
+  // meluap).
+  switchToDepositIfCarryFull() {
+    if (this.mode !== 'collect') return;
+    const carriedNow = this.adapter.getInventoryItems();
+    if (carriedNow.length >= this.options.maxCarrySlots) {
+      this.mode = 'deposit';
+    }
   }
 
   // Tentukan chest gudang untuk SATU jenis item: (1) ikuti assignment yang sudah diingat kalau
@@ -221,51 +245,77 @@ class StorageManagerEngine extends EventEmitter {
       .filter((pos) => isInsideArea(pos, this.options.houseBounds));
   }
 
+  // Antar TIAP JENIS item di tangan ke chest MASING-MASING yang cocok - bukan tumpuk semua jenis
+  // ke satu chest berdasarkan jenis item pertama saja (bug nyata yang dilaporkan pemilik: barang
+  // tercampur, "did not short the item well"). Dipakai MODE DEPOSIT.
+  async runDeliverPhase(carried) {
+    const insideChests = this.getInsideChestPositions();
+    const distinctNames = [...new Set(carried.map((item) => item.name))];
+    const deliveries = [];
+    let totalDelivered = 0;
+    let attemptedAny = false;
+    for (const name of distinctNames) {
+      const target = await this.resolveChestForItem(insideChests, name);
+      if (!target) continue;
+      attemptedAny = true;
+      await this.adapter.navigateNear(westOf(target), 1);
+      try {
+        const result = await this.adapter.depositToChest(target, (item) => item.name === name);
+        totalDelivered += result.deposited;
+        deliveries.push({ position: target, name, count: result.deposited });
+        this.emit('delivered', { position: target, count: result.deposited, name });
+      } catch (e) {
+        // Chest penuh (atau gagal lain) - ingat chest ini supaya tick BERIKUTNYA memilih chest
+        // gudang LAIN untuk jenis ini, bukan mengulang chest yang sama tanpa kemajuan selamanya.
+        this.fullChestPositions.add(posKey(target));
+        this.emit('deliverFailed', { position: target, error: e.message, name });
+      }
+    }
+
+    if (deliveries.length > 0) {
+      this.metrics.delivered += totalDelivered;
+      return { action: 'deliver', count: totalDelivered, deliveries };
+    }
+    if (attemptedAny) {
+      return { action: 'deliver_failed', reason: 'no_delivery_succeeded' };
+    }
+    // TIDAK ADA satupun item yang punya target sama sekali tick ini (semua rumahnya penuh, tanpa
+    // alternatif aman) - caller (tick()) memutuskan langkah berikutnya (biasanya jatuh ke
+    // collect/inspect supaya bot tetap produktif, TANPA keluar dari mode deposit).
+    return { action: 'idle', reason: 'no_delivery_target' };
+  }
+
   async tick() {
-    const carried = this.adapter.getInventoryItems();
+    let carried = this.adapter.getInventoryItems();
+
+    // MODE DEPOSIT: taruh SEMUA item di tangan sampai tas BENAR-BENAR KOSONG sebelum kembali
+    // mengumpulkan lagi - permintaan nyata pemilik: algoritma konsisten, ada mode mengambil
+    // (sampai tas penuh) dan mode menaruh (sampai tas kosong), bukan bolak-balik ambil-satu-
+    // taruh-satu setiap tick.
+    if (this.mode === 'deposit') {
+      if (carried.length === 0) {
+        this.mode = 'collect';
+      } else {
+        const deliverResult = await this.runDeliverPhase(carried);
+        if (deliverResult.action !== 'idle') return deliverResult;
+        // TIDAK ADA target sama sekali untuk item manapun tick ini - JANGAN diam menunggu, lanjut
+        // ke collect/inspect di bawah supaya bot tetap produktif (mode TETAP 'deposit' - dicoba
+        // lagi tick berikutnya begitu ada tujuan yang tersedia) - ditemukan dari bug live nyata:
+        // bot berhenti TOTAL selama bermenit-menit hanya karena satu item di tangan buntu.
+      }
+    }
+
     if (carried.length > 0 && this.getInsideChestPositions().length === 0) {
       return { action: 'idle', reason: 'no_house_chest' };
     }
-    if (carried.length > 0) {
-      const insideChests = this.getInsideChestPositions();
 
-      // Antar TIAP JENIS item ke chest MASING-MASING yang cocok - bukan tumpuk semua jenis ke satu
-      // chest berdasarkan jenis item pertama saja (bug nyata yang dilaporkan pemilik: barang
-      // tercampur, "did not short the item well").
-      const distinctNames = [...new Set(carried.map((item) => item.name))];
-      const deliveries = [];
-      let totalDelivered = 0;
-      let attemptedAny = false;
-      for (const name of distinctNames) {
-        const target = await this.resolveChestForItem(insideChests, name);
-        if (!target) continue;
-        attemptedAny = true;
-        await this.adapter.navigateNear(westOf(target), 1);
-        try {
-          const result = await this.adapter.depositToChest(target, (item) => item.name === name);
-          totalDelivered += result.deposited;
-          deliveries.push({ position: target, name, count: result.deposited });
-          this.emit('delivered', { position: target, count: result.deposited, name });
-        } catch (e) {
-          // Chest penuh (atau gagal lain) - ingat chest ini supaya tick BERIKUTNYA memilih chest
-          // gudang LAIN untuk jenis ini, bukan mengulang chest yang sama tanpa kemajuan selamanya.
-          this.fullChestPositions.add(posKey(target));
-          this.emit('deliverFailed', { position: target, error: e.message, name });
-        }
-      }
-
-      if (deliveries.length > 0) {
-        this.metrics.delivered += totalDelivered;
-        return { action: 'deliver', count: totalDelivered, deliveries };
-      }
-      if (attemptedAny) {
-        return { action: 'deliver_failed', reason: 'no_delivery_succeeded' };
-      }
-      // TIDAK ADA satupun item yang punya target sama sekali tick ini (semua rumahnya penuh,
-      // tanpa alternatif aman) - JANGAN diam menunggu, lanjut ke collect/inspect di bawah supaya
-      // bot tetap produktif - ditemukan dari bug live nyata: bot berhenti TOTAL (tidak collect,
-      // tidak inspect, tidak apa-apa) selama bermenit-menit hanya karena satu item di tangan
-      // buntu, padahal masih banyak pekerjaan lain yang bisa dikerjakan sambil menunggu.
+    // MODE COLLECT: kalau tas SUDAH penuh di awal tick ini (mis. lompatan besar dari satu kali
+    // reorganize/collect batch sebelumnya), jangan ambil lagi - langsung menaruh. Kasus umum
+    // (baru mencapai batas SETELAH collect/reorganize tick ini) ditangani oleh
+    // switchToDepositIfCarryFull() di titik aksi masing-masing, bukan di sini.
+    if (this.mode === 'collect' && carried.length >= this.options.maxCarrySlots) {
+      this.mode = 'deposit';
+      return await this.runDeliverPhase(carried);
     }
 
     const outsideChests = this.getOutsideChestPositions();
@@ -283,6 +333,7 @@ class StorageManagerEngine extends EventEmitter {
         this.metrics.collected += 1;
         this.metrics.itemsCollected += result.totalCount;
         this.emit('collected', { position: nextToCollect, count: result.totalCount });
+        this.switchToDepositIfCarryFull();
         return { action: 'collect', position: nextToCollect, count: result.totalCount };
       } catch (e) {
         this.emit('chestError', { position: nextToCollect, error: e.message });
@@ -343,6 +394,7 @@ class StorageManagerEngine extends EventEmitter {
         }
         // JANGAN tandai chest ini "sudah diperiksa" - periksa ulang tick berikutnya untuk
         // memastikan benar-benar bersih (mis. kalau ada stack lain dari jenis yang sama).
+        this.switchToDepositIfCarryFull();
         return { action: 'reorganize', position: nextToInspect, items: relocated, count: relocated.reduce((s, i) => s + i.count, 0) };
       }
 
@@ -370,6 +422,13 @@ class StorageManagerEngine extends EventEmitter {
       this.inspectedPositions.clear();
       this.fullChestPositions.clear();
       this.brokenPositions.clear();
+    }
+    // Tidak ada lagi yang bisa diambil (chest luar & dalam sudah habis untuk putaran ini) - kalau
+    // tas masih membawa sesuatu, jangan tunggu sampai benar-benar penuh ATAU sampai tick idle
+    // terbuang percuma - langsung beralih ke mode menaruh DAN mulai mengantar tick ini juga.
+    if (this.mode === 'collect' && carried.length > 0) {
+      this.mode = 'deposit';
+      return await this.runDeliverPhase(carried);
     }
     return { action: 'idle' };
   }
