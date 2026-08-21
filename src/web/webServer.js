@@ -474,6 +474,13 @@ app.get('/api/rancher/status', (req, res) => {
 // gudang, rapikan dengan memeriksa tiap chest di dalamnya. Sama pola armada seperti worker lain.
 const storageWorkers = new Map(); // botName -> handle
 
+// Riwayat "chest yang ketahuan belum sesuai aturan kategori" - permintaan nyata pemilik: chest di
+// dalam storage room yang belum sesuai aturan harus tercatat, terlihat di dashboard tanpa perlu
+// scan manual. Disimpan di memori (bukan disk) - cukup untuk sesi berjalan, dibatasi 50 entri
+// terbaru supaya tidak membengkak tanpa batas.
+const STORAGE_COMPLIANCE_LOG_LIMIT = 50;
+const storageComplianceLog = [];
+
 app.post('/api/storage/start', (req, res) => {
   const { host, port, botName, scanRadius } = req.body || {};
   const name = botName || 'StorageWorker';
@@ -491,11 +498,20 @@ app.post('/api/storage/start', (req, res) => {
     onDisconnect: () => {
       storageWorkers.delete(name);
       broadcast({ type: 'AI_ACTION_EVENT', data: { task: 'STORAGE_WORKER', step: `[${name}] Koneksi terputus - dihapus dari daftar armada.`, status: 'STOPPED' } });
+    },
+    onMisplaced: (entry) => {
+      storageComplianceLog.unshift(entry);
+      if (storageComplianceLog.length > STORAGE_COMPLIANCE_LOG_LIMIT) storageComplianceLog.length = STORAGE_COMPLIANCE_LOG_LIMIT;
+      broadcast({ type: 'STORAGE_COMPLIANCE_UPDATE', data: { events: storageComplianceLog } });
     }
   });
   storageWorkers.set(name, handle);
 
   res.json({ success: true, data: { message: `Kuartermaster '${name}' dimulai` } });
+});
+
+app.get('/api/storage/compliance', (req, res) => {
+  res.json({ success: true, data: { events: storageComplianceLog } });
 });
 
 app.post('/api/storage/stop', (req, res) => {

@@ -389,6 +389,31 @@ body {
 .status-badge.failed { background: var(--bad-dim); color: var(--bad); }
 .status-badge.running { background: var(--warn-dim); color: var(--warn); }
 
+/* ── Storage Compliance Table ───────────────────────────────── */
+.table-scroll { overflow-x: auto; }
+#compliance-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+#compliance-table th {
+  text-align: left;
+  padding: 0.6rem 0.8rem;
+  background: var(--surface-2);
+  color: var(--text-faint);
+  font-weight: 500;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  border-bottom: 1px solid var(--border);
+}
+#compliance-table td {
+  padding: 0.55rem 0.8rem;
+  border-bottom: 1px solid var(--border-soft);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 0.8rem;
+}
+#compliance-table tr:hover td { background: var(--surface-2); }
+.compliance-item-name { color: var(--warn); font-weight: 600; }
+.compliance-arrow { color: var(--text-faint); margin: 0 4px; }
+
 /* ── Swarm Coordinates Panel ────────────────────────────────── */
 .card-header-flex {
   display: flex;

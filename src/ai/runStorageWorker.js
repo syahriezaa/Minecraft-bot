@@ -268,7 +268,7 @@ function buildMovements(bot) {
   return movements;
 }
 
-function startStorageWorker({ host, port, botName, scanRadius = 48, baseGoal = DEFAULT_BASE_GOAL, houseBounds = DEFAULT_HOUSE_BOUNDS, log = (m) => console.log(m), onDisconnect = () => {} }) {
+function startStorageWorker({ host, port, botName, scanRadius = 48, baseGoal = DEFAULT_BASE_GOAL, houseBounds = DEFAULT_HOUSE_BOUNDS, log = (m) => console.log(m), onDisconnect = () => {}, onMisplaced = () => {} }) {
   const bot = mineflayer.createBot({
     host, port,
     username: botName || 'StorageWorker',
@@ -319,7 +319,12 @@ function startStorageWorker({ host, port, botName, scanRadius = 48, baseGoal = D
     engine.on('inspected', ({ position, items }) => log(`Periksa chest gudang di (${position.x},${position.y},${position.z}) - isi: ${items.map((i) => `${i.name}x${i.count}`).join(', ') || '(kosong)'}`));
     engine.on('deliverFailed', ({ position, error, name }) => log(`Gagal antar ${name} ke chest gudang di (${position.x},${position.y},${position.z}) - ${error} - coba chest lain di tick berikutnya.`));
     engine.on('chestError', ({ position, error }) => log(`Chest di (${position.x},${position.y},${position.z}) gagal dibuka (${error}) - dilewati, lanjut ke chest lain.`));
-    engine.on('misplaced', ({ position, item, count, correctPosition }) => log(`Item SALAH TEMPAT: ${count}x ${item} di (${position.x},${position.y},${position.z}) - diambil, akan diantar ke (${correctPosition.x},${correctPosition.y},${correctPosition.z})`));
+    engine.on('misplaced', ({ position, item, count, correctPosition }) => {
+      log(`Item SALAH TEMPAT: ${count}x ${item} di (${position.x},${position.y},${position.z}) - diambil, akan diantar ke (${correctPosition.x},${correctPosition.y},${correctPosition.z})`);
+      // Dipakai panel "Kepatuhan Kategori Gudang" di dashboard - permintaan nyata pemilik: chest
+      // yang belum sesuai aturan kategori harus tercatat, supaya terlihat tanpa perlu scan manual.
+      onMisplaced({ botName: botName || 'StorageWorker', position, item, count, correctPosition, timestamp: Date.now() });
+    });
 
     log('Pekerja gudang mulai bekerja.');
     lastAction = 'WORKING';

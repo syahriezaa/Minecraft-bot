@@ -90,6 +90,9 @@
       case 'SWARM_COORDINATES_UPDATE':
         renderSwarmBots(msg.data);
         break;
+      case 'STORAGE_COMPLIANCE_UPDATE':
+        renderComplianceLog(msg.data?.events || []);
+        break;
     }
   }
 
@@ -149,6 +152,42 @@
     .then(r => r.json())
     .then(res => {
       if (res.data?.bots) renderSwarmBots(res.data.bots);
+    })
+    .catch(() => {});
+
+  // ── Kepatuhan Kategori Gudang - chest yang ketahuan belum sesuai aturan ──
+  const complianceTableBody = document.getElementById('compliance-table-body');
+  const complianceCountBadge = document.getElementById('compliance-count-badge');
+
+  function renderComplianceLog(events) {
+    if (!complianceTableBody || !Array.isArray(events)) return;
+    if (complianceCountBadge) complianceCountBadge.textContent = `${events.length} TERCATAT`;
+
+    if (events.length === 0) {
+      complianceTableBody.innerHTML = '<tr class="empty-row"><td colspan="5">Belum ada barang salah tempat yang tercatat.</td></tr>';
+      return;
+    }
+
+    complianceTableBody.innerHTML = events.map(ev => {
+      const time = ev.timestamp ? new Date(ev.timestamp).toLocaleTimeString('id-ID') : '-';
+      const from = ev.position ? `(${ev.position.x},${ev.position.y},${ev.position.z})` : '-';
+      const to = ev.correctPosition ? `(${ev.correctPosition.x},${ev.correctPosition.y},${ev.correctPosition.z})` : '-';
+      return `
+        <tr>
+          <td>${time}</td>
+          <td>${ev.botName || '-'}</td>
+          <td><span class="compliance-item-name">${ev.count || 1}x ${ev.item || '?'}</span></td>
+          <td>${from}</td>
+          <td><span class="compliance-arrow">&rarr;</span>${to}</td>
+        </tr>
+      `;
+    }).join('');
+  }
+
+  fetch('/api/storage/compliance')
+    .then(r => r.json())
+    .then(res => {
+      if (res.data?.events) renderComplianceLog(res.data.events);
     })
     .catch(() => {});
 
