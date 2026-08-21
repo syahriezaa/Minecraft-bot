@@ -345,10 +345,18 @@ class StorageManagerEngine extends EventEmitter {
     // yang tercatat penuh JUGA di-reset di SINI SAJA (satu kali per putaran penuh) - bukan di jalur
     // deliver setiap kali satu item kebetulan buntu (itu penyebab loop 2-tick tanpa henti yang
     // sudah diperbaiki di atas).
-    if (this.collectedPositions.size > 0 || this.inspectedPositions.size > 0 || this.fullChestPositions.size > 0) {
+    // brokenPositions JUGA di-reset di sini (sama seperti fullChestPositions) - satu kegagalan
+    // buka chest biasanya cuma lag server SESAAT, bukan kerusakan permanen. Tanpa reset ini, makin
+    // lama sesi berjalan makin banyak chest yang ter-blacklist SELAMANYA (setiap kegagalan
+    // transien menambah daftar), sampai akhirnya item dengan rumah mapan sekalipun (mis. diamond,
+    // iron_ingot) kehabisan tujuan yang valid sama sekali - ditemukan dari keluhan nyata pemilik:
+    // storage worker berhenti total mengantar walau membawa banyak item yang rumahnya sudah lama
+    // benar, gara-gara rumahnya kena blacklist permanen dari SATU kegagalan lama.
+    if (this.collectedPositions.size > 0 || this.inspectedPositions.size > 0 || this.fullChestPositions.size > 0 || this.brokenPositions.size > 0) {
       this.collectedPositions.clear();
       this.inspectedPositions.clear();
       this.fullChestPositions.clear();
+      this.brokenPositions.clear();
     }
     return { action: 'idle' };
   }

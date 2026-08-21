@@ -652,4 +652,28 @@ describe('StorageManagerEngine', () => {
     // TIDAK BOLEH diam saja, harus lanjut kumpulkan chest luar yang tersedia.
     assert.equal(second.action, 'collect', 'bot harus tetap produktif (collect chest luar) walau ada satu item buntu di tangan, bukan diam total menunggu');
   });
+
+  it('brokenPositions HARUS di-reset secara berkala (sama seperti fullChestPositions) - JANGAN memblokir chest selamanya gara-gara SATU kegagalan buka yang sifatnya sementara (lag server) - ditemukan dari keluhan nyata pemilik: diamond & iron_ingot (yang rumahnya sudah lama mapan) berhenti total terkirim setelah sesi berjalan lama, karena chest tujuannya pernah SEKALI gagal dibuka (windowOpen timeout sesaat) dan sejak itu dikecualikan PERMANEN, padahal chest itu sebenarnya baik-baik saja', async () => {
+    const oreChest = { position: { x: -181, y: 74, z: -353 }, items: [] };
+    const adapter = new FakeStorageAdapter({
+      chests: { '-181,74,-353': oreChest },
+      inventory: { diamond: 4 }
+    });
+    const engine = new StorageManagerEngine({ adapter, houseBounds: HOUSE_BOUNDS, initialAssignments: { diamond: '-181,74,-353' } });
+    // Simulasikan chest ini PERNAH gagal dibuka sekali (mis. lag server sesaat) - ditandai rusak.
+    engine.brokenPositions.add('-181,74,-353');
+
+    const first = await engine.tick();
+    assert.notEqual(first.action, 'deliver', 'tick ini memang harus gagal dulu (chest masih ditandai rusak)');
+
+    // Setelah SATU putaran penuh (tidak ada collect/inspect lain yang tersisa), brokenPositions
+    // harus di-reset - chest yang tadinya ditandai rusak harus dicoba lagi, BUKAN dikecualikan
+    // selamanya.
+    let delivered = false;
+    for (let i = 0; i < 5 && !delivered; i++) {
+      const result = await engine.tick();
+      if (result.action === 'deliver') delivered = true;
+    }
+    assert.ok(delivered, 'diamond harus akhirnya berhasil terkirim setelah brokenPositions di-reset - chest itu sebenarnya baik-baik saja, cuma pernah gagal sesaat');
+  });
 });
