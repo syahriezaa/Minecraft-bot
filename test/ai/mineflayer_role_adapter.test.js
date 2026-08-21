@@ -554,3 +554,21 @@ describe('MineflayerRoleAdapter.findChestPositions / findMatchingChest - juga ha
     assert.equal(capturedMatcher({ name: 'furnace' }), false);
   });
 });
+
+describe('MineflayerRoleAdapter.openChestAt - harus beri jeda singkat setelah windowOpen sebelum dipakai, supaya slot benar-benar tersinkron', () => {
+  it('harus menunggu MINIMAL chestSettleMs sesudah bot.openChest() selesai sebelum mengembalikan window - ditemukan dari bug live nyata: deposit gagal dengan "destination full" padahal chest sungguhan (dicek langsung di game) MASIH banyak slot kosong - windowOpen event terpicu SEBELUM paket isi slot (window_items) benar-benar diproses, jadi window.slots lokal bot bisa saja belum lengkap/akurat tepat setelah open, membuat pengecekan "ada slot kosong?" salah menyimpulkan chest penuh', async () => {
+    const bot = {
+      entity: { position: { x: 0, y: 64, z: 0 } },
+      pathfinder: { goto: async () => {} },
+      blockAt: () => ({ name: 'chest', position: { x: 5, y: 64, z: 5 } }),
+      openChest: async () => ({ containerItems: () => [], close: () => {} })
+    };
+    const adapter = new MineflayerRoleAdapter(bot, { chestSettleMs: 30 });
+
+    const start = Date.now();
+    await adapter.openChestAt({ x: 5, y: 64, z: 5 });
+    const elapsed = Date.now() - start;
+
+    assert.ok(elapsed >= 30, `harus menunggu minimal chestSettleMs (30ms) sesudah open, tapi cuma ${elapsed}ms`);
+  });
+});

@@ -45,6 +45,14 @@ class MineflayerRoleAdapter {
       // maupun reject - satu target tak terjangkau membekukan SELURUH worker (semua tick berikutnya)
       // permanen, bukan cuma gagal aman untuk target itu saja.
       navigateTimeoutMs: 15000,
+      // Jeda singkat sesudah windowOpen sebelum chest dianggap siap dipakai - ditemukan dari bug
+      // live nyata: deposit gagal "destination full" padahal chest sungguhan (dicek langsung di
+      // game) masih banyak slot kosong. windowOpen terpicu begitu paket open_window diterima,
+      // TAPI isi slot sesungguhnya datang lewat paket window_items terpisah yang bisa saja belum
+      // selesai diproses tepat saat itu (apalagi di server dengan lag yang sudah berulang kali
+      // terlihat sepanjang sesi ini) - window.slots lokal bot bisa saja belum lengkap/akurat,
+      // membuat pengecekan "ada slot kosong?" mineflayer keliru menyimpulkan chest penuh.
+      chestSettleMs: 250,
       ...options
     };
     this.worldAwareness = options.worldAwareness || null;
@@ -250,7 +258,11 @@ class MineflayerRoleAdapter {
     const block = this.blockAt(pos);
     if (!block || typeof this.bot?.openChest !== 'function') return null;
     await this.navigateNear(pos, 3);
-    return this.bot.openChest(block);
+    const chest = await this.bot.openChest(block);
+    if (this.options.chestSettleMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, this.options.chestSettleMs));
+    }
+    return chest;
   }
 
   // Cari chest di sekitar yang SUDAH berisi salah satu dari itemNames - dipakai FarmerEngine
