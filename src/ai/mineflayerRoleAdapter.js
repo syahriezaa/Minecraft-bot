@@ -23,6 +23,15 @@ const FOOD_PRIORITY = Object.freeze([
   'potato'
 ]);
 
+const HOE_NAMES = Object.freeze([
+  'wooden_hoe',
+  'stone_hoe',
+  'golden_hoe',
+  'iron_hoe',
+  'diamond_hoe',
+  'netherite_hoe'
+]);
+
 function asVec3(pos) {
   if (!pos) return new Vec3(0, 0, 0);
   if (typeof pos.offset === 'function') return pos;
@@ -169,6 +178,39 @@ class MineflayerRoleAdapter {
     if (!equipped) return false;
     await this.navigateNear(referenceBlock.position || referenceBlock, 3);
     await this.bot.placeBlock(referenceBlock, new Vec3(0, 1, 0));
+    return true;
+  }
+
+  // Cangkul dirt/grass jadi farmland - permintaan nyata pemilik: "farming bot harus bisa
+  // memperbaiki tempat farming...bawa dirt dan hoe dari gudang". Cukup pegang cangkul lalu klik
+  // kanan (activateBlock, PERSIS mekanisme yang sama dipakai setSpawnAtNearestBed untuk klik bed)
+  // blok dirt/grass_block itu - Minecraft otomatis mengubahnya jadi farmland kalau ada ruang
+  // kosong di atasnya, tidak perlu logika tambahan apapun.
+  async tillFarmland(pos) {
+    if (!pos || typeof this.bot?.activateBlock !== 'function') return false;
+    const equipped = await this.equipItem(HOE_NAMES, 'hand');
+    if (!equipped) return false;
+    await this.navigateNear(pos, 3);
+    const block = this.blockAt(pos);
+    if (!block) return false;
+    await this.bot.activateBlock(block);
+    return true;
+  }
+
+  // Isi lubang di lahan farming dengan dirt sebelum dicangkul - permintaan nyata pemilik: "bawa
+  // dirt dan hoe dari gudang" untuk memperbaiki lahan. Ditaruh berdiri di atas blok solid TEPAT DI
+  // BAWAH posisi lubang (sama seperti placeSeed menaruh benih di atas farmland) - kalau bawahnya
+  // sendiri kosong (lubang lebih dari satu blok dalam), gagal dulu (false); tick berikutnya akan
+  // coba isi level yang lebih rendah dulu (findRepairCandidates men-scan ulang tiap tick).
+  async placeDirtAt(pos, itemName = 'dirt') {
+    if (!pos || typeof this.bot?.placeBlock !== 'function') return false;
+    const equipped = await this.equipItem(itemName, 'hand');
+    if (!equipped) return false;
+    const below = { x: pos.x, y: pos.y - 1, z: pos.z };
+    await this.navigateNear(below, 3);
+    const belowBlock = this.blockAt(below);
+    if (!belowBlock || belowBlock.name === 'air') return false;
+    await this.bot.placeBlock(belowBlock, new Vec3(0, 1, 0));
     return true;
   }
 
@@ -628,6 +670,7 @@ class MineflayerRoleAdapter {
 module.exports = {
   MineflayerRoleAdapter,
   FOOD_PRIORITY,
+  HOE_NAMES,
   asVec3,
   distance
 };

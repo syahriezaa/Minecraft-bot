@@ -6,7 +6,7 @@
  */
 
 const EventEmitter = require('node:events');
-const { MineflayerRoleAdapter, distance } = require('./mineflayerRoleAdapter');
+const { MineflayerRoleAdapter, distance, HOE_NAMES } = require('./mineflayerRoleAdapter');
 const { parseChestPositionKey } = require('./storageMemory');
 
 const CROP_RULES = Object.freeze({
@@ -16,6 +16,11 @@ const CROP_RULES = Object.freeze({
   beetroots: { maxAge: 3, seed: 'beetroot_seeds', harvest: ['beetroot'] },
   nether_wart: { maxAge: 3, seed: 'nether_wart', harvest: ['nether_wart'] }
 });
+
+// Blok tanah yang BISA dicangkul jadi farmland - dipakai findRepairCandidates untuk membedakan
+// "belum dicangkul" (masih bisa diperbaiki) dari blok lain yang memang bukan bagian lahan farming
+// sama sekali (batu, air/kanal irigasi, jalan setapak, dst - JANGAN pernah disentuh).
+const TILLABLE_GROUND_NAMES = ['dirt', 'grass_block', 'coarse_dirt', 'podzol'];
 
 function blockAge(block) {
   const raw = block?.properties?.age ?? block?.metadata;
@@ -68,13 +73,20 @@ class FarmerEngine extends EventEmitter {
       // penuh tanpa batas.
       seedReserve: 32,
       autoEatFoodThreshold: 14,
+      // Perbaiki lahan farming yang rusak (dirt/grass yang belum dicangkul, atau lubang) di
+      // PINGGIRAN farmland yang sudah ada - permintaan nyata pemilik: "farming bot harus bisa
+      // memperbaiki tempat farming jadi bawa dirt dan hoe dari gudang". Cangkul & dirt diambil
+      // dari gudang lewat sharedChestAssignments kalau belum dibawa - lihat fetchRepairSupplies.
+      repairEnabled: true,
+      repairBatchSize: 4,
       ...options
     };
     this.metrics = {
       harvested: 0,
       planted: 0,
       deposited: 0,
-      eaten: 0
+      eaten: 0,
+      repaired: 0
     };
     // Ingat chest yang sudah ditemukan cocok untuk tiap jenis item, supaya tiap tick berikutnya
     // tidak perlu membuka ulang semua chest di gudang - gudang nyata pemilik bisa berisi puluhan
@@ -97,13 +109,15 @@ class FarmerEngine extends EventEmitter {
       .sort((a, b) => distance(this.adapter.getPosition(), a.position) - distance(this.adapter.getPosition(), b.position));
   }
 
-  findPlantingSpots() {
-    const farmland = this.adapter
+  findFarmlandBlocks() {
+    return this.adapter
       .findBlocksByNames(['farmland', 'soul_sand'], { maxDistance: this.options.scanRadius })
       .filter(block => isInsideArea(block.position, this.options.farmArea))
       .filter(block => isOutsideArea(block.position, this.options.avoidArea));
+  }
 
-    return farmland.filter(block => {
+  findPlantingSpots() {
+    return this.findFarmlandBlocks().filter(block => {
       const above = this.adapter.blockAt({
         x: block.position.x,
         y: block.position.y + 1,
@@ -113,17 +127,130 @@ class FarmerEngine extends EventEmitter {
     });
   }
 
+  // Kelompokkan spot yang mau ditanam jadi BARIS MEMANJANG - permintaan nyata pemilik: "tanam
+  // dengan variasi per baris memanjang". Sumbu "memanjang" (arah baris) ditebak dari sebaran spot
+  // itu sendiri: sumbu dengan LEBIH BANYAK koordinat berbeda dianggap arah memanjang (x kalau
+  // baris berjajar sepanjang x, z kalau sepanjang z) - baris dikelompokkan oleh sumbu yang TETAP
+  // (satu nilai per baris). Tidak butuh tahu bentuk lahan sesungguhnya di depan (tidak ada peta
+  // tersimpan) - cukup dihitung ulang tiap kali dari spot yang sedang dilihat.
+  groupSpotsByRow(spots) {
+    if (spots.length === 0) return [];
+    const distinctX = new Set(spots.map(s => s.position.x)).size;
+    const distinctZ = new Set(spots.map(s => s.position.z)).size;
+    const rowKeyOf = distinctX >= distinctZ
+      ? (pos) => `z:${pos.z}`
+      : (pos) => `x:${pos.x}`;
+    const rows = new Map();
+    for (const spot of spots) {
+      const key = rowKeyOf(spot.position);
+      if (!rows.has(key)) rows.set(key, []);
+      rows.get(key).push(spot);
+    }
+    return [...rows.values()];
+  }
+
   chooseSeedFor(referenceBlock) {
     if (referenceBlock?.name === 'soul_sand' && this.adapter.hasItem('nether_wart')) return 'nether_wart';
     // Bergantian di antara jenis benih yang SUNGGUH tersedia di inventaris - bukan selalu benih
     // pertama di CROP_RULES (wheat_seeds) - ditemukan dari permintaan nyata pemilik: kebun jadi
     // seragam wheat semua walau punya benih carrot/potato juga, karena benih pertama yang cocok
-    // selalu dipakai duluan dan wheat_seeds biasanya paling melimpah.
+    // selalu dipakai duluan dan wheat_seeds biasanya paling melimpah. Dipanggil SEKALI PER BARIS
+    // (bukan per spot individual) supaya satu baris memanjang jadi satu jenis benih yang rapi.
     const available = Object.values(CROP_RULES).map(rule => rule.seed).filter(seed => this.adapter.hasItem(seed));
     if (available.length === 0) return null;
     const seed = available[this.plantRotationIndex % available.length];
     this.plantRotationIndex++;
     return seed;
+  }
+
+  // Cari kandidat perbaikan lahan farming: petak TEPAT BERSEBELAHAN (4 arah, bukan diagonal)
+  // dengan farmland/soul_sand yang SUDAH ADA, tapi belum ikut jadi bagian lahan yang bisa ditanami.
+  // SENGAJA cuma menyentuh petak yang LANGSUNG bersebelahan dengan lahan yang sudah dikonfirmasi
+  // (bukan seluruh kotak pembatas/bounding box) - kalau meng-crawl lebih jauh atau menganggap semua
+  // sel di dalam bounding box sebagai "harus farmland", kanal air irigasi atau jalan setapak yang
+  // memang sengaja bukan farmland bisa ikut "diperbaiki" jadi dirt/farmland, merusak tata letak
+  // lahan yang sengaja dibuat pemilik. Dua jenis kandidat: 'till' (dirt/grass yang tinggal
+  // dicangkul) dan 'fill' (lubang kosong, butuh dirt dulu sebelum bisa dicangkul).
+  findRepairCandidates() {
+    const farmland = this.findFarmlandBlocks();
+    const knownKeys = new Set(farmland.map(b => `${b.position.x},${b.position.z}`));
+    const seen = new Set();
+    const candidates = [];
+    const offsets = [{ x: 1, z: 0 }, { x: -1, z: 0 }, { x: 0, z: 1 }, { x: 0, z: -1 }];
+    for (const block of farmland) {
+      for (const off of offsets) {
+        const pos = { x: block.position.x + off.x, y: block.position.y, z: block.position.z + off.z };
+        const key = `${pos.x},${pos.z}`;
+        if (knownKeys.has(key) || seen.has(key)) continue;
+        if (!isInsideArea(pos, this.options.farmArea) || !isOutsideArea(pos, this.options.avoidArea)) continue;
+        seen.add(key);
+        const ground = this.adapter.blockAt(pos);
+        const above = this.adapter.blockAt({ x: pos.x, y: pos.y + 1, z: pos.z });
+        const aboveClear = !above || above.name === 'air';
+        if (ground && TILLABLE_GROUND_NAMES.includes(ground.name) && aboveClear) {
+          candidates.push({ type: 'till', position: pos });
+        } else if ((!ground || ground.name === 'air') && aboveClear) {
+          candidates.push({ type: 'fill', position: pos });
+        }
+      }
+    }
+    return candidates.sort((a, b) => distance(this.adapter.getPosition(), a.position) - distance(this.adapter.getPosition(), b.position));
+  }
+
+  // Ambil cangkul dan/atau dirt dari gudang lewat memori bersama (sharedChestAssignments, lihat
+  // storageMemory.js) - permintaan nyata pemilik: "bawa dirt dan hoe dari gudang". Cangkul dicari
+  // lewat jenis APAPUN yang sudah dikenal memori bersama (semuanya mengarah ke chest perkakas yang
+  // sama); tanpa memori bersama (belum di-set), tidak ada yang bisa diambil - repair menunggu
+  // sampai bot kebetulan sudah membawa sendiri.
+  async fetchRepairSupplies(needHoe, needDirt) {
+    if (needHoe) {
+      const hoeKey = HOE_NAMES.find(name => this.options.sharedChestAssignments?.[name]);
+      if (hoeKey) {
+        const pos = parseChestPositionKey(this.options.sharedChestAssignments[hoeKey]);
+        await this.adapter.withdrawFromChest(pos, HOE_NAMES, 1);
+      }
+    }
+    if (needDirt) {
+      const dirtKey = this.options.sharedChestAssignments?.dirt;
+      if (dirtKey) {
+        const pos = parseChestPositionKey(dirtKey);
+        await this.adapter.withdrawFromChest(pos, ['dirt'], 64);
+      }
+    }
+    const hoeOk = !needHoe || this.adapter.hasItem(HOE_NAMES);
+    const dirtOk = !needDirt || this.adapter.hasItem('dirt');
+    return hoeOk && dirtOk;
+  }
+
+  async attemptRepair() {
+    if (!this.options.repairEnabled) return null;
+    const candidates = this.findRepairCandidates().slice(0, this.options.repairBatchSize);
+    if (candidates.length === 0) return null;
+
+    const needsFill = candidates.some(c => c.type === 'fill');
+    const hasHoe = this.adapter.hasItem(HOE_NAMES);
+    const hasDirt = this.adapter.hasItem('dirt');
+    if (!hasHoe || (needsFill && !hasDirt)) {
+      const ready = await this.fetchRepairSupplies(!hasHoe, needsFill && !hasDirt);
+      if (!ready) return null; // tidak ada stok di gudang - jangan macet, lanjut ke langkah lain
+    }
+
+    let repaired = 0;
+    for (const candidate of candidates) {
+      if (candidate.type === 'fill') {
+        if (!this.adapter.hasItem('dirt')) break; // kehabisan dirt di tengah jalan
+        const filled = await this.adapter.placeDirtAt(candidate.position);
+        if (!filled) continue; // mis. lubang lebih dari satu blok dalam, coba lubang lain dulu
+      }
+      if (!this.adapter.hasItem(HOE_NAMES)) break; // kehabisan cangkul di tengah jalan
+      const tilled = await this.adapter.tillFarmland(candidate.position);
+      if (tilled) {
+        repaired++;
+        this.metrics.repaired++;
+        this.emit('repaired', { position: candidate.position, type: candidate.type });
+      }
+    }
+    return repaired > 0 ? { action: 'repair', count: repaired } : null;
   }
 
   async tick() {
@@ -149,19 +276,31 @@ class FarmerEngine extends EventEmitter {
     if (spots.length > 0) {
       let plantedCount = 0;
       let lastSeed = null;
-      for (const spot of spots) {
-        const seed = this.chooseSeedFor(spot);
+      // Tanam per BARIS MEMANJANG (satu jenis benih untuk seluruh baris), bukan per spot
+      // individual - permintaan nyata pemilik: "tanam dengan variasi per baris memanjang".
+      // Variasi tetap ada, cuma sekarang ANTAR baris, bukan campur-campur di dalam satu baris.
+      for (const row of this.groupSpotsByRow(spots)) {
+        const seed = this.chooseSeedFor(row[0]);
         if (!seed) break; // kehabisan semua jenis benih - tidak ada lagi yang bisa ditanam
-        const planted = await this.adapter.placeSeed(spot, seed);
-        if (planted) {
-          plantedCount++;
-          lastSeed = seed;
-          this.metrics.planted++;
-          this.emit('planted', { seed, position: spot.position });
+        for (const spot of row) {
+          const planted = await this.adapter.placeSeed(spot, seed);
+          if (planted) {
+            plantedCount++;
+            lastSeed = seed;
+            this.metrics.planted++;
+            this.emit('planted', { seed, position: spot.position });
+          }
         }
       }
       if (plantedCount > 0) return { action: 'plant', seed: lastSeed, count: plantedCount };
     }
+
+    // Lahan sudah "penuh" (tidak ada lagi farmland kosong yang bisa ditanam saat ini) - coba
+    // perbaiki/perluas dulu sebelum ke gudang, supaya siklus berikutnya punya lebih banyak petak
+    // untuk ditanami - permintaan nyata pemilik: "farming bot harus bisa memperbaiki tempat
+    // farming...untuk sop farming nya panen - tanam sampai full lahan - ke storage room".
+    const repairResult = await this.attemptRepair();
+    if (repairResult) return repairResult;
 
     // Gudang nyata pemilik sudah terorganisir per jenis item (mis. wheat dan carrot masing-masing
     // punya chest sendiri) - autoMatchStorage cari chest yang SUDAH berisi jenis item yang sama untuk

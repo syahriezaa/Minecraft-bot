@@ -93,6 +93,21 @@ class FakeRoleAdapter {
     const match = (this.chests || []).find((c) => c.contents.some((n) => itemNames.includes(n)));
     return match ? match.position : null;
   }
+  async withdrawFromChest(pos, itemNames, count) {
+    this.actions.push({ type: 'withdrawFromChest', position: pos, itemNames, count });
+    const matchedName = itemNames.find((name) => (this.withdrawStock?.[name] || 0) > 0);
+    const take = matchedName ? this.withdrawStock[matchedName] : 0;
+    if (take > 0) this.items.set(matchedName, (this.items.get(matchedName) || 0) + take);
+    return { withdrawn: take };
+  }
+  async tillFarmland(pos) {
+    this.actions.push({ type: 'tillFarmland', position: pos });
+    return true;
+  }
+  async placeDirtAt(pos) {
+    this.actions.push({ type: 'placeDirtAt', position: pos });
+    return true;
+  }
 }
 
 describe('FarmerEngine', () => {
@@ -148,7 +163,36 @@ describe('FarmerEngine', () => {
     assert.equal(adapter.actions[0].type, 'placeSeed');
   });
 
-  it('kalau punya wheat_seeds, carrot, DAN potato sekaligus, harus BERGANTIAN menanam ketiganya di beberapa farmland kosong berurutan - BUKAN selalu wheat_seeds saja - ditemukan dari permintaan nyata pemilik: kebun jadi seragam wheat semua padahal punya bibit carrot/potato juga', async () => {
+  it('kalau punya wheat_seeds, carrot, DAN potato sekaligus, harus BERGANTIAN menanam ketiganya ANTAR BARIS (satu jenis benih per baris memanjang, bukan campur-campur di dalam satu baris) - permintaan nyata pemilik: "tanam dengan variasi per baris memanjang". SATU baris = spot-spot dengan koordinat TETAP yang sama di sumbu yang lebih pendek (di sini z tetap, x memanjang)', async () => {
+    const adapter = new FakeRoleAdapter({
+      items: { wheat_seeds: 10, carrot: 10, potato: 10 },
+      blocks: [
+        { name: 'farmland', position: { x: 1, y: 63, z: 0 } },
+        { name: 'farmland', position: { x: 2, y: 63, z: 0 } },
+        { name: 'farmland', position: { x: 3, y: 63, z: 0 } },
+        { name: 'farmland', position: { x: 1, y: 63, z: 1 } },
+        { name: 'farmland', position: { x: 2, y: 63, z: 1 } },
+        { name: 'farmland', position: { x: 3, y: 63, z: 1 } },
+        { name: 'farmland', position: { x: 1, y: 63, z: 2 } },
+        { name: 'farmland', position: { x: 2, y: 63, z: 2 } },
+        { name: 'farmland', position: { x: 3, y: 63, z: 2 } }
+      ]
+    });
+    const engine = new FarmerEngine({ adapter, plantBatchSize: 9 });
+
+    await engine.tick();
+
+    const planted = adapter.actions.filter(a => a.type === 'placeSeed');
+    assert.equal(planted.length, 9);
+    const seedByRow = (z) => new Set(planted.filter(a => a.position.z === z).map(a => a.seed));
+    assert.equal(seedByRow(0).size, 1, 'seluruh baris z=0 harus satu jenis benih yang sama');
+    assert.equal(seedByRow(1).size, 1, 'seluruh baris z=1 harus satu jenis benih yang sama');
+    assert.equal(seedByRow(2).size, 1, 'seluruh baris z=2 harus satu jenis benih yang sama');
+    const allSeedsUsed = new Set(planted.map(a => a.seed));
+    assert.deepEqual(allSeedsUsed, new Set(['wheat_seeds', 'carrot', 'potato']), 'ketiga jenis tetap harus terpakai semua, variasinya ANTAR baris');
+  });
+
+  it('SATU baris (spot-spot sebaris memanjang) TIDAK BOLEH dicampur beberapa jenis benih - ditemukan dari perilaku lama yang keliru: tiap spot individual bergantian benih walau sebenarnya sebaris fisik yang sama, membuat satu baris terlihat campur-campur bukannya rapi per jenis', async () => {
     const adapter = new FakeRoleAdapter({
       items: { wheat_seeds: 10, carrot: 10, potato: 10 },
       blocks: [
@@ -163,7 +207,7 @@ describe('FarmerEngine', () => {
 
     const seedsPlanted = adapter.actions.filter(a => a.type === 'placeSeed').map(a => a.seed);
     assert.equal(seedsPlanted.length, 3);
-    assert.deepEqual(new Set(seedsPlanted), new Set(['wheat_seeds', 'carrot', 'potato']), 'harus menanam ketiga jenis, bukan cuma wheat_seeds berulang');
+    assert.equal(new Set(seedsPlanted).size, 1, 'ketiga spot dalam satu baris yang sama harus dapat SATU jenis benih yang sama, bukan campur');
   });
 
   it('dengan autoMatchStorage aktif, harus menyimpan tiap jenis hasil panen ke chest yang SUDAH berisi jenis yang sama (bukan satu chest tunggal) - ditemukan dari gudang nyata pemilik: wheat dan carrot disimpan terpisah di chest masing-masing, bukan digabung sembarangan', async () => {
@@ -252,6 +296,133 @@ describe('FarmerEngine', () => {
     const wheatDeposit = adapter.actions.find((a) => a.type === 'deposit' && a.items.includes('wheat'));
     assert.deepEqual(carrotDeposit.maxPerItem, { carrot: 8 }, 'carrot adalah benih (juga jadi bibit sendiri) - harus dibatasi cadangan');
     assert.deepEqual(wheatDeposit.maxPerItem, {}, 'wheat bukan benih (benihnya wheat_seeds, item beda) - bebas disetor penuh tanpa batas');
+  });
+
+  describe('perbaikan lahan farming (repair) - permintaan nyata pemilik: "farming bot harus bisa memperbaiki tempat farming jadi bawa dirt dan hoe dari gudang"', () => {
+    // 3 sisi tetangga farmland(0,63,0) yang SENGAJA diisi stone (bukan dirt/grass, bukan kosong) -
+    // supaya tiap tes cuma punya SATU kandidat perbaikan yang benar-benar diuji (sisi x=1), bukan
+    // ikut menghitung 3 sisi lain yang (kalau dibiarkan tak terdaftar) akan dianggap "lubang"
+    // kosong juga oleh FakeRoleAdapter.blockAt (defaultnya 'air' untuk posisi manapun yang tidak
+    // eksplisit didaftarkan).
+    const otherThreeSidesBlocked = [
+      { name: 'stone', position: { x: -1, y: 63, z: 0 } },
+      { name: 'stone', position: { x: 0, y: 63, z: 1 } },
+      { name: 'stone', position: { x: 0, y: 63, z: -1 } }
+    ];
+
+    it('kalau ada dirt/grass yang BERSEBELAHAN LANGSUNG dengan farmland yang sudah ada (belum dicangkul) DAN bot sudah membawa cangkul, harus mencangkulnya jadi farmland - lahan tidak ada lagi yang bisa dipanen/ditanam jadi ini satu-satunya langkah produktif yang tersisa', async () => {
+      const adapter = new FakeRoleAdapter({
+        items: { iron_hoe: 1 },
+        blocks: [
+          { name: 'farmland', position: { x: 0, y: 63, z: 0 } },
+          { name: 'dirt', position: { x: 1, y: 63, z: 0 } },
+          ...otherThreeSidesBlocked
+        ]
+      });
+      const engine = new FarmerEngine({ adapter });
+
+      const result = await engine.tick();
+
+      assert.equal(result.action, 'repair');
+      const tilled = adapter.actions.filter((a) => a.type === 'tillFarmland');
+      assert.equal(tilled.length, 1);
+      assert.deepEqual(tilled[0].position, { x: 1, y: 63, z: 0 });
+      assert.equal(engine.metrics.repaired, 1);
+    });
+
+    it('kalau kandidat perbaikan berupa LUBANG (bukan dirt/grass, cuma kosong) DAN bot punya dirt+cangkul, harus taruh dirt DULU baru dicangkul', async () => {
+      const adapter = new FakeRoleAdapter({
+        items: { iron_hoe: 1, dirt: 8 },
+        blocks: [
+          { name: 'farmland', position: { x: 0, y: 63, z: 0 } },
+          // (1,63,0) SENGAJA tidak didaftarkan sama sekali - blockAt bawaan FakeRoleAdapter
+          // mengembalikan 'air' untuk posisi manapun yang tidak eksplisit didaftarkan, persis
+          // meniru lubang kosong di lahan sungguhan.
+          ...otherThreeSidesBlocked
+        ]
+      });
+      const engine = new FarmerEngine({ adapter });
+
+      const result = await engine.tick();
+
+      assert.equal(result.action, 'repair');
+      const filled = adapter.actions.filter((a) => a.type === 'placeDirtAt');
+      const tilled = adapter.actions.filter((a) => a.type === 'tillFarmland');
+      assert.equal(filled.length, 1);
+      assert.equal(tilled.length, 1);
+      assert.deepEqual(filled[0].position, { x: 1, y: 63, z: 0 });
+      assert.ok(adapter.actions.indexOf(filled[0]) < adapter.actions.indexOf(tilled[0]), 'dirt harus ditaruh SEBELUM dicangkul, bukan sesudahnya');
+    });
+
+    it('kalau bot BELUM punya cangkul tapi memori bersama (sharedChestAssignments) sudah tahu chest perkakas - harus ambil cangkul dari gudang DULU sebelum mencangkul - permintaan nyata pemilik: "bawa dirt dan hoe dari gudang"', async () => {
+      const adapter = new FakeRoleAdapter({
+        blocks: [
+          { name: 'farmland', position: { x: 0, y: 63, z: 0 } },
+          { name: 'dirt', position: { x: 1, y: 63, z: 0 } },
+          ...otherThreeSidesBlocked
+        ]
+      });
+      adapter.withdrawStock = { iron_hoe: 1 };
+      const engine = new FarmerEngine({
+        adapter,
+        sharedChestAssignments: { iron_hoe: '-181,71,-348' }
+      });
+
+      const result = await engine.tick();
+
+      assert.equal(result.action, 'repair');
+      const withdrawal = adapter.actions.find((a) => a.type === 'withdrawFromChest');
+      assert.ok(withdrawal, 'harus mengambil cangkul dari gudang dulu');
+      assert.deepEqual(withdrawal.position, { x: -181, y: 71, z: -348 });
+      assert.ok(adapter.actions.some((a) => a.type === 'tillFarmland'), 'setelah dapat cangkul, harus lanjut mencangkul');
+    });
+
+    it('kalau tidak ada cangkul sama sekali DAN memori bersama juga tidak tahu di mana cangkulnya, JANGAN macet - lewati perbaikan dan lanjut ke langkah lain (bukan gagal diam-diam tanpa progres)', async () => {
+      const adapter = new FakeRoleAdapter({
+        blocks: [
+          { name: 'farmland', position: { x: 0, y: 63, z: 0 } },
+          { name: 'dirt', position: { x: 1, y: 63, z: 0 } }
+        ]
+      });
+      const engine = new FarmerEngine({ adapter }); // tidak ada sharedChestAssignments sama sekali
+
+      const result = await engine.tick();
+
+      assert.ok(!adapter.actions.some((a) => a.type === 'tillFarmland'), 'tidak boleh mencangkul tanpa cangkul di tangan');
+      assert.equal(result.action, 'idle', 'harus tetap lanjut (idle), bukan macet/crash');
+    });
+
+    it('kalau repairEnabled: false, JANGAN pernah mencoba memperbaiki apapun walau ada kandidat dan perkakas lengkap - opsi eksplisit untuk mematikan fitur ini', async () => {
+      const adapter = new FakeRoleAdapter({
+        items: { iron_hoe: 1 },
+        blocks: [
+          { name: 'farmland', position: { x: 0, y: 63, z: 0 } },
+          { name: 'dirt', position: { x: 1, y: 63, z: 0 } }
+        ]
+      });
+      const engine = new FarmerEngine({ adapter, repairEnabled: false });
+
+      const result = await engine.tick();
+
+      assert.ok(!adapter.actions.some((a) => a.type === 'tillFarmland'));
+      assert.notEqual(result.action, 'repair');
+    });
+
+    it('perbaikan TIDAK BOLEH menyentuh blok yang jelas BUKAN bagian lahan (mis. water - kanal irigasi yang sengaja dibiarkan) walau bersebelahan langsung dengan farmland - kandidat perbaikan cuma dirt/grass polos (belum dicangkul) atau benar-benar kosong (lubang)', async () => {
+      const adapter = new FakeRoleAdapter({
+        items: { iron_hoe: 1, dirt: 8 },
+        blocks: [
+          { name: 'farmland', position: { x: 0, y: 63, z: 0 } },
+          { name: 'water', position: { x: 1, y: 63, z: 0 } },
+          ...otherThreeSidesBlocked
+        ]
+      });
+      const engine = new FarmerEngine({ adapter });
+
+      const candidates = engine.findRepairCandidates();
+
+      assert.equal(candidates.length, 0, 'water TIDAK BOLEH pernah dianggap kandidat perbaikan');
+    });
   });
 });
 
