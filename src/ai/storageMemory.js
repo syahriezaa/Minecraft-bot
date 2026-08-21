@@ -480,5 +480,6 @@ module.exports = {
   CHEST_CATEGORY_LABELS,
   getSharedChestAssignments,
   parseChestPositionKey,
-  TOOLS_CHEST
+  TOOLS_CHEST,
+  WEAPONS_CHEST
 };

@@ -30,7 +30,7 @@ const { pathfinder, Movements } = require('mineflayer-pathfinder');
 const { MineflayerRoleAdapter } = require('./mineflayerRoleAdapter');
 const { MobFarmEngine } = require('./mobFarmEngine');
 const { walkToBase } = require('./walkToBase');
-const { getSharedChestAssignments, parseChestPositionKey, TOOLS_CHEST } = require('./storageMemory');
+const { getSharedChestAssignments, parseChestPositionKey, TOOLS_CHEST, WEAPONS_CHEST } = require('./storageMemory');
 
 const TICK_INTERVAL_MS = Number(process.env.MOBFARM_TICK_MS) || 2000;
 const DEFAULT_BASE_GOAL = { x: -185, y: 71, z: -352 };
@@ -101,15 +101,24 @@ function startMobFarmWorker({
     adapter = new MineflayerRoleAdapter(bot);
     sharedChestAssignments = getSharedChestAssignments(log);
 
-    // Ambil diamond_sword ter-enchant dari TOOLS_CHEST SEBELUM berangkat - permintaan nyata
-    // pemilik: "aku telah menaruh diamond sword ter enchant untuk itu di barel tools di gudang".
+    // Ambil diamond_sword ter-enchant SEBELUM berangkat - permintaan nyata pemilik: "aku telah
+    // menaruh diamond sword ter enchant untuk itu di barel tools di gudang". TERNYATA (dikonfirmasi
+    // live) pedang ini sudah dipindah StorageWorker ke WEAPONS_CHEST, bukan TOOLS_CHEST - rumah
+    // baku diamond_sword di memori sortir bersama (CANONICAL_GEAR_ASSIGNMENTS di storageMemory.js)
+    // memang WEAPONS_CHEST (kategori "Senjata"), bukan "Perkakas" - StorageWorker otomatis
+    // memindahkannya ke sana saat merapikan gudang normal. Cek WEAPONS_CHEST DULU (rumah baku
+    // sungguhan), baru TOOLS_CHEST sebagai cadangan kalau-kalau belum sempat dipindah.
     if (!adapter.hasItem('diamond_sword')) {
-      const toolsPos = parseChestPositionKey(TOOLS_CHEST);
-      const result = await adapter.withdrawFromChest(toolsPos, ['diamond_sword'], 1);
+      const weaponsPos = parseChestPositionKey(WEAPONS_CHEST);
+      let result = await adapter.withdrawFromChest(weaponsPos, ['diamond_sword'], 1);
+      if (result.withdrawn === 0) {
+        const toolsPos = parseChestPositionKey(TOOLS_CHEST);
+        result = await adapter.withdrawFromChest(toolsPos, ['diamond_sword'], 1);
+      }
       if (result.withdrawn > 0) {
-        log('Ambil diamond_sword ter-enchant dari TOOLS_CHEST gudang.');
+        log('Ambil diamond_sword ter-enchant dari gudang.');
       } else {
-        log('PERINGATAN: diamond_sword tidak ditemukan di TOOLS_CHEST - lanjut dengan senjata seadanya di tas.');
+        log('PERINGATAN: diamond_sword tidak ditemukan di WEAPONS_CHEST maupun TOOLS_CHEST - lanjut dengan senjata seadanya di tas.');
       }
     }
 
