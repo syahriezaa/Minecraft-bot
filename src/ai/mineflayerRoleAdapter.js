@@ -293,12 +293,16 @@ class MineflayerRoleAdapter {
     // dan bot menutup peti dan lihat di antara 2 log itu" - supaya waktu yang dihabiskan SELAMA
     // satu chest terbuka (settle-poll, probe verifikasi, withdraw/deposit) kelihatan jelas dan
     // terpisah dari waktu navigasi ke chest berikutnya (yang sudah dilaporkan lewat log navigasi).
-    this.options.log(`[Chest] Dibuka (${pos.x},${pos.y},${pos.z})`);
+    // Tag mengikuti jenis blok SUNGGUHAN (chest vs barrel) - permintaan nyata pemilik: "bot belum
+    // bisa membedakan peti dan barel" - dulu SEMUA container dilaporkan sebagai "[Chest]" walau
+    // yang dibuka sebenarnya barrel, jadi log saja tidak bisa dipakai untuk tahu jenis wadahnya.
+    const tag = block.name === 'barrel' ? 'Barrel' : 'Chest';
+    this.options.log(`[${tag}] Dibuka (${pos.x},${pos.y},${pos.z})`);
     await this.waitForStableChestItems(chest);
     if (typeof chest?.close === 'function') {
       const originalClose = chest.close.bind(chest);
       chest.close = (...args) => {
-        this.options.log(`[Chest] Ditutup (${pos.x},${pos.y},${pos.z}) - ${Date.now() - openStart}ms sejak dibuka`);
+        this.options.log(`[${tag}] Ditutup (${pos.x},${pos.y},${pos.z}) - ${Date.now() - openStart}ms sejak dibuka`);
         return originalClose(...args);
       };
     }

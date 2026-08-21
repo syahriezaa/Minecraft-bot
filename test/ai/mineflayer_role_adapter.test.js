@@ -805,6 +805,24 @@ describe('MineflayerRoleAdapter.openChestAt - harus beri jeda singkat setelah wi
     assert.ok(logMessages.indexOf(openedLog) < logMessages.indexOf(closedLog), 'log "Dibuka" harus muncul SEBELUM log "Ditutup"');
   });
 
+  it('log buka/tutup HARUS membedakan chest sungguhan dari barrel - permintaan nyata pemilik: "bot belum bisa membedakan peti dan barel" - dulu SEMUA container (chest ATAUPUN barrel) dilaporkan dengan tag "[Chest]" yang sama, jadi tidak mungkin tahu dari log saja jenis wadah apa yang sebenarnya sedang dibuka bot', async () => {
+    const logMessages = [];
+    const bot = {
+      entity: { position: { x: 0, y: 64, z: 0 } },
+      pathfinder: { goto: async () => {} },
+      blockAt: () => ({ name: 'barrel', position: { x: 5, y: 64, z: 5 } }),
+      openChest: async () => ({ containerItems: () => [], close: () => {} })
+    };
+    const adapter = new MineflayerRoleAdapter(bot, { chestSettleMs: 5, log: (m) => logMessages.push(m) });
+
+    const chest = await adapter.openChestAt({ x: 5, y: 64, z: 5 });
+    chest.close();
+
+    assert.ok(logMessages.some((m) => m.includes('[Barrel]') && m.includes('Dibuka')), 'log "Dibuka" untuk blok barrel harus bertag "[Barrel]", bukan "[Chest]"');
+    assert.ok(logMessages.some((m) => m.includes('[Barrel]') && m.includes('Ditutup')), 'log "Ditutup" untuk blok barrel harus bertag "[Barrel]", bukan "[Chest]"');
+    assert.ok(!logMessages.some((m) => m.includes('[Chest]')), 'tidak boleh ada log "[Chest]" sama sekali kalau yang dibuka sungguhan barrel');
+  });
+
   it('harus TERUS membaca ulang isi chest sampai dua bacaan berturut-turut SAMA (bukan cuma tunggu sekali lalu percaya) - kalau lag server lebih lama dari chestSettleMs, satu jeda tunggal saja bisa masih membaca data lama/belum lengkap - ditemukan dari keluhan nyata pemilik: item yang salah tempat tetap tidak diambil karena data chest yang dibaca belum ter-update saat dicocokkan dengan kategori seharusnya', async () => {
     let callCount = 0;
     const readings = [
