@@ -101,6 +101,13 @@ function startMobFarmWorker({
     adapter = new MineflayerRoleAdapter(bot);
     sharedChestAssignments = getSharedChestAssignments(log);
 
+    // Klik bed terdekat SEBELUM lanjut - sama seperti worker lain (runFarmerWorker.js dst) - tanpa
+    // ini, bot ini selalu mulai dari world spawn setiap restart, TIDAK PERNAH mengingat posisi
+    // (bahkan setelah pemilik teleport manual ke dekat spawner) - celah nyata yang ditemukan sesi
+    // ini, tidak sengaja terlewat saat file ini pertama dibuat.
+    const bedResult = await adapter.setSpawnAtNearestBed();
+    log(bedResult ? 'Spawn point diset di bed dekat base.' : 'Tidak ada bed dalam jangkauan - spawn point tidak diubah.');
+
     // Ambil diamond_sword ter-enchant SEBELUM berangkat - permintaan nyata pemilik: "aku telah
     // menaruh diamond sword ter enchant untuk itu di barel tools di gudang". TERNYATA (dikonfirmasi
     // live) pedang ini sudah dipindah StorageWorker ke WEAPONS_CHEST, bukan TOOLS_CHEST - rumah
