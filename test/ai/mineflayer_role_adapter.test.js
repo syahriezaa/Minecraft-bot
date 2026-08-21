@@ -745,4 +745,60 @@ describe('MineflayerRoleAdapter.openChestAt - harus beri jeda singkat setelah wi
     assert.ok(callCount >= 3, `harus membaca ulang sampai stabil (minimal 3x baca), tapi cuma ${callCount}x`);
     assert.deepEqual(items, [{ name: 'dirt', count: 1 }, { name: 'ink_sac', count: 3 }], 'harus pakai bacaan yang SUDAH stabil, bukan bacaan pertama yang masih berubah');
   });
+
+  it('TIDAK BOLEH menyerah setelah jumlah percobaan tetap (dulu 4x) kalau data masih terus berubah - harus terus menunggu sampai batas WAKTU (bukan jumlah percobaan) benar-benar habis - permintaan nyata pemilik: "bot nya membuka peti belum menerima data baru sudah pergi...bot jangan boleh pergi sebelum menerima data baru" - lag server yang panjang bisa saja butuh lebih dari 4x percobaan sebelum benar-benar stabil; menyerah gara-gara batas JUMLAH (bukan batas waktu) berarti bot bisa pergi membawa data yang masih basi', async () => {
+    let callCount = 0;
+    // 7 bacaan yang TERUS berubah (lebih dari batas lama 4x percobaan), baru stabil di bacaan ke-8.
+    const readings = [
+      [{ name: 'a', count: 1 }],
+      [{ name: 'a', count: 2 }],
+      [{ name: 'a', count: 3 }],
+      [{ name: 'a', count: 4 }],
+      [{ name: 'a', count: 5 }],
+      [{ name: 'a', count: 6 }],
+      [{ name: 'a', count: 7 }],
+      [{ name: 'a', count: 7 }] // baru stabil di sini (bacaan ke-8, setelah 7x perubahan)
+    ];
+    const bot = {
+      entity: { position: { x: 0, y: 64, z: 0 } },
+      pathfinder: { goto: async () => {} },
+      blockAt: () => ({ name: 'chest', position: { x: 5, y: 64, z: 5 } }),
+      openChest: async () => ({
+        containerItems: () => {
+          const result = readings[Math.min(callCount, readings.length - 1)];
+          callCount += 1;
+          return result;
+        },
+        close: () => {}
+      })
+    };
+    // Jeda antar-baca sangat singkat (5ms) supaya tes ini cepat, tapi batas WAKTU total (bukan
+    // jumlah percobaan) diberi cukup ruang (200ms) untuk menampung 8 kali baca @5ms.
+    const adapter = new MineflayerRoleAdapter(bot, { chestSettleMs: 5, chestSettleTimeoutMs: 200 });
+
+    const items = await adapter.getChestContents({ x: 5, y: 64, z: 5 });
+
+    assert.ok(callCount >= 8, `harus tetap membaca ulang melewati batas 4x percobaan lama selama batas waktu belum habis, tapi cuma ${callCount}x baca`);
+    assert.deepEqual(items, [{ name: 'a', count: 7 }], 'harus pakai bacaan yang SUDAH benar-benar stabil, bukan menyerah di percobaan ke-4 dengan data yang masih basi');
+  });
+
+  it('kalau data TERUS berubah sampai batas WAKTU benar-benar habis (lag server ekstrem, tidak pernah stabil), harus LAPOR lewat log() - permintaan nyata pemilik: "give it real log when failed mendapatkan data baru" - jangan gagal diam-diam, supaya pemilik bisa lihat buktinya sendiri di feed dashboard kalau ini sungguhan terjadi', async () => {
+    let callCount = 0;
+    const bot = {
+      entity: { position: { x: 0, y: 64, z: 0 } },
+      pathfinder: { goto: async () => {} },
+      blockAt: () => ({ name: 'chest', position: { x: 5, y: 64, z: 5 } }),
+      openChest: async () => ({
+        // Data TIDAK PERNAH stabil - tiap baca selalu beda (count naik terus tanpa henti).
+        containerItems: () => { callCount += 1; return [{ name: 'a', count: callCount }]; },
+        close: () => {}
+      })
+    };
+    const logMessages = [];
+    const adapter = new MineflayerRoleAdapter(bot, { chestSettleMs: 5, chestSettleTimeoutMs: 30, log: (m) => logMessages.push(m) });
+
+    await adapter.getChestContents({ x: 5, y: 64, z: 5 });
+
+    assert.ok(logMessages.some((m) => m.includes('PERINGATAN') && m.includes('belum juga stabil')), 'harus melaporkan lewat log() bahwa data gagal stabil dalam batas waktu - bukti nyata, bukan gagal diam-diam');
+  });
 });

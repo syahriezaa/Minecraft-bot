@@ -273,17 +273,33 @@ class MineflayerRoleAdapter {
   // BERTURUT-TURUT benar-benar sama, baru anggap stabil - ditemukan dari keluhan nyata pemilik:
   // item salah tempat tetap tidak diambil karena data yang dicocokkan ke kategori seharusnya
   // belum ter-update saat chest baru saja dibuka.
+  //
+  // Batas berhenti menunggu dulu berupa JUMLAH percobaan tetap (4x) - ternyata masih bisa
+  // menyerah terlalu dini kalau lag server panjang butuh lebih dari 4 kali baca sebelum stabil,
+  // membuat bot "pergi" (lanjut ke aksi berikutnya) sambil masih membawa data yang basi -
+  // ditemukan dari keluhan nyata pemilik: "bot nya membuka peti belum menerima data baru sudah
+  // pergi...bot jangan boleh pergi sebelum menerima data baru". Sekarang batasnya WAKTU total
+  // (chestSettleTimeoutMs, default 10 detik) - selama waktu itu belum habis, TERUS baca ulang
+  // berapa kalipun perlu, tidak dibatasi jumlah percobaan tetap.
   async waitForStableChestItems(chest) {
     if (typeof chest?.containerItems !== 'function' || !(this.options.chestSettleMs > 0)) return;
-    const maxAttempts = this.options.chestSettleMaxAttempts ?? 4;
+    const timeoutMs = this.options.chestSettleTimeoutMs ?? 10000;
+    const deadline = Date.now() + timeoutMs;
     const snapshot = (items) => items.map((it) => `${it.name}x${it.count}`).sort().join('|');
     let previous = snapshot(chest.containerItems());
-    for (let i = 0; i < maxAttempts; i++) {
+    let attempts = 0;
+    while (Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, this.options.chestSettleMs));
+      attempts += 1;
       const current = snapshot(chest.containerItems());
       if (current === previous) return;
       previous = current;
     }
+    // Batas WAKTU habis dan data MASIH terus berubah tiap dibaca - laporkan dengan jelas (dulu
+    // ini gagal DIAM-DIAM, pemilik tidak percaya kejadiannya sungguhan sampai diminta bukti log
+    // nyata) - dipakai adapter/engine yang memanggil ini sebagai sinyal bahwa bacaan berikutnya
+    // masih mungkin belum benar-benar final.
+    this.options.log(`[Verifikasi chest] PERINGATAN: data belum juga stabil setelah ${attempts}x baca ulang dalam ${timeoutMs}ms (lag server terlalu panjang) - lanjut pakai bacaan terakhir, mungkin belum benar-benar final.`);
   }
 
   // Cari chest di sekitar yang SUDAH berisi salah satu dari itemNames - dipakai FarmerEngine
