@@ -174,6 +174,63 @@ const POTATO_CHEST = '-181,74,-350';
 const LOGS_CHEST = '-181,74,-347';
 const RARE_DROPS_CHEST = '-181,74,-345';
 
+// Nama kategori manusiawi per posisi chest - permintaan nyata pemilik: "di ui tampilan peti nya
+// rapikan urut baris dan kolom nya dan berikan nama kategorinya". `mirror: false` untuk barel
+// (armor/buku/perkakas/cadangan) karena barel TIDAK PERNAH menyatu fisik dengan blok lain (lihat
+// koreksi besar di atas dekat PROCESSED_ORE_CHEST) - x=-180 di posisi yang sama TIDAK mewarisi
+// label barel itu. Chest sungguhan (bukan barel) mewarisi label yang SAMA ke pasangan double-
+// chest fisiknya di x+1 (mis. -181 -> -180) supaya dashboard menampilkan satu wadah fisik sebagai
+// satu kategori, bukan dua nama berbeda untuk dua separuh chest yang sama.
+const CHEST_CATEGORIES = [
+  { pos: PROCESSED_ORE_CHEST, label: 'Bahan Berharga (Ore Olahan)' },
+  { pos: RAW_ORE_CHEST, label: 'Bijih Mentah' },
+  { pos: RAW_ORE_OVERFLOW_CHEST, label: 'Cadangan Bijih Mentah', mirror: false },
+  { pos: PROCESSED_ORE_OVERFLOW_CHEST, label: 'Cadangan Bahan Berharga' },
+  { pos: NETHER_MATERIALS_CHEST, label: 'Material Nether' },
+  { pos: STONE_COBBLE_CHEST, label: 'Batu & Cobblestone' },
+  { pos: MOB_DROPS_OVERFLOW_CHEST, label: 'Cadangan Drop Mob' },
+  { pos: SEEDS_OVERFLOW_CHEST, label: 'Cadangan Benih' },
+  { pos: STONE_COBBLE_OVERFLOW_CHEST, label: 'Cadangan Batu & Cobblestone' },
+  { pos: ARMOR_CHEST, label: 'Armor', mirror: false },
+  { pos: MOB_DROPS_CHEST, label: 'Drop Mob' },
+  { pos: BOOKS_CHEST, label: 'Buku', mirror: false },
+  { pos: BOOKS_OVERFLOW_CHEST, label: 'Cadangan Buku', mirror: false },
+  { pos: TOOLS_CHEST, label: 'Perkakas', mirror: false },
+  { pos: FOOD_CHEST, label: 'Makanan' },
+  { pos: RAILS_MINECART_CHEST, label: 'Rel & Minecart' },
+  { pos: WEAPONS_CHEST, label: 'Senjata' },
+  { pos: SEEDS_CHEST, label: 'Benih' },
+  { pos: FARMING_BYPRODUCTS_CHEST, label: 'Hasil Sampingan Panen' },
+  { pos: SAPLINGS_PLANTS_CHEST, label: 'Bibit & Tanaman' },
+  { pos: WOOD_BLOCKS_CHEST, label: 'Kayu Olahan' },
+  { pos: WOOD_BLOCKS_OVERFLOW_CHEST, label: 'Cadangan Kayu Olahan', mirror: false },
+  { pos: TRINKETS_CHEST, label: 'Pernak-pernik' },
+  { pos: BUILDING_MATERIALS_CHEST, label: 'Bahan Bangunan' },
+  { pos: WHEAT_CHEST, label: 'Gandum' },
+  { pos: CARROT_CHEST, label: 'Wortel' },
+  { pos: PLANKS_CHEST, label: 'Papan Kayu' },
+  { pos: UTILITY_BLOCKS_CHEST, label: 'Blok Utilitas' },
+  { pos: DIRT_SAND_CHEST, label: 'Tanah & Pasir' },
+  { pos: POTATO_CHEST, label: 'Kentang' },
+  { pos: LOGS_CHEST, label: 'Kayu Gelondongan (Log)' },
+  { pos: RARE_DROPS_CHEST, label: 'Drop Langka' }
+];
+
+function buildChestCategoryLabels() {
+  const labels = {};
+  for (const { pos, label, mirror } of CHEST_CATEGORIES) {
+    labels[pos] = label;
+    if (mirror !== false) {
+      const [x, y, z] = pos.split(',').map(Number);
+      const mirrorKey = `${x + 1},${y},${z}`;
+      if (!(mirrorKey in labels)) labels[mirrorKey] = label;
+    }
+  }
+  return labels;
+}
+
+const CHEST_CATEGORY_LABELS = buildChestCategoryLabels();
+
 const CANONICAL_GEAR_ASSIGNMENTS = {
   // Buku & catatan
   enchanted_book: BOOKS_CHEST, book: BOOKS_CHEST, bookshelf: BOOKS_CHEST,
@@ -477,7 +534,7 @@ function startStorageWorker({ host, port, botName, scanRadius = 48, baseGoal = D
   };
 }
 
-module.exports = { startStorageWorker };
+module.exports = { startStorageWorker, CHEST_CATEGORY_LABELS };
 
 if (require.main === module) {
   startStorageWorker({

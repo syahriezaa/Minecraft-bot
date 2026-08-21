@@ -27,7 +27,7 @@ const { DeepSeekClient } = require('../ai/deepseekClient');
 const { startFarmerWorker } = require('../ai/runFarmerWorker');
 const { startGuardWorker } = require('../ai/runGuardWorker');
 const { startRancherWorker } = require('../ai/runRancherWorker');
-const { startStorageWorker } = require('../ai/runStorageWorker');
+const { startStorageWorker, CHEST_CATEGORY_LABELS } = require('../ai/runStorageWorker');
 
 const app = express();
 const server = http.createServer(app);
@@ -540,6 +540,13 @@ app.post('/api/storage/start', (req, res) => {
   storageWorkers.set(name, handle);
 
   res.json({ success: true, data: { message: `Kuartermaster '${name}' dimulai` } });
+});
+
+// Nama kategori manusiawi per posisi chest (statis, tidak berubah selama proses berjalan) -
+// permintaan nyata pemilik: "di ui tampilan peti nya rapikan urut baris dan kolom nya dan
+// berikan nama kategorinya" - dashboard butuh peta ini untuk melabeli tiap kartu chest.
+app.get('/api/storage/categories', (req, res) => {
+  res.json({ success: true, data: { categories: CHEST_CATEGORY_LABELS } });
 });
 
 app.get('/api/storage/compliance', (req, res) => {

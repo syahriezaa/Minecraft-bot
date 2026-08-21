@@ -415,10 +415,32 @@ body {
 .compliance-arrow { color: var(--text-faint); margin: 0 4px; }
 
 /* ── Peta Isi Gudang ─────────────────────────────────────────── */
+/* Grid baris x kolom mengikuti tata letak fisik ruang gudang sungguhan - satu "baris rak" per
+   ketinggian (Y) + sisi lorong (X), kartu di dalamnya berjajar sepanjang kolom (Z) - permintaan
+   nyata pemilik: "rapikan urut baris dan kolom nya dan berikan nama kategorinya". */
 .chest-map-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: 0.7rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+.chest-map-aisle {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.chest-map-aisle-label {
+  font-family: var(--mono);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  text-transform: uppercase;
+}
+.chest-map-aisle-row {
+  display: flex;
+  gap: 0.6rem;
+  overflow-x: auto;
+  padding-bottom: 0.3rem;
 }
 .chest-map-card {
   background: var(--surface-2);
@@ -428,6 +450,8 @@ body {
   display: flex;
   flex-direction: column;
   gap: 0.4rem;
+  flex: 0 0 220px;
+  width: 220px;
 }
 .chest-map-card-dirty { border-color: var(--bad); }
 .chest-map-card-header {
@@ -436,7 +460,8 @@ body {
   justify-content: space-between;
   gap: 0.5rem;
 }
-.chest-map-pos { font-family: var(--mono); font-size: 0.78rem; color: var(--text); font-weight: 600; }
+.chest-map-category { color: var(--text); font-weight: 700; font-size: 0.78rem; overflow-wrap: anywhere; }
+.chest-map-pos { font-family: var(--mono); font-size: 0.68rem; color: var(--text-faint); font-weight: 500; }
 .chest-map-badge {
   padding: 2px 7px;
   border-radius: var(--radius-sm);
