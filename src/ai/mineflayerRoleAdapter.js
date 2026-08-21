@@ -139,34 +139,31 @@ class MineflayerRoleAdapter {
 
   // Kejar entity yang BERGERAK (mob hostile) pakai GoalFollow dinamis, BUKAN GoalNear statis ke
   // posisi sesaat - ditemukan dari keluhan nyata pemilik: "ketika kena hit dia tidak maju lagi".
-  // GoalNear/goto() menghitung rute ke SATU titik tetap lalu berhenti mengevaluasi ulang sampai
+  // GoalNear/goto() menghitung rute ke SATU titik tetap dan tidak pernah dievaluasi ulang sampai
   // selesai/timeout - kalau mob terus bergerak (apalagi bot kena knockback tiap kali dipukul,
   // posisinya sendiri ikut berubah paksa di tengah jalan), goto() lama itu jadi mengejar hantu
   // (target sudah pindah) dan harus menunggu penuh sampai navigateTimeoutMs (15 detik) sebelum
-  // sempat mencoba lagi - dari luar terlihat persis "berhenti maju". GoalFollow dinamis terus
-  // mengevaluasi ulang posisi target SETIAP tick pathfinder sendiri, jauh lebih murah dan tidak
-  // perlu menunggu goto() lama selesai dulu.
-  async followEntity(entity, range = 2) {
+  // sempat mencoba lagi - dari luar terlihat persis "berhenti maju".
+  //
+  // SENGAJA TIDAK di-await/di-block sampai selesai (beda dari navigateNear) - versi PERTAMA fix
+  // ini malah membungkus GoalFollow dengan Promise.race dan menunggu penuh SETIAP tick, LALU
+  // mereset goal-nya (setGoal(null)) begitu race selesai/timeout - persis kebalikan dari tujuan
+  // GoalFollow. Ditemukan dari bug live nyata: "tetap diam aja" - status APPROACH aktif TAPI
+  // posisi bot sama sekali tidak berubah bermenit-menit, karena goal terus-menerus di-reset
+  // sebelum sempat menghasilkan gerakan apapun (setiap tick 2 detik: pasang goal, tunggu sampai
+  // 15 detik ATAU timeout, lalu buang goal-nya lagi - siklus reset tanpa akhir). GoalFollow itu
+  // SENDIRI sudah jalan otomatis di latar belakang lewat physicsTick internal pathfinder-plugin,
+  // begitu goal dipasang - caller CUKUP memasangnya lalu langsung lanjut, jangan menunggu/reset.
+  followEntity(entity, range = 2) {
     if (!entity || !this.bot?.pathfinder?.setGoal) return false;
-    const start = Date.now();
-    let timeoutHandle;
-    const timeout = new Promise((resolve) => {
-      timeoutHandle = setTimeout(() => resolve(false), this.options.navigateTimeoutMs);
-    });
-    const goalReached = new Promise((resolve) => {
-      this.bot.once('goal_reached', () => resolve(true));
-    });
     this.bot.pathfinder.setGoal(new goals.GoalFollow(entity, range), true);
-    const result = await Promise.race([goalReached, timeout]);
-    clearTimeout(timeoutHandle);
-    // Hentikan goal dinamis setelah selesai (berhasil ATAUPUN timeout) - kalau dibiarkan aktif,
-    // pathfinder terus mengejar target ini di LATAR BELAKANG tanpa henti, mengganggu goto() lain
-    // yang mau dipanggil sesudahnya (mis. retreat/deposit).
-    this.bot.pathfinder.setGoal(null);
-    if (!result) {
-      this.options.log(`[Navigasi] PERINGATAN: mengejar target bergerak timeout setelah ${Date.now() - start}ms (${this.options.navigateTimeoutMs}ms batas) - dilewati, coba lagi tick berikutnya.`);
-    }
-    return result;
+    return true;
+  }
+
+  // Hentikan goal dinamis followEntity - dipanggil begitu target sudah dalam attackRange (siap
+  // diserang) supaya pathfinder tidak terus mencoba bergerak SAAT bot sedang menebas di tempat.
+  stopFollowing() {
+    if (this.bot?.pathfinder?.setGoal) this.bot.pathfinder.setGoal(null);
   }
 
   async equipItem(names, destination = 'hand') {

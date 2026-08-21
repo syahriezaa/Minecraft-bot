@@ -136,10 +136,17 @@ class MobFarmEngine extends EventEmitter {
       // pemilik: "ketika kena hit dia tidak maju lagi". Target hostile terus bergerak (apalagi
       // bot sendiri kena knockback tiap dipukul), goto() ke titik statis lama jadi mengejar posisi
       // yang sudah basi dan harus menunggu penuh sampai timeout sebelum sempat mencoba lagi - dari
-      // luar terlihat seperti "berhenti maju". Lihat komentar followEntity di mineflayerRoleAdapter.js.
-      await this.adapter.followEntity(target, Math.max(1, this.options.attackRange - 0.5));
+      // luar terlihat seperti "berhenti maju". TIDAK di-await - followEntity cuma memasang goal,
+      // pathfinder-nya sendiri yang jalan otomatis di latar belakang lewat physicsTick, BUKAN
+      // menunggu sampai tercapai/timeout di sini (versi pertama begitu, malah bikin bot benar-benar
+      // diam - lihat komentar lengkap di mineflayerRoleAdapter.js: "tetap diam aja").
+      this.adapter.followEntity(target, Math.max(1, this.options.attackRange - 0.5));
       return { action: 'approach', target: type };
     }
+
+    // Sudah dalam attackRange - hentikan goal kejar-kejaran supaya pathfinder tidak menarik bot
+    // bergerak SAAT sedang menebas di tempat.
+    this.adapter.stopFollowing?.();
 
     const now = Date.now();
     if (now - this.lastAttackAt < this.options.attackCooldownMs) {
