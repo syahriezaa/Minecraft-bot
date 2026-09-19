@@ -83,10 +83,17 @@ class MineflayerRoleAdapter {
     // goal aktif satu sama lain dan meninggalkan worker tanpa bekal.
     this.navigationTail = Promise.resolve();
     this.activeNavigation = null;
+    this.actionInterruptReason = null;
+    this.taskProgressReporter = () => {};
+    this.workProgressSequence = 0;
     this.spatialPlanner = new LocalSpatialPlanner(pos => typeof bot?.blockAt === 'function' ? bot.blockAt(asVec3(pos)) : null);
     this.sharedWorldObserver = options.sharedWorld === false ? null : attachSharedWorldObserver(bot, {
+      store: options.sharedWorldStore,
       log: options.log || console.warn,
       coordinateMovement: options.coordinateMovement !== false,
+      spatialSampling: options.spatialSampling !== false,
+      occupancyIntervalMs: options.occupancyIntervalMs,
+      flushIntervalMs: options.flushIntervalMs,
       agent: {
         id: options.agentId || bot?.username || 'worker',
         capabilities: options.capabilities || ['generic'],
@@ -97,6 +104,38 @@ class MineflayerRoleAdapter {
 
   getPosition() {
     return this.bot?.entity?.position || { x: 0, y: 64, z: 0 };
+  }
+
+  cancelActiveActions(reason = 'INTERRUPTED') {
+    this.actionInterruptReason = reason;
+    this.activeNavigation?.cancel?.(reason);
+    this.bot?.pathfinder?.setGoal?.(null);
+    this.bot?.stopDigging?.();
+    try { this.bot?.currentWindow?.close?.(); } catch {}
+    this.bot?.clearControlStates?.();
+  }
+
+  clearActionInterrupt() { this.actionInterruptReason = null; }
+
+  setTaskProgressReporter(reporter) {
+    this.taskProgressReporter = typeof reporter === 'function' ? reporter : () => {};
+  }
+
+  reportTaskProgress(action, details = {}) {
+    const observed = { action, ...details };
+    if (['BLOCK_DUG', 'BLOCK_PLACED', 'SEED_PLANTED', 'ITEMS_WITHDRAWN', 'ITEMS_DEPOSITED'].includes(action)) {
+      observed.progressSequence = ++this.workProgressSequence;
+      // The parent watchdog must receive successful actions even without a global task lease.
+      this.options.log?.(`WORK_EVENT ${JSON.stringify(observed)}`);
+    }
+    try { this.taskProgressReporter(observed); } catch {}
+  }
+
+  assertActionsAllowed(signal) {
+    if (!signal?.aborted && !this.actionInterruptReason) return;
+    const error = new Error(String(signal?.reason || this.actionInterruptReason || 'Aksi dibatalkan.'));
+    error.name = 'AbortError';
+    throw error;
   }
 
   getHealth() {
@@ -137,7 +176,7 @@ class MineflayerRoleAdapter {
   // dari snapshot dunia masing-masing lalu menghasilkan panen parsial.
   acquireSharedReservation(positions) {
     const hold = this.sharedWorldObserver?.actions?.hold;
-    if (typeof hold !== 'function') return undefined;
+    if (typeof hold !== 'function') return null;
     try { return hold(positions); }
     catch (error) {
       this.options.log(`[Reservasi] Objek kerja sedang dipakai worker lain: ${error.message}`);
@@ -151,13 +190,16 @@ class MineflayerRoleAdapter {
     this.navigationTail = new Promise(resolve => { release = resolve; });
     await previous.catch(() => false);
     try {
-      return await this._navigateNear(pos, range, options);
+      const reached = await this._navigateNear(pos, range, options);
+      if (reached) this.reportTaskProgress('NAVIGATED', { position: { x: pos.x, y: pos.y, z: pos.z } });
+      return reached;
     } finally {
       release();
     }
   }
 
   async _navigateNear(pos, range = this.options.defaultGoalRange, options = {}) {
+    this.assertActionsAllowed(options.signal);
     if (!pos) return false;
     if (this.activeNavigation && !this.activeNavigation.settled) {
       this.bot?.pathfinder?.setGoal?.(null);
@@ -196,6 +238,7 @@ class MineflayerRoleAdapter {
       const navigateTimeoutMs = Math.max(1, Number(options.timeoutMs) || this.options.navigateTimeoutMs);
       let timeoutHandle;
       let cancelled = false;
+      let removeAbortListener = () => {};
       const timeout = new Promise((resolve) => {
           timeoutHandle = setTimeout(() => { cancelled = true; this.bot.pathfinder.setGoal?.(null); resolve(false); }, navigateTimeoutMs);
       });
@@ -215,7 +258,7 @@ class MineflayerRoleAdapter {
           if (coordinator && spatialPath && exclusions) exclusions.push(routeOnly);
           try {
             for (const point of points) {
-              if (cancelled) return false;
+              if (cancelled || options.signal?.aborted) return false;
               const goal = options.goalXZOnly && !spatialPath && goals.GoalNearXZ
                 ? new goals.GoalNearXZ(point.x, point.z, destinationRange)
                 : new goals.GoalNear(point.x, point.y, point.z, spatialPath ? 0 : destinationRange);
@@ -241,7 +284,10 @@ class MineflayerRoleAdapter {
         // asynchronous; menunggu sebentar di sini mencegah dua goal saling
         // membatalkan dan menghasilkan "The goal was changed..." berantai.
         movePromise = Promise.resolve().then(move);
-        const activeNavigation = { promise: movePromise, settled: false, warned: false };
+        const activeNavigation = {
+          promise: movePromise, settled: false, warned: false,
+          cancel: () => { cancelled = true; this.bot.pathfinder.setGoal?.(null); }
+        };
         this.activeNavigation = activeNavigation;
         movePromise.then(() => {
           activeNavigation.settled = true;
@@ -250,7 +296,15 @@ class MineflayerRoleAdapter {
           activeNavigation.settled = true;
           if (this.activeNavigation === activeNavigation) this.activeNavigation = null;
         });
-        result = await Promise.race([movePromise, timeout]);
+        const interrupted = options.signal ? new Promise(resolve => {
+          const onAbort = () => { cancelled = true; this.bot.pathfinder.setGoal?.(null); resolve(false); };
+          if (options.signal.aborted) onAbort();
+          else {
+            options.signal.addEventListener('abort', onAbort, { once: true });
+            removeAbortListener = () => options.signal.removeEventListener('abort', onAbort);
+          }
+        }) : new Promise(() => {});
+        result = await Promise.race([movePromise, timeout, interrupted]);
         if (cancelled) {
           await Promise.race([
             movePromise.catch(() => false),
@@ -265,8 +319,10 @@ class MineflayerRoleAdapter {
         this.options.log(`[Navigasi] Target (${pos.x},${pos.y},${pos.z}) gagal: ${error.message} - dilewati.`);
       } finally {
         clearTimeout(timeoutHandle);
+        removeAbortListener();
         if (!result) this.bot.pathfinder.setGoal?.(null);
       }
+      this.assertActionsAllowed(options.signal);
       if (!result) {
         // Dulu gagal DIAM-DIAM tanpa jejak sama sekali - ditemukan dari keluhan nyata pemilik
         // ("kok bisa berjarak beberapa menit padahal harusnya kurang dari 5 detik") saat jeda
@@ -430,7 +486,8 @@ class MineflayerRoleAdapter {
     return null;
   }
 
-  async dig(block, { collectDrops = true, allowNavigation = true } = {}) {
+  async dig(block, { collectDrops = true, allowNavigation = true, signal } = {}) {
+    this.assertActionsAllowed(signal);
     if (!block || typeof this.bot?.dig !== 'function') return false;
     const pos = block.position || block;
     const directFromStance = this.bot.canDigBlock?.(block) && this.bot.canSeeBlock?.(block);
@@ -444,7 +501,8 @@ class MineflayerRoleAdapter {
     // merely because collectDrops is enabled; that creates false access
     // failures after the first reachable log.
     const reachableFromStance = directFromStance || (collectDrops && isWoodLog && directFromStance);
-    if (!reachableFromStance && (!allowNavigation || !await this.navigateNear(pos, 3))) return false;
+    if (!reachableFromStance && (!allowNavigation || !await this.navigateNear(pos, 3, { signal }))) return false;
+    this.assertActionsAllowed(signal);
     // Some protocol-775 item components expose malformed enchantment data. Mineflayer's
     // digTime expects an iterable here; preserve the normal calculation and fall back to the
     // same vanilla block calculation with no enchantment bonus when that component is invalid.
@@ -465,19 +523,27 @@ class MineflayerRoleAdapter {
     try { await this.bot.dig(block); } finally {
       if (patchedDigTime) this.bot.digTime = originalDigTime;
     }
+    this.reportTaskProgress('BLOCK_DUG', { block: block.name, position: { x: pos.x, y: pos.y, z: pos.z } });
+    this.assertActionsAllowed(signal);
     // Barang hasil gali (mis. panen crop) jatuh sebagai item entity di tanah - jarak 3 blok cukup
     // untuk menggali tapi TIDAK cukup dekat untuk memicu pickup otomatis Minecraft. Mendekat sampai
     // benar-benar menginjak posisi blok (range 0) supaya barangnya ikut terambil, bukan ditinggalkan.
-    if (collectDrops && !isWoodLog) await this.navigateNear(pos, 0);
+    if (collectDrops && !isWoodLog) await this.navigateNear(pos, 0, { signal });
+    this.assertActionsAllowed(signal);
     return true;
   }
 
   async placeSeed(referenceBlock, seedName) {
+    this.assertActionsAllowed();
     if (!referenceBlock || !seedName || typeof this.bot?.placeBlock !== 'function') return false;
     const equipped = await this.equipItem(seedName, 'hand');
     if (!equipped) return false;
+    this.assertActionsAllowed();
     if (!await this.navigateNear(referenceBlock.position || referenceBlock, 3)) return false;
+    this.assertActionsAllowed();
     await this.bot.placeBlock(referenceBlock, new Vec3(0, 1, 0));
+    this.assertActionsAllowed();
+    this.reportTaskProgress('SEED_PLANTED', { seed: seedName });
     return true;
   }
 
@@ -492,33 +558,42 @@ class MineflayerRoleAdapter {
   // sungguhan cuma naik satu level per klik, dan kita tidak mau membanjiri satu composter dengan
   // seluruh isi tas dalam satu tick (biarkan FarmerEngine yang atur berapa kali panggil per tick).
   async feedComposter(pos, itemNames) {
+    this.assertActionsAllowed();
     if (!pos || typeof this.bot?.activateBlock !== 'function') return false;
     const equipped = await this.equipItem(itemNames, 'hand');
     if (!equipped) return false;
-    await this.navigateNear(pos, 3);
+    if (!await this.navigateNear(pos, 3)) return false;
+    this.assertActionsAllowed();
     const block = this.blockAt(pos);
     if (!block) return false;
     await this.bot.activateBlock(block);
+    this.assertActionsAllowed();
     return true;
   }
 
   async tillFarmland(pos) {
+    this.assertActionsAllowed();
     if (!pos || typeof this.bot?.activateBlock !== 'function') return false;
     const equipped = await this.equipItem(HOE_NAMES, 'hand');
     if (!equipped) return false;
     if (!await this.navigateNear({ ...pos, y: pos.y + 1 }, 3)) return false;
+    this.assertActionsAllowed();
     const block = this.blockAt(pos);
     if (!block) return false;
     await this.bot.activateBlock(block);
+    this.assertActionsAllowed();
     return true;
   }
 
   async toggleDoor(pos) {
+    this.assertActionsAllowed();
     if (!pos || typeof this.bot?.activateBlock !== 'function') return false;
     if (!await this.navigateNear(pos, 3)) return false;
+    this.assertActionsAllowed();
     const block = this.blockAt(pos);
     if (!block || !String(block.name || '').endsWith('_door')) return false;
     await this.bot.activateBlock(block);
+    this.assertActionsAllowed();
     return true;
   }
 
@@ -528,6 +603,7 @@ class MineflayerRoleAdapter {
   // sendiri kosong (lubang lebih dari satu blok dalam), gagal dulu (false); tick berikutnya akan
   // coba isi level yang lebih rendah dulu (findRepairCandidates men-scan ulang tiap tick).
   async placeDirtAt(pos, itemName = 'dirt') {
+    this.assertActionsAllowed();
     if (!pos || typeof this.bot?.placeBlock !== 'function') return false;
     const equipped = await this.equipItem(itemName, 'hand');
     if (!equipped) return false;
@@ -536,7 +612,9 @@ class MineflayerRoleAdapter {
       const ref = this.blockAt({ x: pos.x + off.x, y: pos.y + off.y, z: pos.z + off.z });
       if (!ref || ['air', 'water', 'lava', 'cave_air'].includes(ref.name) || ref.boundingBox === 'empty') continue;
       if (!await this.navigateNear({ x: pos.x + off.x, y: pos.y + 1, z: pos.z + off.z }, 3)) return false;
+      this.assertActionsAllowed();
       await this.placeBlockAt(pos, ref, new Vec3(-off.x, -off.y, -off.z));
+      this.assertActionsAllowed();
       return true;
     }
     return false;
@@ -591,10 +669,12 @@ class MineflayerRoleAdapter {
   }
 
   async placeBlockAt(pos, reference, face, { facing } = {}) {
+    this.assertActionsAllowed();
     // Mengarahkan pandangan setelah melompat menghabiskan jendela placement di udara.
     if (typeof this.bot.lookAt === 'function') {
       await this.bot.lookAt(asVec3(reference.position).offset(0.5 + face.x * 0.5, 0.5 + face.y * 0.5, 0.5 + face.z * 0.5), true);
     }
+    this.assertActionsAllowed();
     if (facing) {
       const yaw = { north: Math.PI, south: 0, east: Math.PI / 2, west: -Math.PI / 2 }[facing];
       if (yaw === undefined || typeof this.bot.look !== 'function') throw new Error(`Unsupported placement facing: ${facing}`);
@@ -604,6 +684,7 @@ class MineflayerRoleAdapter {
     }
     const previousSneak = this.bot.getControlState?.('sneak') || false;
     await this.jumpBeforePlacement(pos);
+    this.assertActionsAllowed();
     const interactive = ['chest', 'trapped_chest', 'barrel', 'furnace', 'blast_furnace', 'smoker', 'crafting_table', 'hopper'].includes(reference.name);
     if (interactive && typeof this.bot.setControlState !== 'function') throw new Error('Sneak is required to place against a container.');
     if (interactive) this.bot.setControlState('sneak', true);
@@ -613,6 +694,7 @@ class MineflayerRoleAdapter {
       } else {
         await this.bot.placeBlock(reference, face);
       }
+      this.reportTaskProgress('BLOCK_PLACED', { position: { x: pos.x, y: pos.y, z: pos.z } });
     } finally {
       if (interactive) this.bot.setControlState('sneak', previousSneak);
     }
@@ -719,8 +801,10 @@ class MineflayerRoleAdapter {
   }
 
   async useOn(entity) {
+    this.assertActionsAllowed();
     if (!entity) return false;
-    await this.navigateNear(entity.position, 3);
+    if (!await this.navigateNear(entity.position, 3)) return false;
+    this.assertActionsAllowed();
     // Server ini (protokol 775, skema versi baru Mojang) mengubah bentuk paket use_entity: field
     // lama "mouse" (enum interact/attack/interact_at) DIHAPUS, diganti field "location" yang WAJIB
     // ada (bertipe lpVec3 - objek {x,y,z}, BUKAN opsional). bot.activateEntity() DAN
@@ -732,6 +816,7 @@ class MineflayerRoleAdapter {
     // mineflayer yang belum diperbarui untuk versi Minecraft ini.
     if (this.bot?._client?.write) {
       await this.lookAt(entity.position);
+      this.assertActionsAllowed();
       this.bot._client.write('use_entity', {
         target: entity.id,
         hand: 0, // main_hand
@@ -742,22 +827,27 @@ class MineflayerRoleAdapter {
     }
     if (typeof this.bot?.activateEntityAt === 'function') {
       await this.bot.activateEntityAt(entity, entity.position);
+      this.assertActionsAllowed();
       return true;
     }
     if (typeof this.bot?.activateEntity === 'function') {
-      this.bot.activateEntity(entity);
+      await this.bot.activateEntity(entity);
+      this.assertActionsAllowed();
       return true;
     }
     if (typeof this.bot?.useOn === 'function') {
       await this.bot.useOn(entity);
+      this.assertActionsAllowed();
       return true;
     }
     return false;
   }
 
   async attack(entity) {
+    this.assertActionsAllowed();
     if (!entity) return false;
     await this.lookAt(entity.position);
+    this.assertActionsAllowed();
     // bot.attack() bawaan mineflayer masih memanggil useEntity() internal, yang menulis paket
     // use_entity skema LAMA (field "mouse", tanpa field "location" wajib) - crash yang sama persis
     // dengan bug useOn() yang sudah ditemukan sebelumnya, tapi lewat jalur berbeda (serangan, bukan
@@ -789,6 +879,7 @@ class MineflayerRoleAdapter {
   }
 
   async openChestAt(pos) {
+    this.assertActionsAllowed();
     const block = this.blockAt(pos);
     if (!block || typeof this.bot?.openChest !== 'function') return null;
     let reachable = await this.navigateNear(pos, 3, { sharedRoute: true });
@@ -822,6 +913,7 @@ class MineflayerRoleAdapter {
         }
       }
     }
+    this.assertActionsAllowed();
     if (!reachable) {
       this.options.log(`[Container] Navigasi gagal ke (${pos.x},${pos.y},${pos.z}); chest tidak dibuka.`);
       return null;
@@ -835,9 +927,12 @@ class MineflayerRoleAdapter {
         timer = setTimeout(() => reject(new Error(`window container timeout di (${pos.x},${pos.y},${pos.z})`)), this.options.containerOpenTimeoutMs);
       });
       chest = await Promise.race([pending, timeout]);
+      this.assertActionsAllowed();
       clearTimeout(timer);
     } catch (error) {
       clearTimeout(timer);
+      try { chest?.close?.(); } catch {}
+      if (error?.name === 'AbortError') throw error;
       this.options.log(`[Container] Gagal membuka (${pos.x},${pos.y},${pos.z}): ${error.message}`);
       return null;
     }
@@ -850,7 +945,11 @@ class MineflayerRoleAdapter {
     // yang dibuka sebenarnya barrel, jadi log saja tidak bisa dipakai untuk tahu jenis wadahnya.
     const tag = block.name === 'barrel' ? 'Barrel' : 'Chest';
     this.options.log(`[${tag}] Dibuka (${pos.x},${pos.y},${pos.z})`);
-    await this.waitForStableChestItems(chest);
+    try { await this.waitForStableChestItems(chest); }
+    catch (error) {
+      try { chest.close?.(); } catch {}
+      throw error;
+    }
     if (typeof chest?.close === 'function') {
       const originalClose = chest.close.bind(chest);
       chest.close = (...args) => {
@@ -884,6 +983,7 @@ class MineflayerRoleAdapter {
     let attempts = 0;
     while (Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, this.options.chestSettleMs));
+      this.assertActionsAllowed();
       attempts += 1;
       const current = snapshot(chest.containerItems());
       if (current === previous) return;
@@ -1023,6 +1123,7 @@ class MineflayerRoleAdapter {
     try {
       const items = chest.containerItems();
       for (const item of items) {
+        this.assertActionsAllowed();
         if (typeof chest.withdraw !== 'function') continue;
         await chest.withdraw(item.type, item.metadata ?? null, item.count);
         itemsWithdrawn += 1;
@@ -1062,6 +1163,7 @@ class MineflayerRoleAdapter {
     const results = [];
     try {
       for (const { name, count } of requests) {
+        this.assertActionsAllowed();
         const items = chest.containerItems();
         const match = items.find((it) => it.name === name);
         if (match && typeof chest.withdraw === 'function') {
@@ -1085,6 +1187,7 @@ class MineflayerRoleAdapter {
     if (!chest) return { withdrawn: 0 };
     let withdrawn = 0;
     try {
+      this.assertActionsAllowed();
       const items = chest.containerItems();
       const match = items.find((it) => itemNames.includes(it.name));
       if (match && typeof chest.withdraw === 'function') {
@@ -1097,6 +1200,7 @@ class MineflayerRoleAdapter {
     } finally {
       if (typeof chest.close === 'function') chest.close();
     }
+    if (withdrawn > 0) this.reportTaskProgress('ITEMS_WITHDRAWN', { count: withdrawn });
     return { withdrawn };
   }
 
@@ -1105,6 +1209,7 @@ class MineflayerRoleAdapter {
   // tidak ada meja atau bahan kurang, bukan crash - caller (GuardEngine) yang putuskan langkah
   // berikutnya (mis. ambil bahan dulu dari chest).
   async craftItem(itemName, count = 1) {
+    this.assertActionsAllowed();
     // Resep 2x2 seperti stone_bricks tidak membutuhkan GUI crafting table. Memakai inventory
     // crafting menghindari windowOpen/updateSlot tambahan yang pada protokol 775 kadang terlambat.
     const itemId = this.bot?.registry?.itemsByName?.[itemName]?.id ?? itemName;
@@ -1115,6 +1220,7 @@ class MineflayerRoleAdapter {
         // One call per recipe type avoids paying the timeout once for every individual craft;
         // callers verify the resulting inventory delta before treating it as successful.
         await this.bot.craft(inventoryRecipes[0], count);
+        this.assertActionsAllowed();
         return true;
       }
     }
@@ -1122,12 +1228,14 @@ class MineflayerRoleAdapter {
       ? this.bot.findBlock({ matching: (b) => b && b.name === 'crafting_table', maxDistance: 16 })
       : null;
     if (!tablePos) return false;
-    await this.navigateNear(tablePos.position, 3);
+    if (!await this.navigateNear(tablePos.position, 3)) return false;
+    this.assertActionsAllowed();
     const tableBlock = this.blockAt(tablePos.position);
     // recipesFor butuh ID numerik item (via registry), bukan nama string.
     const recipes = typeof this.bot?.recipesFor === 'function' ? this.bot.recipesFor(itemId, null, 1, tableBlock) : [];
     if (!recipes || recipes.length === 0) return false;
     await this.bot.craft(recipes[0], count, tableBlock);
+    this.assertActionsAllowed();
     return true;
   }
 
@@ -1172,6 +1280,7 @@ class MineflayerRoleAdapter {
     const depositedSoFar = new Map();
     try {
       for (const item of this.getInventoryItems()) {
+        this.assertActionsAllowed();
         if (!predicate(item)) continue;
         const reserve = maxPerItem[item.name];
         let amount = item.count || 1;
@@ -1209,6 +1318,7 @@ class MineflayerRoleAdapter {
     } finally {
       if (typeof chest.close === 'function') chest.close();
     }
+    if (deposited > 0) this.reportTaskProgress('ITEMS_DEPOSITED', { count: deposited });
     return { deposited };
   }
 }

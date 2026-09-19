@@ -8,7 +8,7 @@
 const EventEmitter = require('node:events');
 const { MineflayerRoleAdapter } = require('./mineflayerRoleAdapter');
 const { FarmerEngine } = require('./farmerEngine');
-const { AnimalHusbandryEngine } = require('./animalHusbandryEngine');
+const { AnimalHusbandryEngine, verifyAnimalFeeding } = require('./animalHusbandryEngine');
 const { MobFarmEngine } = require('./mobFarmEngine');
 const { createEngineTaskHandlers, createCooperativeAgent } = require('./cooperativeAgent');
 
@@ -45,15 +45,24 @@ class SurvivalRoleCoordinator extends EventEmitter {
         ...createEngineTaskHandlers(this.farmer, {
           SURVEY_FARM: { execute: async () => ({ action: 'survey', mature: this.farmer.findMatureCrops().length,
             plantingSpots: this.farmer.findPlantingSpots().length, repairs: this.farmer.findRepairCandidates().length }) },
-          REPAIR_FARM: { execute: async () => await this.farmer.attemptRepair() || { action: 'idle' }, actions: ['repair'], mutatesWorld: true, idleCompletes: true },
-          HARVEST: { actions: ['harvest'], mutatesWorld: true, idleCompletes: true },
-          PLANT: { actions: ['plant'], mutatesWorld: true, idleCompletes: true },
+          REPAIR_FARM: { execute: async () => {
+            const result = await this.farmer.attemptRepair();
+            if (result) return { ...result, verified: result.count > 0 };
+            const noWork = this.farmer.options.repairEnabled && this.farmer.findRepairCandidates().length === 0;
+            return { action: 'idle', verified: noWork, reason: noWork ? undefined : 'REPAIR_NO_PROGRESS' };
+          }, actions: ['repair'], mutatesWorld: true, idleCompletes: true, remaining: () => this.farmer.findRepairCandidates().length },
+          HARVEST: { actions: ['harvest'], mutatesWorld: true, idleCompletes: true, remaining: () => this.farmer.findMatureCrops().length,
+            verify: ({ result }) => Number(result?.count) > 0 },
+          PLANT: { actions: ['plant'], mutatesWorld: true, idleCompletes: true, remaining: () => this.farmer.findPlantingSpots().length,
+            verify: ({ result }) => Number(result?.count) > 0 },
           DEPOSIT_CROPS: { execute: async () => await this.farmer.runAutoMatchDeposit() || { action: 'idle' }, actions: ['deposit'], idleCompletes: true }
         }),
         ...createEngineTaskHandlers(this.animals, {
           INSPECT_ANIMALS: { execute: async () => ({ action: 'inspect', animals: this.animals.getAnimals().length }) },
-          FEED_ANIMALS: { actions: ['feed'], mutatesWorld: true, idleCompletes: true },
-          BALANCE_HERD: { actions: ['cull'], mutatesWorld: true, idleCompletes: true }
+          FEED_ANIMALS: { actions: ['feed'], mutatesWorld: true, idleCompletes: true, remaining: () => this.animals.selectFeedTargets().length,
+            verify: verifyAnimalFeeding },
+          BALANCE_HERD: { actions: ['cull'], mutatesWorld: true, idleCompletes: true, remaining: () => this.animals.selectCullTargets().length,
+            verify: ({ result }) => Number(result?.count) > 0 }
         }),
         ...createEngineTaskHandlers(this.mobFarm, {
           SURVEY_THREATS: { execute: async () => ({ action: 'survey', threats: this.mobFarm.getThreats().length }) },
@@ -64,6 +73,7 @@ class SurvivalRoleCoordinator extends EventEmitter {
     });
     this.state = ROLE_STATES.IDLE;
     this._timer = null;
+    this._tickInProgress = false;
     this.metrics = {
       ticks: 0,
       actions: []
@@ -90,7 +100,36 @@ class SurvivalRoleCoordinator extends EventEmitter {
   }
 
   async tick() {
+    if (this._tickInProgress) return { role: 'coordinator', action: 'busy' };
+    this._tickInProgress = true;
+    try { return await this._runTick(); }
+    finally { this._tickInProgress = false; }
+  }
+
+  async _runTick() {
     this.metrics.ticks++;
+
+    if (this.adapter.getHealth() <= this.options.emergencyHealth || this.adapter.getFood() <= this.options.emergencyFood) {
+      this.state = ROLE_STATES.RECOVERING;
+      const recovery = this.cooperativeRuntime
+        ? await this.cooperativeRuntime.runAutonomous(() => this.adapter.eatBestFood(), { name: 'SURVIVAL_RECOVERY', survival: true, stallTimeoutMs: 30000 })
+        : await this.adapter.eatBestFood();
+      const ate = recovery?.status ? false : recovery;
+      const result = { role: 'recovery', action: ate ? 'eat' : 'wait' };
+      this.recordAction(result);
+      return result;
+    }
+
+    if (this.options.enableMobFarm && this.mobFarm.getThreats().length > 0) {
+      this.state = ROLE_STATES.MOB_FARMING;
+      const mobResult = this.cooperativeRuntime
+        ? await this.cooperativeRuntime.runAutonomous(() => this.mobFarm.tick(), { name: 'REACTIVE_COMBAT', survival: true, stallTimeoutMs: 45000 })
+        : await this.mobFarm.tick();
+      const result = mobResult?.status ? { role: 'mob_farm', action: mobResult.status.toLowerCase(), reason: mobResult.reason }
+        : { role: 'mob_farm', ...mobResult };
+      this.recordAction(result);
+      return result;
+    }
 
     const cooperative = await this.cooperativeRuntime?.runOnce();
     if (cooperative && cooperative.status !== 'IDLE') {
@@ -99,23 +138,15 @@ class SurvivalRoleCoordinator extends EventEmitter {
       return result;
     }
 
-    if (this.adapter.getHealth() <= this.options.emergencyHealth || this.adapter.getFood() <= this.options.emergencyFood) {
-      this.state = ROLE_STATES.RECOVERING;
-      const ate = await this.adapter.eatBestFood();
-      const result = { role: 'recovery', action: ate ? 'eat' : 'wait' };
-      this.recordAction(result);
-      return result;
-    }
-
-    if (this.options.enableMobFarm && this.mobFarm.getThreats().length > 0) {
-      this.state = ROLE_STATES.MOB_FARMING;
-      const result = { role: 'mob_farm', ...(await this.mobFarm.tick()) };
-      this.recordAction(result);
-      return result;
-    }
-
     if (this.options.enableFarmer) {
-      const result = await this.farmer.tick();
+      const result = this.cooperativeRuntime
+        ? await this.cooperativeRuntime.runAutonomous(() => this.farmer.tick(), { name: 'FARMER_TICK' })
+        : await this.farmer.tick();
+      if (result?.status) {
+        const action = { role: 'farmer', action: result.status.toLowerCase(), reason: result.reason };
+        this.recordAction(action);
+        return action;
+      }
       if (result.action !== 'idle') {
         this.state = ROLE_STATES.FARMING;
         const action = { role: 'farmer', ...result };
@@ -125,7 +156,14 @@ class SurvivalRoleCoordinator extends EventEmitter {
     }
 
     if (this.options.enableAnimals) {
-      const result = await this.animals.tick();
+      const result = this.cooperativeRuntime
+        ? await this.cooperativeRuntime.runAutonomous(() => this.animals.tick(), { name: 'ANIMAL_CARE_TICK' })
+        : await this.animals.tick();
+      if (result?.status) {
+        const action = { role: 'animals', action: result.status.toLowerCase(), reason: result.reason };
+        this.recordAction(action);
+        return action;
+      }
       if (result.action !== 'idle') {
         this.state = ROLE_STATES.HUSBANDRY;
         const action = { role: 'animals', ...result };

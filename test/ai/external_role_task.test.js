@@ -18,6 +18,9 @@ test('external role mengambil task yang ditujukan kepadanya dan menyelesaikan le
     sharedWorldObserver: { taskBoard: board } };
   const lease = claimExternalRoleTask(adapter, { taskTypes: ['BUILD_STORAGE'], capabilities: ['build'] });
   assert.equal(lease.task.id, 'builder-task');
-  assert.equal(lease.complete({ built: 10 }), true);
+  assert.equal(lease.complete({ built: 10, verification: {
+    status: 'VERIFIED', observedAt: Date.now(),
+    checks: [{ name: 'blueprint_remaining_blocks', passed: true, expected: 0, actual: 0 }]
+  } }), true);
   assert.equal(board.listTasks({ goalId: goal.id })[0].status, 'COMPLETED');
 });

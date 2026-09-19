@@ -79,9 +79,13 @@ test('reservasi container bertahan sampai window ditutup', async () => {
     const chest = await bot.openChest({ name:'barrel',position:{x:0,y:0,z:0} });
     // Dua worker boleh membuka container yang sama untuk mempercepat logistik,
     // tetapi worker ketiga tetap ditahan.
-    assert.ok(b.acquire(context,['shared:cell:0,0,0']));
+    const secondOpener = b.acquire(context,['shared:cell:0,0,0']);
+    assert.ok(secondOpener);
     assert.equal(c.acquire(context,['shared:cell:0,0,0']),null);
+    assert.equal(c.acquire(context,['cell:0,0,0']),null);
     chest.close();
+    assert.equal(c.acquire(context,['cell:0,0,0']),null);
+    b.release(secondOpener);
     assert.ok(b.acquire(context,['cell:0,0,0']));
   } finally { actions.close();a.close();b.close();c.close();memory.close(); }
 });

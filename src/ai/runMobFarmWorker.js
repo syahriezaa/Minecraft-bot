@@ -243,15 +243,22 @@ function startMobFarmWorker({
     async function tick() {
       if (stopped) return;
       try {
-        const cooperative = await cooperativeRuntime?.runOnce();
-        if (cooperative && cooperative.status !== 'IDLE') {
-          lastAction = `TASK_${cooperative.status}`;
+        const combatResult = cooperativeRuntime
+          ? await cooperativeRuntime.runAutonomous(() => combatEngine.tick(), { name: 'REACTIVE_COMBAT', survival: true, stallTimeoutMs: 45000 })
+          : await combatEngine.tick();
+        if (combatResult?.status) {
+          lastAction = `KERNEL_${combatResult.status}`;
           timer = setTimeout(tick, TICK_INTERVAL_MS);
           return;
         }
-        const combatResult = await combatEngine.tick();
         lastAction = combatResult.action.toUpperCase();
         if (!['idle', 'standby'].includes(combatResult.action)) {
+          timer = setTimeout(tick, TICK_INTERVAL_MS);
+          return;
+        }
+        const cooperative = await cooperativeRuntime?.runOnce();
+        if (cooperative && cooperative.status !== 'IDLE') {
+          lastAction = `TASK_${cooperative.status}`;
           timer = setTimeout(tick, TICK_INTERVAL_MS);
           return;
         }
@@ -262,17 +269,23 @@ function startMobFarmWorker({
       // Cuma jarah/antar kalau memang sedang idle (tidak ada ancaman) - jangan buang waktu
       // membuka chest saat mob sedang mendekat.
       try {
-        const now = Date.now();
-        if (now - lastLootAttempt > 15000) {
-          lastLootAttempt = now;
-          const looted = await lootNearbyChests();
-          if (looted) lastAction = 'LOOTING';
-        }
-        const delivered = await deliverKnownItemsHome();
-        if (delivered > 0) {
-          log(`Antar ${delivered} item yang sudah dikenal pulang ke gudang.`);
-          lastAction = 'DELIVER';
-        }
+        const logistics = async () => {
+          const now = Date.now();
+          if (now - lastLootAttempt > 15000) {
+            lastLootAttempt = now;
+            const looted = await lootNearbyChests();
+            if (looted) lastAction = 'LOOTING';
+          }
+          const delivered = await deliverKnownItemsHome();
+          if (delivered > 0) {
+            log(`Antar ${delivered} item yang sudah dikenal pulang ke gudang.`);
+            lastAction = 'DELIVER';
+          }
+        };
+        const result = cooperativeRuntime
+          ? await cooperativeRuntime.runAutonomous(logistics, { name: 'LOOT_AND_DELIVER' })
+          : await logistics();
+        if (result?.status) lastAction = `KERNEL_${result.status}`;
       } catch (e) {
         log(`ERROR di tick jarah/antar (non-fatal, lanjut tick berikutnya): ${e.message}`);
       }

@@ -16,7 +16,7 @@ patchMineflayerVersionGate(SERVER_VERSION);
 const mineflayer = require('mineflayer');
 const { pathfinder, Movements } = require('mineflayer-pathfinder');
 const { MineflayerRoleAdapter } = require('./mineflayerRoleAdapter');
-const { AnimalHusbandryEngine } = require('./animalHusbandryEngine');
+const { AnimalHusbandryEngine, verifyAnimalFeeding } = require('./animalHusbandryEngine');
 const { walkToBase, SAFE_TRAVEL_TERRAIN_NAMES } = require('./walkToBase');
 const { createEngineTaskHandlers, createCooperativeAgent, runCooperativeCycle } = require('./cooperativeAgent');
 
@@ -68,7 +68,8 @@ function startRancherWorker({ host, port, botName, scanRadius = 24, baseGoal = D
     // perjalanan awal dari spawn) - pulihkan lagi supaya kerja sesudahnya tidak ikut memasang blok.
     bot.pathfinder.setMovements(buildMovements(bot));
 
-    const adapter = new MineflayerRoleAdapter(bot, { sharedWorld: false, capabilities: ['animal_care', 'haul', 'survey'] });
+    const adapter = new MineflayerRoleAdapter(bot, { spatialSampling: false, occupancyIntervalMs: 1500,
+      capabilities: ['animal_care', 'haul', 'survey'] });
 
     const bedResult = await adapter.setSpawnAtNearestBed();
     log(bedResult ? 'Spawn point diset di bed dekat base.' : 'Tidak ada bed dalam jangkauan - spawn point tidak diubah.');
@@ -81,24 +82,32 @@ function startRancherWorker({ host, port, botName, scanRadius = 24, baseGoal = D
         INSPECT_ANIMALS: { execute: async () => ({ action: 'inspect', animals: animalEngine.getAnimals().length }) },
         FEED_ANIMALS: { execute: async () => {
           const targets = animalEngine.selectFeedTargets();
+          let fed = 0;
           for (const target of targets) {
-            await adapter.equipItem(target.feed, 'hand');
-            await adapter.useOn(target.entity);
+            if (!await adapter.equipItem(target.feed, 'hand') || !await adapter.useOn(target.entity)) continue;
+            fed += 1;
             animalEngine.metrics.fed += 1;
             animalEngine.emit('fed', target);
           }
-          return targets.length ? { action: 'feed', count: targets.length } : { action: 'idle' };
-        }, actions: ['feed'], mutatesWorld: true, idleCompletes: true },
+          if (fed > 0) return { action: 'feed', count: fed, verified: true };
+          return targets.length ? { action: 'idle', verified: false, reason: 'FEED_NO_PROGRESS' } : { action: 'idle', verified: true };
+        }, actions: ['feed'], mutatesWorld: true, idleCompletes: true, remaining: () => animalEngine.selectFeedTargets().length,
+          verify: verifyAnimalFeeding },
         BALANCE_HERD: { execute: async () => {
           const targets = animalEngine.selectCullTargets();
-          if (targets.length) await adapter.equipItem(animalEngine.options.weaponNames, 'hand');
+          if (targets.length && !await adapter.equipItem(animalEngine.options.weaponNames, 'hand')) {
+            return { action: 'idle', verified: false, reason: 'WEAPON_UNAVAILABLE' };
+          }
+          let culled = 0;
           for (const target of targets) {
-            await adapter.attack(target.entity);
+            if (!await adapter.attack(target.entity)) continue;
+            culled += 1;
             animalEngine.metrics.culled += 1;
             animalEngine.emit('culled', target);
           }
-          return targets.length ? { action: 'cull', count: targets.length } : { action: 'idle' };
-        }, actions: ['cull'], mutatesWorld: true, idleCompletes: true }
+          if (culled > 0) return { action: 'cull', count: culled, verified: true };
+          return targets.length ? { action: 'idle', verified: false, reason: 'CULL_NO_PROGRESS' } : { action: 'idle', verified: true };
+        }, actions: ['cull'], mutatesWorld: true, idleCompletes: true, remaining: () => animalEngine.selectCullTargets().length }
       })
     });
     animalEngine.on('fed', ({ type, entity }) => log(`Beri makan ${type} (id ${entity.id})`));

@@ -1,6 +1,7 @@
 const EventEmitter = require('node:events');
 const { spawn } = require('node:child_process');
 const path = require('node:path');
+const { ChildProcessWatchdog, terminateChildProcess } = require('./childProcessWatchdog');
 
 const ROOT = path.resolve(__dirname, '../..');
 const RUNNER = path.join(__dirname, 'runStorageRoomGathererSwarm.js');
@@ -55,8 +56,10 @@ function normalizeMiningArea(corners = DEFAULT_CORNERS, { count = 4, floorY = 40
 class MiningFleetCoordinator extends EventEmitter {
   constructor(options = {}) {
     super();
-    this.options = { root: ROOT, runner: RUNNER, spawnProcess: spawn, orchestrator: null, ...options };
+    this.options = { root: ROOT, runner: RUNNER, spawnProcess: spawn, orchestrator: null,
+      workerProgressTimeoutMs: positiveInt(process.env.MINING_WORKER_PROGRESS_TIMEOUT_MS, 12 * 60 * 1000, 60 * 60 * 1000), ...options };
     this.child = null;
+    this.childWatchdog = null;
     this.restartTimer = null;
     this.runConfig = null;
     this.status = this._idleStatus();
@@ -87,9 +90,24 @@ class MiningFleetCoordinator extends EventEmitter {
     const child = this.options.spawnProcess(process.execPath, [this.options.runner], {
       cwd: this.options.root,
       env: config.env,
+      detached: process.platform !== 'win32',
       stdio: ['ignore', 'pipe', 'pipe']
     });
+    child._codexProcessGroup = process.platform !== 'win32';
     this.child = child;
+    this.childWatchdog = new ChildProcessWatchdog(child, {
+      timeoutMs: this.options.workerProgressTimeoutMs,
+      onStall: ({ silentForMs }) => {
+        this.status.phase = 'WATCHDOG_STOPPING';
+        this.status.lastError = `Mining worker tidak melaporkan progres selama ${Math.ceil(silentForMs / 60000)} menit; child dihentikan.`;
+        for (const worker of Object.values(this.status.workers)) {
+          if (['COMPLETE', 'BLOCKED'].includes(worker.phase)) continue;
+          worker.phase = 'NO_PROGRESS_TIMEOUT';
+          worker.reason = 'NO_PROGRESS_TIMEOUT';
+        }
+        this._recordLog('error', null, this.status.lastError);
+      }
+    });
     this.status.pid = child.pid || null;
     this.status.phase = this.status.restarts > 0 ? 'RESTARTING' : 'MINING';
     this.status.workers = Object.fromEntries(config.names.map((name, index) => ({
@@ -109,6 +127,9 @@ class MiningFleetCoordinator extends EventEmitter {
           if (workerName && marker >= 0) {
             try {
               const event = JSON.parse(message.slice(marker + 11));
+              if (event.phase === 'STARTING') this.childWatchdog?.beginSession(workerName, event.workerSession);
+              if (!this.childWatchdog?.acceptsSession(workerName, event.workerSession)) continue;
+              if (this.childWatchdog?.beat(event, workerName)) this.status.workers[workerName].lastProgressAt = new Date().toISOString();
               if (typeof event.phase === 'string') this.status.workers[workerName].phase = event.phase;
               if (Number.isFinite(Number(event.inventoryFillRatio))) this.status.workers[workerName].inventoryFillRatio = Number(event.inventoryFillRatio);
               if (Number.isInteger(event.verifiedBlocks)) this.status.workers[workerName].verifiedBlocks = event.verifiedBlocks;
@@ -123,6 +144,8 @@ class MiningFleetCoordinator extends EventEmitter {
     consume(child.stderr, 'error');
     child.on('exit', (code, signal) => {
       if (this.child !== child) return;
+      this.childWatchdog?.close();
+      this.childWatchdog = null;
       this.child = null;
       this.status.pid = null;
       if (this.status.phase === 'STOPPING' || !this.status.active) {
@@ -241,7 +264,9 @@ class MiningFleetCoordinator extends EventEmitter {
     this.status.phase = 'STOPPING';
     if (this.restartTimer) clearTimeout(this.restartTimer);
     this.restartTimer = null;
-    this.child?.kill('SIGTERM');
+    this.childWatchdog?.close();
+    this.childWatchdog = null;
+    terminateChildProcess(this.child);
     if (!this.child) {
       this.status.active = false;
       this.status.phase = 'STOPPED';

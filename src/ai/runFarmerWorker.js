@@ -133,9 +133,10 @@ function startFarmerWorker({ host, port, botName, scanRadius = 32, baseGoal = DE
     // blok padahal target (kebun/chest) sudah terjangkau jalan kaki biasa.
     bot.pathfinder.setMovements(buildMovements(bot));
 
-    // Farmer memakai planner lokal dan tidak perlu menjadi penulis periodik ke
-    // SQLite spatial bersama; ini menjaga UI tetap responsif saat armada aktif.
-    const adapter = new MineflayerRoleAdapter(bot, { sharedWorld: false, capabilities: ['farm', 'haul', 'repair_farm'] });
+    // Farmer tetap terdaftar di task board/reservasi bersama, tanpa sampling 3D
+    // periodik yang tidak dibutuhkan planner lokalnya.
+    const adapter = new MineflayerRoleAdapter(bot, { spatialSampling: false, occupancyIntervalMs: 1500,
+      capabilities: ['farm', 'haul', 'repair_farm'] });
 
     // Klik bed terdekat SEBELUM mulai kerja apapun - supaya kalau proses ini direstart/logout,
     // bot lanjut dari base pada login berikutnya, bukan jalan kaki 300+ blok ulang dari world spawn
@@ -172,16 +173,26 @@ function startFarmerWorker({ host, port, botName, scanRadius = 32, baseGoal = DE
       handlers: createEngineTaskHandlers(engine, {
         SURVEY_FARM: { execute: async () => ({ action: 'survey', mature: engine.findMatureCrops().length,
           plantingSpots: engine.findPlantingSpots().length, repairs: engine.findRepairCandidates().length }) },
-        REPAIR_FARM: { execute: async () => await engine.attemptRepair() || { action: 'idle' }, actions: ['repair'], mutatesWorld: true, idleCompletes: true },
+        REPAIR_FARM: { execute: async () => {
+          const result = await engine.attemptRepair();
+          if (result) return { ...result, verified: result.count > 0 };
+          const noWork = engine.options.repairEnabled && engine.findRepairCandidates().length === 0;
+          return { action: 'idle', verified: noWork, reason: noWork ? undefined : 'REPAIR_NO_PROGRESS' };
+        }, actions: ['repair'], mutatesWorld: true, idleCompletes: true, remaining: () => engine.findRepairCandidates().length },
         HARVEST: { execute: async () => {
           const mature = engine.findMatureCrops().slice(0, engine.options.harvestBatchSize);
+          let harvested = 0;
           for (const crop of mature) {
-            await adapter.dig(crop);
+            if (!await adapter.dig(crop)) continue;
+            harvested += 1;
             engine.metrics.harvested += 1;
             engine.emit('harvested', { crop: crop.name, position: crop.position });
           }
-          return mature.length ? { action: 'harvest', count: mature.length } : { action: 'idle' };
-        }, actions: ['harvest'], mutatesWorld: true, idleCompletes: true },
+          if (harvested > 0) return { action: 'harvest', count: harvested, verified: true };
+          return mature.length === 0
+            ? { action: 'idle', verified: true }
+            : { action: 'idle', verified: false, retryable: true, reason: 'HARVEST_NO_PROGRESS' };
+        }, actions: ['harvest'], mutatesWorld: true, idleCompletes: true, remaining: () => engine.findMatureCrops().length },
         PLANT: { execute: async () => {
           const spots = engine.findPlantingSpots().slice(0, engine.options.plantBatchSize);
           let count = 0;
@@ -194,8 +205,11 @@ function startFarmerWorker({ host, port, botName, scanRadius = 32, baseGoal = DE
               engine.emit('planted', { seed, position: spot.position });
             }
           }
-          return count ? { action: 'plant', count } : { action: 'idle' };
-        }, actions: ['plant'], mutatesWorld: true, idleCompletes: true },
+          if (count > 0) return { action: 'plant', count, verified: true };
+          return spots.length === 0
+            ? { action: 'idle', verified: true }
+            : { action: 'idle', verified: false, retryable: true, reason: 'PLANT_NO_PROGRESS' };
+        }, actions: ['plant'], mutatesWorld: true, idleCompletes: true, remaining: () => engine.findPlantingSpots().length },
         DEPOSIT_CROPS: { execute: async () => await engine.runAutoMatchDeposit() || { action: 'idle' }, actions: ['deposit'], idleCompletes: true }
       })
     });

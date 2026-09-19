@@ -3,6 +3,7 @@
 const EventEmitter = require('node:events');
 const { spawn } = require('node:child_process');
 const path = require('node:path');
+const { ChildProcessWatchdog, terminateChildProcess } = require('./childProcessWatchdog');
 
 const ROOT = path.resolve(__dirname, '../..');
 const RUNNER = path.join(__dirname, 'runStorageRoomMaterials.js');
@@ -21,10 +22,13 @@ class StorageMaterialsCoordinator extends EventEmitter {
       spawnProcess: spawn,
       restartDelayMs: 8000,
       maxRestarts: 20,
+      workerProgressTimeoutMs: boundedInt(process.env.STORAGE_MATERIALS_PROGRESS_TIMEOUT_MS, 3 * 60 * 1000, 1000, 60 * 60 * 1000),
       orchestrator: null,
       ...options
     };
     this.child = null;
+    this.childWatchdog = null;
+    this.childWatchdogTimedOut = false;
     this.restartTimer = null;
     this.runConfig = null;
     this.status = this._idleStatus();
@@ -115,12 +119,24 @@ class StorageMaterialsCoordinator extends EventEmitter {
 
   _spawnChild() {
     const config = this.runConfig;
+    this.childWatchdogTimedOut = false;
     const child = this.options.spawnProcess(process.execPath, [RUNNER], {
       cwd: this.options.root,
       env: this._env(config),
+      detached: process.platform !== 'win32',
       stdio: ['ignore', 'pipe', 'pipe']
     });
+    child._codexProcessGroup = process.platform !== 'win32';
     this.child = child;
+    this.childWatchdog = new ChildProcessWatchdog(child, {
+      timeoutMs: this.options.workerProgressTimeoutMs,
+      onStall: ({ silentForMs }) => {
+        this.childWatchdogTimedOut = true;
+        this.status.phase = 'WATCHDOG_STOPPING';
+        this.status.lastError = `Materials worker tidak melaporkan progres selama ${Math.ceil(silentForMs / 60000)} menit; child dihentikan.`;
+        this._record('error', this.status.lastError);
+      }
+    });
     this.status.pid = child.pid || null;
     this.status.phase = this.status.restarts ? 'RESTARTING' : 'STARTING';
     this._publish('worker_started', { pid: this.status.pid, botName: config.botName });
@@ -133,6 +149,10 @@ class StorageMaterialsCoordinator extends EventEmitter {
         pending = lines.pop();
         for (const message of lines.map(line => line.trim()).filter(Boolean)) {
           this._parseWorkEvent(message);
+          const marker = message.indexOf('WORK_EVENT ');
+          if (marker >= 0) {
+            try { this.childWatchdog?.beat(JSON.parse(message.slice(marker + 11))); } catch { /* Ignore incomplete events. */ }
+          }
           if (this.status.phase === 'STARTING' || this.status.phase === 'RESTARTING') this.status.phase = 'RUNNING';
           this._record(level, message);
         }
@@ -149,8 +169,18 @@ class StorageMaterialsCoordinator extends EventEmitter {
     child.on('error', error => this._record('error', error.message));
     child.on('exit', (code, signal) => {
       if (this.child !== child) return;
+      this.childWatchdog?.close();
+      this.childWatchdog = null;
       this.child = null;
       this.status.pid = null;
+      if (this.childWatchdogTimedOut) {
+        this.childWatchdogTimedOut = false;
+        this.status.active = false;
+        this.status.phase = 'NEEDS_ATTENTION';
+        this.status.stoppedAt = new Date().toISOString();
+        this._publish('stopped', { code, signal, phase: this.status.phase, reason: 'NO_PROGRESS_TIMEOUT' });
+        return;
+      }
       if (!this.status.active) {
         this.status.phase = 'STOPPED';
         this.status.stoppedAt = new Date().toISOString();
@@ -220,7 +250,9 @@ class StorageMaterialsCoordinator extends EventEmitter {
     if (this.status.goalId && this.options.orchestrator) this.options.orchestrator.cancelGoal(this.status.goalId, 'OPERATOR_STOP');
     if (this.restartTimer) clearTimeout(this.restartTimer);
     this.restartTimer = null;
-    this.child?.kill('SIGTERM');
+    this.childWatchdog?.close();
+    this.childWatchdog = null;
+    terminateChildProcess(this.child);
     if (!this.child) this.status.phase = 'STOPPED';
     this._publish('stopped', { reason: 'operator', phase: this.status.phase });
     return { stopped: true, status: this.getStatus() };

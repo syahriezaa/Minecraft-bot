@@ -25,6 +25,9 @@ function attachSharedWorldObserver(bot, {
   sampleBelow = Number(process.env.SHARED_WORLD_SAMPLE_BELOW) || 2,
   sampleAbove = Number(process.env.SHARED_WORLD_SAMPLE_ABOVE) || 3,
   coordinateMovement = true,
+  spatialSampling = true,
+  occupancyIntervalMs = 500,
+  flushIntervalMs = 1000,
   agent = null
 } = {}) {
   if (!bot?.on || typeof bot.blockAt !== 'function') return null;
@@ -36,11 +39,9 @@ function attachSharedWorldObserver(bot, {
   const reservations = new SwarmReservations(memory);
   const structures = new StructureRegistry(memory);
   const taskBoard = new SwarmTaskBoard(memory);
-  // Beberapa role sudah memiliki wilayah eksklusif sendiri. Mereka tetap perlu
-  // memperbarui memori dunia, tetapi tidak perlu mengunci koridor gerak role lain.
-  const actions = coordinateMovement
-    ? installCoordinatedActions(bot, reservations, () => worldContext(bot), log)
-    : null;
+  // Kunci aksi objek tetap aktif untuk semua role. Koordinasi koridor gerak
+  // dapat dimatikan tanpa ikut menonaktifkan kunci pohon, blok, dan container.
+  const actions = installCoordinatedActions(bot, reservations, () => worldContext(bot), log, { coordinateMovement });
   let pending = new Map();
   let stopped = false;
   let lastErrorAt = 0;
@@ -154,20 +155,23 @@ function attachSharedWorldObserver(bot, {
       if(crops.has(newBlock.name)&&['air','cave_air'].includes(oldBlock.name))memory.recordActivity(worldContext(bot),'crop_planted',newBlock.position);
     } catch(error) {report(error);}
   };
-  const timer = setInterval(sample, intervalMs);
-  timer.unref?.();
+  const timer = spatialSampling ? setInterval(sample, intervalMs) : null;
+  timer?.unref?.();
   const occupancyTimer = setInterval(() => {
     const p=bot.entity?.position;
     if(!p || stopped) return;
     try { reservations.occupy(worldContext(bot),[p,{x:p.x,y:Math.floor(p.y)+1,z:p.z}]); }
     catch(error) { report(error); }
-  },500);
+  }, Math.max(500, Number(occupancyIntervalMs) || 500));
   occupancyTimer.unref?.();
+  const flushTimer = spatialSampling ? null : setInterval(flush, Math.max(250, Number(flushIntervalMs) || 1000));
+  flushTimer?.unref?.();
   function stop() {
     if (stopped) return;
     heartbeatAgent('STOPPED');
-    clearInterval(timer);
+    if (timer) clearInterval(timer);
     clearInterval(occupancyTimer);
+    if (flushTimer) clearInterval(flushTimer);
     bot.removeListener('blockUpdate', onUpdate);
     bot.removeListener('end', stop);
     flush();
@@ -180,7 +184,8 @@ function attachSharedWorldObserver(bot, {
   bot.on('blockUpdate', onUpdate);
   bot.once('end', stop);
   ensureAgent();
-  const observer = { observe, flush, sample, stop, memory, reservations, actions, taskBoard };
+  const observer = { observe, flush, sample, stop, memory, reservations, actions, structures, taskBoard,
+    spatialSampling: Boolean(spatialSampling) };
   attached.set(bot, observer);
   return observer;
 }

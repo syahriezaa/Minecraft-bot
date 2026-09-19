@@ -4,6 +4,7 @@ const EventEmitter = require('node:events');
 const { spawn } = require('node:child_process');
 const path = require('node:path');
 const { querySLP } = require('../network/liveProtocolClient');
+const { ChildProcessWatchdog, terminateChildProcess } = require('./childProcessWatchdog');
 
 const ROOT = path.resolve(__dirname, '../..');
 const DEFAULT_ORIGIN = '-110,70,-400';
@@ -47,6 +48,7 @@ class StorageRoomConstructionCoordinator extends EventEmitter {
       spawnProcess: spawn,
       restartDelayMs: 10000,
       materialRetryDelayMs: 15000,
+      workerProgressTimeoutMs: positiveInt(process.env.STORAGE_WORKER_PROGRESS_TIMEOUT_MS, 12 * 60 * 1000, 60 * 60 * 1000),
       maxRestarts: 20,
       ...options
     };
@@ -168,10 +170,21 @@ class StorageRoomConstructionCoordinator extends EventEmitter {
     const child = this.options.spawnProcess(process.execPath, [script], {
       cwd: this.options.root,
       env: this._childEnv(role, config),
+      detached: process.platform !== 'win32',
       stdio: ['ignore', 'pipe', 'pipe']
     });
+    child._codexProcessGroup = process.platform !== 'win32';
     const state = { role, pid: child.pid || null, status: 'STARTING', startedAt: new Date().toISOString(), restarts: 0, subworkers: {}, lastLogs: [] };
-    this.children.set(role, { child, state });
+    const watchdog = new ChildProcessWatchdog(child, {
+      timeoutMs: this.options.workerProgressTimeoutMs,
+      onStall: ({ silentForMs }) => {
+        state.status = 'NO_PROGRESS_TIMEOUT';
+        state.reason = 'NO_PROGRESS_TIMEOUT';
+        this.status.lastError = `${role}: tidak ada progres selama ${Math.ceil(silentForMs / 60000)} menit; menghentikan worker.`;
+        this._publish('worker_watchdog', { role, pid: state.pid, silentForMs, message: this.status.lastError });
+      }
+    });
+    this.children.set(role, { child, state, watchdog });
     this.status.children[role] = state;
     this._publish('worker_started', { role, pid: state.pid });
 
@@ -189,6 +202,7 @@ class StorageRoomConstructionCoordinator extends EventEmitter {
             const event = JSON.parse(line.slice(marker + 11));
             const prefix = line.slice(0, marker).match(/^\[([^\]]+)\]\s*$/);
             const workerName = prefix?.[1];
+            if (watchdog.beat(event, workerName || role)) state.lastProgressAt = new Date().toISOString();
             const target = workerName
               ? (state.subworkers[workerName] ||= { name: workerName, status: 'ALIVE' })
               : state;
@@ -307,6 +321,7 @@ class StorageRoomConstructionCoordinator extends EventEmitter {
   _handleExit(role, code, signal, config) {
     const entry = this.children.get(role);
     if (!entry) return;
+    entry.watchdog?.close();
     const completed = entry.state.status === 'COMPLETE';
     const resumable = entry.state.status === 'PAUSED' || entry.state.reason === 'TIME_LIMIT';
     entry.state.status = this.status.active ? 'RESTARTING' : 'STOPPED';
@@ -565,7 +580,7 @@ class StorageRoomConstructionCoordinator extends EventEmitter {
     if (this.waitingForServer?.timer) clearTimeout(this.waitingForServer.timer);
     this.waitingForServer = null;
     this._clearStartupSchedule();
-    for (const { child } of this.children.values()) child.kill('SIGTERM');
+    for (const { child, watchdog } of this.children.values()) { watchdog?.close(); terminateChildProcess(child); }
     if (!this.children.size) this.status.phase = 'STOPPED';
     this._publish('stopped', { reason: 'operator' });
     return { stopped: true, status: this.getStatus() };

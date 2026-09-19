@@ -116,13 +116,16 @@ function startStorageRoomMaterials({
   let runTimer;
   let spawnTimer;
   let roleTask = null;
-  const report = (phase, extra = {}) => log(`WORK_EVENT ${JSON.stringify({ phase, ...extra })}`);
+  const report = (phase, extra = {}) => {
+    const details = { phase, ...extra };
+    log(`WORK_EVENT ${JSON.stringify(details)}`);
+    roleTask?.reportProgress(details);
+  };
   const finish = code => {
     if (finished) return;
     finished = true;
     if (roleTask) {
-      if (code === 0) roleTask.complete({ exitCode: code, role: 'materials' });
-      else roleTask.defer(`PROCESS_EXIT_${code}`, 5000);
+      roleTask.defer(code === 0 ? 'SERVICE_CHECKPOINT' : `PROCESS_EXIT_${code}`, code === 0 ? 1000 : 5000);
       roleTask = null;
     }
     clearTimeout(runTimer);

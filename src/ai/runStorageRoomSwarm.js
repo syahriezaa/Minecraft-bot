@@ -2,6 +2,7 @@
 
 const { spawn } = require('node:child_process');
 const path = require('node:path');
+const { ChildProcessWatchdog, terminateChildProcess } = require('./childProcessWatchdog');
 
 const root = path.resolve(__dirname, '../..');
 const MAX_WORKERS = 8;
@@ -55,12 +56,16 @@ function startStorageRoomSwarm({ env = process.env, log = console.log } = {}) {
   const workerCount = getWorkerCount(env);
   const workerIndices = getWorkerIndices(env, workerCount);
   const children = [];
+  const watchdogs = [];
   let stopping = false;
 
   const stopAll = (signal = 'SIGTERM') => {
     if (stopping) return;
     stopping = true;
-    for (const child of children) child.kill(signal);
+    for (let i = 0; i < children.length; i += 1) {
+      watchdogs[i]?.close();
+      terminateChildProcess(children[i], 5000, signal);
+    }
   };
 
   for (const index of workerIndices) {
@@ -69,9 +74,34 @@ function startStorageRoomSwarm({ env = process.env, log = console.log } = {}) {
       env: buildWorkerEnv({ env, index, count: workerCount })
     });
     children.push(child);
-    child.stdout.on('data', data => process.stdout.write(`[StorageW${index + 1}] ${data}`));
-    child.stderr.on('data', data => process.stderr.write(`[StorageW${index + 1} ERROR] ${data}`));
+    const watchdog = new ChildProcessWatchdog(child, {
+      timeoutMs: Number(env.STORAGE_ROOM_SWARM_PROGRESS_TIMEOUT_MS) || 12 * 60 * 1000,
+      onStall: ({ silentForMs }) => {
+        process.stderr.write(`[StorageW${index + 1}] WORK_EVENT ${JSON.stringify({
+          phase: 'BLOCKED', reason: 'NO_PROGRESS_TIMEOUT', silentForMs
+        })}\n`);
+      }
+    });
+    watchdogs.push(watchdog);
+    const consume = (stream, output, prefix) => {
+      let pending = '';
+      stream?.on('data', data => {
+        const chunk = String(data);
+        pending += chunk;
+        const lines = pending.split(/\r?\n/);
+        pending = lines.pop();
+        for (const line of lines) {
+          const marker = line.indexOf('WORK_EVENT ');
+          if (marker < 0) continue;
+          try { watchdog.beat(JSON.parse(line.slice(marker + 11))); } catch { /* Ignore incomplete events. */ }
+        }
+        output.write(`${prefix}${chunk}`);
+      });
+    };
+    consume(child.stdout, process.stdout, `[StorageW${index + 1}] `);
+    consume(child.stderr, process.stderr, `[StorageW${index + 1} ERROR] `);
     child.on('exit', (code, signal) => {
+      watchdog.close();
       log(`[StorageW${index + 1}] worker berhenti code=${code ?? 'null'} signal=${signal || 'none'}`);
       if (!stopping && code !== 0) {
         console.error(`[StorageW${index + 1}] berhenti dengan error; worker lain tetap berjalan dari checkpoint masing-masing.`);

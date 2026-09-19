@@ -2,7 +2,7 @@ const { cell } = require('./swarmReservations');
 const { Vec3 } = require('vec3');
 const { goals } = require('mineflayer-pathfinder');
 
-function installCoordinatedActions(bot, reservations, getContext, log = () => {}) {
+function installCoordinatedActions(bot, reservations, getContext, log = () => {}, { coordinateMovement = true } = {}) {
   const originals = new Map();
   const handles = new Set();
   function cancel() {
@@ -15,13 +15,13 @@ function installCoordinatedActions(bot, reservations, getContext, log = () => {}
   function hold(positions, { shared = false } = {}) {
     const context = getContext();
     if (!context) throw new Error('Identitas dunia belum tersedia untuk reservasi');
-    const resources = positions.map(position => {
-      const encoded = cell(position);
-      return shared ? `shared:${encoded}` : encoded;
+    const resources = positions.map(resource => {
+      const position = resource?.position || resource;
+      return { resource: cell(position), mode: resource?.mode || (shared ? 'shared' : 'exclusive') };
     });
     const lease = reservations.acquire(context, resources);
     if (!lease) {
-      const wait=reservations.recordWait(context,resources);
+      const wait=reservations.recordWait(context,resources.map(resource => resource.resource));
       if(wait.deadlock) cancel();
       throw new Error(wait.deadlock ? 'DEADLOCK_REPLAN: hentikan aksi dan pilih rute lain' : 'RESOURCE_RESERVED: target sedang digunakan bot lain');
     }
@@ -38,15 +38,19 @@ function installCoordinatedActions(bot, reservations, getContext, log = () => {}
     handles.add(handle);
     return handle;
   }
-  function wrap(name, positions, container = false) {
+  function wrap(name, positions, { container = false, shared = false } = {}) {
     if (typeof bot[name] !== 'function') return;
     const original = bot[name];
     originals.set(name, original);
     bot[name] = async function (...args) {
       const p = bot.entity?.position;
-      const resources = positions(...args);
+      const shareResource = typeof shared === 'function' ? shared(...args) : shared;
+      const resources = positions(...args).map(position => ({
+        position,
+        mode: shareResource ? 'shared' : 'exclusive'
+      }));
       if (p) resources.push(p, { x: p.x, y: Math.floor(p.y)+1, z: p.z });
-      const handle = hold(resources, { shared: container });
+      const handle = hold(resources);
       let retained = false;
       try {
         const result = await original.apply(this, args);
@@ -66,16 +70,33 @@ function installCoordinatedActions(bot, reservations, getContext, log = () => {}
     { x: reference.position.x+face.x, y: reference.position.y+face.y, z: reference.position.z+face.z }]);
   const containerCells = block => {
     const positions = [block.position];
-    // Pasangan double chest harus berbagi lock, termasuk ketika dibuka dari sisi berbeda.
-    if (['chest', 'trapped_chest'].includes(block.name)) for (const [x,z] of [[1,0],[-1,0],[0,1],[0,-1]]) {
-      const p = new Vec3(block.position.x+x,block.position.y,block.position.z+z);
-      if (bot.blockAt(p)?.name === block.name) positions.push(p);
+    if (!['chest', 'trapped_chest'].includes(block.name)) return positions;
+    const properties = block.getProperties?.() || block._properties || {};
+    if (properties.type === 'single') return positions;
+    const adjacent = [[1, 0], [-1, 0], [0, 1], [0, -1]].map(([x, z]) =>
+      new Vec3(block.position.x + x, block.position.y, block.position.z + z));
+    if (['left', 'right'].includes(properties.type)) {
+      const partnerType = properties.type === 'left' ? 'right' : 'left';
+      const partner = adjacent.find(position => {
+        const neighbour = bot.blockAt(position);
+        const neighbourProperties = neighbour?.getProperties?.() || neighbour?._properties || {};
+        return neighbour?.name === block.name && neighbourProperties.type === partnerType &&
+          neighbourProperties.facing === properties.facing;
+      });
+      if (partner) positions.push(partner);
+    } else {
+      // Tanpa blockstate yang bisa dipercaya, kunci semua chest bersebelahan
+      // supaya dua pembuka dari sisi double chest yang sama tidak berjalan paralel.
+      for (const position of adjacent) if (bot.blockAt(position)?.name === block.name) positions.push(position);
     }
     return positions;
   };
-  for (const name of ['openChest','openFurnace','openContainer']) wrap(name, containerCells, true);
+  wrap('openChest', containerCells, { container: true, shared: true });
+  wrap('openFurnace', block => [block.position], { container: true });
+  wrap('openContainer', block => containerCells(block), { container: true,
+    shared: block => ['chest', 'trapped_chest'].includes(block?.name) });
   const pathfinder=bot.pathfinder;
-  const originalGoto=pathfinder?.goto;
+  const originalGoto=coordinateMovement ? pathfinder?.goto : null;
   if(originalGoto && pathfinder.getPathTo) pathfinder.goto=async goal=>{
     const movements=pathfinder.movements;
     const exclusions=movements?.exclusionAreasStep;

@@ -404,13 +404,20 @@ function startStorageRoomQuarry({
   let stopRequested = false;
   let runTimer;
   let roleTask = null;
-  const report=(phase,extra={})=>log(`WORK_EVENT ${JSON.stringify({phase,...extra})}`);
+  let roleTaskOutcome = null;
+  const workShouldStop = () => stopRequested || Boolean(roleTask?.leaseLost);
+  const report=(phase,extra={})=>{
+    const details={phase,...extra};
+    log(`WORK_EVENT ${JSON.stringify(details)}`);
+    roleTask?.reportProgress(details);
+  };
   const finish = code => {
     if (finished) return;
     finished = true;
     if (roleTask) {
-      if (code === 0) roleTask.complete({ exitCode: code, role: 'miner' });
-      else roleTask.defer(`PROCESS_EXIT_${code}`, 5000);
+      if (code === 0 && roleTaskOutcome?.verification?.status === 'VERIFIED') roleTask.complete({ exitCode: code, role: 'miner', ...roleTaskOutcome });
+      else if (code === 0) roleTask.defer(roleTaskOutcome?.reason || 'RESULT_NOT_VERIFIED', 10000);
+      else roleTask.fail(`PROCESS_EXIT_${code}`);
       roleTask = null;
     }
     clearTimeout(runTimer);
@@ -598,7 +605,7 @@ function startStorageRoomQuarry({
         const accessAssessment = surveyAdaptiveMiningCell(adapter, quarryBounds, { aboveScanHeight: 8,
           maxSafeDrop: quarryMaxSafeDrop() });
         const reachable = await adapter.approachReachableWork(surveyStorageQuarry(adapter, quarryBounds, protectedCells,
-          { voidTopology: accessAssessment.voidTopology }).actions, () => stopRequested);
+          { voidTopology: accessAssessment.voidTopology }).actions, workShouldStop);
         log(`QUARRY_SPATIAL ${JSON.stringify({ status: reachable.status, nodes: reachable.survey.nodes.size, target: reachable.target?.pos })}`);
         if(!reachable.target)report('REPAIR_ACCESS');
         const surfaceFlatThenStair = process.env.STORAGE_QUARRY_MODE === 'surface_flat_then_stair';
@@ -606,7 +613,7 @@ function startStorageRoomQuarry({
           report('SURFACE_FLATTEN');
           const flatten = await flattenStorageQuarrySurface({ bot, adapter, checkpointFile, bounds: quarryBounds,
             protectedCells, voidTopology: accessAssessment.voidTopology, maxBlocks: Math.max(128, maxBlocks),
-            shouldStop: () => stopRequested, log });
+            shouldStop: workShouldStop, log });
           log(`HASIL_SURFACE_FLATTEN ${JSON.stringify({ status: flatten.status, reason: flatten.reason,
             cleared: flatten.cleared, targetY: flatten.targetY })}`);
           if (flatten.status !== 'COMPLETE') {
@@ -633,7 +640,7 @@ function startStorageRoomQuarry({
           // dahulu ke base, lakukan transaksi chest di lokasi, lalu kembali ke
           // quarry; ini mencegah satu miner memblokir tiga miner lain.
           const returnForMaterials = await returnToBaseFromQuarry({ bot, adapter, bounds: quarryBounds,
-            accessPath: verifiedAccessPath, report, shouldStop: () => stopRequested, log,
+            accessPath: verifiedAccessPath, report, shouldStop: workShouldStop, log,
             emergencyExit: async () => {
               const stagingOffset = Math.max(8, Number(process.env.STORAGE_QUARRY_STAGING_OFFSET) || 8);
               const staging = await warmupWalk({
@@ -706,7 +713,7 @@ function startStorageRoomQuarry({
           allowTerrainRecovery: approach.resumed === true && !checkpointAccessPath,
           maxDropDown: 1,
           approachMaxDropDown: 3,
-          shouldStop: () => stopRequested, log });
+          shouldStop: workShouldStop, log });
         log(`HASIL_AKSES_QUARRY ${JSON.stringify(access)}`);
         if (!access.ready) {
           const retryable = isRetryableAccessFailure(access.reason);
@@ -729,7 +736,7 @@ function startStorageRoomQuarry({
       const result = execute ? stateDriven
         ? await runAdaptiveMiningFrontier({ bot, adapter, seedBounds: quarryBounds, minInventoryFillRatio,
           surveyOptions: { maxSafeDrop: quarryMaxSafeDrop() },
-          checkpointFile, protectedCells, log, shouldStop: () => stopRequested,
+          checkpointFile, protectedCells, log, shouldStop: workShouldStop,
           prepareCell: async (cell, context = { phase: 'stage' }) => {
             const bounds = cell.bounds;
             if (context.phase === 'access') {
@@ -741,7 +748,7 @@ function startStorageRoomQuarry({
                 allowTerrainRecovery: true,
                 maxDropDown: 1,
                 approachMaxDropDown: 3,
-                shouldStop: () => stopRequested,
+                shouldStop: workShouldStop,
                 log
               });
               if (!frontierAccess.ready) {
@@ -793,7 +800,7 @@ function startStorageRoomQuarry({
             cleared: 0, inventoryFillRatio: 0 };
           return excavateStorageQuarry({ bot, adapter, maxBlocks, minInventoryFillRatio, checkpointFile,
             bounds: assessment.excavationBounds, protectedCells, voidTopology: assessment.voidTopology,
-            log, shouldStop: () => stopRequested });
+            log, shouldStop: workShouldStop });
         })() :
         { status: 'OBSERVATION', plan: 'Gunakan runner dengan execute untuk mutasi.' };
       log(`HASIL_QUARRY ${JSON.stringify(result)}`);
@@ -817,6 +824,7 @@ function startStorageRoomQuarry({
           // restart the same region instead of permanently retiring it.
           report('PAUSED', { verifiedBlocks: result.cleared, inventoryFillRatio: result.inventoryFillRatio, reason });
           log(`PAUSE quarry: inventory baru ${Number(result.inventoryFillRatio || 0).toFixed(2)}; target ${minInventoryFillRatio}; retry dari checkpoint.`);
+          roleTaskOutcome = { verified: false, reason, minedBlocks: Number(result.cleared) || 0 };
           finish(0);
           return;
         }
@@ -828,7 +836,7 @@ function startStorageRoomQuarry({
           bounds: quarryBounds,
           accessPath: verifiedAccessPath,
           report,
-          shouldStop: () => stopRequested,
+          shouldStop: workShouldStop,
           log,
           walkOptions: {
             maxGotoMs: Number(process.env.STORAGE_QUARRY_RETURN_GOTO_MS) || 45000,
@@ -848,6 +856,13 @@ function startStorageRoomQuarry({
         }
         const deposit = await depositQuarryMaterials({ adapter, log,
           withLock: (action, lockOptions) => withLock(action, log, LOCK, lockOptions) });
+        roleTaskOutcome = deposit.deposited > 0
+          ? { verified: true, minedBlocks: Number(result.cleared) || 0, depositedItems: deposit.deposited,
+            inventoryFillRatio: result.inventoryFillRatio, verification: {
+              status: 'VERIFIED', observedAt: Date.now(),
+              checks: [{ name: 'materials_deposited', passed: true, operator: 'gt', expected: 0, actual: deposit.deposited }]
+            } }
+          : { verified: false, reason: 'DEPOSIT_UNCONFIRMED', minedBlocks: Number(result.cleared) || 0 };
         report(process.env.STORAGE_QUARRY_SINGLE_BATCH==='1'&&deposit.deposited>0?'COMPLETE':'DELIVER',
           {verifiedBlocks:result.cleared,delivered:deposit.deposited,reason:deposit.deposited>0?result.reason:'DEPOSIT_UNCONFIRMED'});
       } else if (execute) {

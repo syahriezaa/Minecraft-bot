@@ -37,7 +37,9 @@ test('lease task memakai fencing token dan dapat direbut setelah expiry', t => {
   assert.equal(second.id, task.id);
   assert.notEqual(second.leaseToken, first.leaseToken);
   assert.equal(board.completeTask({ taskId: task.id, agentId: 'miner-1', leaseToken: first.leaseToken }), false);
-  assert.equal(board.completeTask({ taskId: task.id, agentId: 'miner-2', leaseToken: second.leaseToken }), true);
+  assert.equal(board.completeTask({ taskId: task.id, agentId: 'miner-2', leaseToken: second.leaseToken,
+    result: { verification: { status: 'VERIFIED', observedAt: board.now(),
+      checks: [{ name: 'block_postcondition', passed: true, expected: 'air', actual: 'air' }] } } }), true);
 });
 
 test('agent heartbeat dan task diisolasi per dunia', t => {

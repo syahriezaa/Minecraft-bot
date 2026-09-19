@@ -74,7 +74,8 @@ function startGuardWorker({ host, port, botName, scanRadius = 16, baseGoal = DEF
     // memasang blok yang tidak perlu.
     bot.pathfinder.setMovements(buildMovements(bot));
 
-    const adapter = new MineflayerRoleAdapter(bot, { sharedWorld: false, capabilities: ['combat', 'patrol', 'survey'] });
+    const adapter = new MineflayerRoleAdapter(bot, { spatialSampling: false, occupancyIntervalMs: 1500,
+      capabilities: ['combat', 'patrol', 'survey'] });
 
     // Klik bed terdekat SEBELUM mulai berjaga - sama seperti runFarmerWorker.js, supaya restart
     // berikutnya lanjut dari base, bukan jalan kaki ulang dari world spawn.
@@ -118,13 +119,14 @@ function startGuardWorker({ host, port, botName, scanRadius = 16, baseGoal = DEF
     async function tick() {
       if (stopped) return;
       try {
-        const cooperative = await cooperativeRuntime?.runOnce();
-        if (cooperative && cooperative.status !== 'IDLE') {
-          lastAction = `TASK_${cooperative.status}`;
+        const combatResult = cooperativeRuntime
+          ? await cooperativeRuntime.runAutonomous(() => combatEngine.tick(), { name: 'REACTIVE_COMBAT', survival: true, stallTimeoutMs: 45000 })
+          : await combatEngine.tick();
+        if (combatResult?.status) {
+          lastAction = `KERNEL_${combatResult.status}`;
           timer = setTimeout(tick, TICK_INTERVAL_MS);
           return;
         }
-        const combatResult = await combatEngine.tick();
         lastAction = combatResult.action.toUpperCase();
         // Kalau ada ancaman nyata (bukan cuma standby/idle), tangani itu dulu - jangan buang
         // waktu tick ini untuk crafting saat mob sedang mendekat.
@@ -132,11 +134,24 @@ function startGuardWorker({ host, port, botName, scanRadius = 16, baseGoal = DEF
           timer = setTimeout(tick, TICK_INTERVAL_MS);
           return;
         }
+        const cooperative = await cooperativeRuntime?.runOnce();
+        if (cooperative && cooperative.status !== 'IDLE') {
+          lastAction = `TASK_${cooperative.status}`;
+          timer = setTimeout(tick, TICK_INTERVAL_MS);
+          return;
+        }
       } catch (e) {
         log(`ERROR di tick pertahanan (non-fatal, lanjut tick berikutnya): ${e.message}`);
       }
       try {
-        const repairResult = await repairEngine.tick();
+        const repairResult = cooperativeRuntime
+          ? await cooperativeRuntime.runAutonomous(() => repairEngine.tick(), { name: 'GEAR_REPAIR' })
+          : await repairEngine.tick();
+        if (repairResult?.status) {
+          lastAction = `KERNEL_${repairResult.status}`;
+          timer = setTimeout(tick, TICK_INTERVAL_MS);
+          return;
+        }
         if (repairResult.action !== 'idle') {
           log(`Tick perbaikan: ${repairResult.action}`);
           lastAction = repairResult.action.toUpperCase();

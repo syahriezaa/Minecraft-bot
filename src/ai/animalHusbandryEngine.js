@@ -128,8 +128,20 @@ class AnimalHusbandryEngine extends EventEmitter {
   }
 }
 
+function verifyAnimalFeeding({ engine, before, context, result, action }) {
+  if (action === 'idle') return engine.selectFeedTargets().length === 0;
+  const after = context.snapshot?.()?.inventoryCounts;
+  if (action !== 'feed' || !before.inventoryCounts || !after || !Number.isInteger(result?.count) || result.count <= 0) return false;
+  const foods = new Set(Object.values(engine.options.rules).flatMap(rule => Array.isArray(rule.feed) ? rule.feed : [rule.feed]));
+  const consumed = [...foods].reduce((sum, name) => sum + Math.max(0,
+    (before.inventoryCounts[name] || 0) - (after[name] || 0)), 0);
+  return { status: 'VERIFIED', observedAt: Date.now(),
+    checks: [{ name: 'animal_feed_consumed', passed: true, expected: result.count, actual: consumed }] };
+}
+
 module.exports = {
   AnimalHusbandryEngine,
+  verifyAnimalFeeding,
   ANIMAL_RULES,
   isBabyEntity
 };

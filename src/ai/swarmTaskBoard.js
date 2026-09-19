@@ -1,4 +1,36 @@
 const { randomUUID } = require('node:crypto');
+const { isDeepStrictEqual } = require('node:util');
+
+const MUTATING_TASK_TYPES = new Set([
+  'MINE_CELL', 'ENSURE_ACCESS', 'BUILD', 'BUILD_STORAGE', 'LANDSCAPE', 'LANDSCAPE_SITE',
+  'REPAIR_FARM', 'HARVEST', 'PLANT', 'SORT_ITEMS', 'SMELT', 'CRAFT',
+  'MINING_SUPPLY', 'PREPARE_MATERIALS', 'FEED_ANIMALS', 'BALANCE_HERD'
+]);
+
+function requiresTaskVerification(task) {
+  return task?.payload?.mutatesWorld === true || task?.payload?.requiresVerification === true ||
+    MUTATING_TASK_TYPES.has(task?.type);
+}
+
+function validProofCheck(check) {
+  if (typeof check?.name !== 'string' || !check.name || check.passed !== true ||
+      check.expected == null || check.actual == null) return false;
+  if ([check.expected, check.actual].some(value => typeof value === 'number' && !Number.isFinite(value))) return false;
+  switch (check.operator || 'eq') {
+    case 'eq': return isDeepStrictEqual(check.actual, check.expected);
+    case 'ne': return !isDeepStrictEqual(check.actual, check.expected);
+    case 'gt': return Number.isFinite(check.actual) && Number.isFinite(check.expected) && check.actual > check.expected;
+    case 'gte': return Number.isFinite(check.actual) && Number.isFinite(check.expected) && check.actual >= check.expected;
+    default: return false;
+  }
+}
+
+function isValidTaskVerification(verification, now = Date.now(), maxAgeMs = 5 * 60 * 1000) {
+  return verification?.status === 'VERIFIED' && Number.isFinite(verification.observedAt) &&
+    verification.observedAt <= now && now - verification.observedAt <= maxAgeMs &&
+    Array.isArray(verification.checks) && verification.checks.length > 0 &&
+    verification.checks.every(validProofCheck);
+}
 
 function parseJson(value, fallback) {
   if (value === null || value === undefined || value === '') return fallback;
@@ -50,6 +82,8 @@ class SwarmTaskBoard {
     this.now = options.now || Date.now;
     this.defaultLeaseTtlMs = Number(options.defaultLeaseTtlMs) || 30000;
     this.agentTtlMs = Number(options.agentTtlMs) || 45000;
+    this.maxFailures = Math.max(1, Number(options.maxFailures) || 5);
+    this.maxDeferrals = Math.max(1, Number(options.maxDeferrals) || 20);
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS swarm_agents (
         world TEXT NOT NULL, dimension TEXT NOT NULL, id TEXT NOT NULL,
@@ -67,7 +101,8 @@ class SwarmTaskBoard {
         type TEXT NOT NULL, capability TEXT NOT NULL, status TEXT NOT NULL,
         priority INTEGER NOT NULL, payload TEXT NOT NULL, dependencies TEXT NOT NULL,
         leaseOwner TEXT, leaseToken TEXT, leaseExpiresAt INTEGER,
-        attempts INTEGER NOT NULL DEFAULT 0, result TEXT, lastError TEXT,
+        attempts INTEGER NOT NULL DEFAULT 0, failures INTEGER NOT NULL DEFAULT 0,
+        result TEXT, lastError TEXT,
         nextAttemptAt INTEGER NOT NULL DEFAULT 0,
         createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL
       );
@@ -80,6 +115,10 @@ class SwarmTaskBoard {
       );
     `);
     try { this.db.exec('ALTER TABLE swarm_tasks ADD COLUMN nextAttemptAt INTEGER NOT NULL DEFAULT 0'); }
+    catch (error) { if (!String(error.message).includes('duplicate column')) throw error; }
+    try { this.db.exec('ALTER TABLE swarm_tasks ADD COLUMN failures INTEGER NOT NULL DEFAULT 0'); }
+    catch (error) { if (!String(error.message).includes('duplicate column')) throw error; }
+    try { this.db.exec('ALTER TABLE swarm_tasks ADD COLUMN deferrals INTEGER NOT NULL DEFAULT 0'); }
     catch (error) { if (!String(error.message).includes('duplicate column')) throw error; }
   }
 
@@ -150,8 +189,20 @@ class SwarmTaskBoard {
   }
 
   _releaseExpired(now) {
-    this.db.prepare(`UPDATE swarm_tasks SET status='PENDING', leaseOwner=NULL, leaseToken=NULL,
-      leaseExpiresAt=NULL, updatedAt=? WHERE status='CLAIMED' AND leaseExpiresAt<=?`).run(now, now);
+    const expired = this.db.prepare(`SELECT id,goalId,leaseOwner AS agentId,attempts,failures FROM swarm_tasks
+      WHERE status='CLAIMED' AND leaseExpiresAt<=?`).all(now);
+    const release = this.db.prepare(`UPDATE swarm_tasks SET status=?,leaseOwner=NULL,leaseToken=NULL,
+      leaseExpiresAt=NULL,failures=?,lastError=?,updatedAt=? WHERE id=? AND status='CLAIMED'`);
+    for (const task of expired) {
+      const failures = Number(task.failures || 0) + 1;
+      const exhausted = failures >= this.maxFailures;
+      const reason = exhausted ? 'LEASE_EXPIRED_RETRY_LIMIT' : 'LEASE_EXPIRED';
+      const updated = release.run(exhausted ? 'FAILED' : 'PENDING', failures, reason, now, task.id);
+      if (Number(updated.changes) !== 1) continue;
+      this.recordEvent({ taskId: task.id, goalId: task.goalId, agentId: task.agentId,
+        kind: exhausted ? 'TASK_FAILED' : 'TASK_RETRY', data: { reason, attempts: task.attempts, failures, maxFailures: this.maxFailures } });
+      if (exhausted) this._refreshGoal(task.goalId);
+    }
   }
 
   _dependenciesComplete(task) {
@@ -170,9 +221,24 @@ class SwarmTaskBoard {
     this.db.exec('BEGIN IMMEDIATE');
     try {
       this._releaseExpired(now);
-      const candidates = this.db.prepare(`SELECT * FROM swarm_tasks
-        WHERE world=? AND dimension=? AND status='PENDING' AND nextAttemptAt<=?
-        ORDER BY priority DESC, createdAt ASC LIMIT 128`).all(world, dimension, now).map(taskFromRow);
+      const capabilityValues = normalizeCapabilities(capabilities);
+      if (!capabilityValues.includes('*')) capabilityValues.push('*');
+      const clauses = ['t.world=?', 't.dimension=?', "t.status='PENDING'", 't.nextAttemptAt<=?', "g.status='ACTIVE'",
+        `t.capability IN (${capabilityValues.map(() => '?').join(',')})`];
+      const params = [world, dimension, now, ...capabilityValues];
+      if (Array.isArray(taskTypes)) {
+        if (!taskTypes.length) { this.db.exec('COMMIT'); return null; }
+        clauses.push(`t.type IN (${taskTypes.map(() => '?').join(',')})`);
+        params.push(...taskTypes);
+      }
+      const baseQuery = `SELECT t.* FROM swarm_tasks t JOIN swarm_goals g ON g.id=t.goalId
+        WHERE ${clauses.join(' AND ')} ORDER BY t.priority DESC,t.createdAt ASC,t.id ASC`;
+      const candidates = [];
+      for (let offset = 0; ; offset += 128) {
+        const page = this.db.prepare(`${baseQuery} LIMIT 128 OFFSET ?`).all(...params, offset).map(taskFromRow);
+        candidates.push(...page);
+        if (page.length < 128) break;
+      }
       const compatible = candidates.filter(candidate => allowed.has(candidate.capability) &&
         (!supportedTypes || supportedTypes.has(candidate.type)) && assignmentAllowed(candidate, agentId) &&
         this._dependenciesComplete(candidate));
@@ -212,48 +278,121 @@ class SwarmTaskBoard {
 
   completeTask({ taskId, agentId, leaseToken, result = {} }) {
     const now = this.now();
-    const task = this.db.prepare('SELECT goalId FROM swarm_tasks WHERE id=?').get(taskId);
-    const update = this.db.prepare(`UPDATE swarm_tasks SET status='COMPLETED', result=?, lastError=NULL,
-      leaseOwner=NULL, leaseToken=NULL, leaseExpiresAt=NULL, updatedAt=?
-      WHERE id=? AND status='CLAIMED' AND leaseOwner=? AND leaseToken=? AND leaseExpiresAt>?`)
-      .run(JSON.stringify(result || {}), now, taskId, agentId, leaseToken, now);
-    if (Number(update.changes) !== 1) return false;
-    this.recordEvent({ taskId, goalId: task?.goalId, agentId, kind: 'TASK_COMPLETED', data: result || {} });
-    this._refreshGoal(task?.goalId);
-    return true;
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const task = taskFromRow(this.db.prepare(`SELECT * FROM swarm_tasks WHERE id=? AND status='CLAIMED'
+        AND leaseOwner=? AND leaseToken=? AND leaseExpiresAt>?`).get(taskId, agentId, leaseToken, now));
+      if (!task) { this.db.exec('ROLLBACK'); return false; }
+      if (requiresTaskVerification(task) && !isValidTaskVerification(result?.verification, now)) {
+        this.recordEvent({ taskId, goalId: task.goalId, agentId, kind: 'TASK_COMPLETION_REJECTED',
+          data: { reason: 'RESULT_NOT_VERIFIED', taskType: task.type } });
+        this.db.exec('COMMIT');
+        return false;
+      }
+      const update = this.db.prepare(`UPDATE swarm_tasks SET status='COMPLETED', result=?, lastError=NULL,
+        leaseOwner=NULL, leaseToken=NULL, leaseExpiresAt=NULL, updatedAt=?
+        WHERE id=? AND status='CLAIMED' AND leaseOwner=? AND leaseToken=? AND leaseExpiresAt>?`)
+        .run(JSON.stringify(result || {}), now, taskId, agentId, leaseToken, now);
+      if (Number(update.changes) !== 1) { this.db.exec('ROLLBACK'); return false; }
+      this.recordEvent({ taskId, goalId: task.goalId, agentId, kind: 'TASK_COMPLETED', data: result || {} });
+      this._refreshGoal(task.goalId);
+      this.db.exec('COMMIT');
+      return true;
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      throw error;
+    }
   }
 
   deferTask({ taskId, agentId, leaseToken, reason, retryDelayMs = 5000 }) {
+    if (reason === 'RESULT_NOT_VERIFIED') {
+      return this.failTask({ taskId, agentId, leaseToken, error: reason, retryable: true });
+    }
     const now = this.now();
     const nextAttemptAt = now + Math.max(250, Math.min(300000, Number(retryDelayMs) || 5000));
-    const result = this.db.prepare(`UPDATE swarm_tasks SET status='PENDING',lastError=?,leaseOwner=NULL,
-      leaseToken=NULL,leaseExpiresAt=NULL,nextAttemptAt=?,updatedAt=?
-      WHERE id=? AND status='CLAIMED' AND leaseOwner=? AND leaseToken=?`)
-      .run(String(reason || 'DEFERRED'), nextAttemptAt, now, taskId, agentId, leaseToken);
-    return Number(result.changes) === 1;
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const task = this.db.prepare(`SELECT goalId,deferrals FROM swarm_tasks WHERE id=? AND status='CLAIMED'
+        AND leaseOwner=? AND leaseToken=? AND leaseExpiresAt>?`).get(taskId, agentId, leaseToken, now);
+      if (!task) { this.db.exec('ROLLBACK'); return false; }
+      const exhausted = task.deferrals + 1 >= this.maxDeferrals;
+      const result = this.db.prepare(`UPDATE swarm_tasks SET status=?,deferrals=deferrals+1,lastError=?,leaseOwner=NULL,
+        leaseToken=NULL,leaseExpiresAt=NULL,nextAttemptAt=?,updatedAt=?
+        WHERE id=? AND status='CLAIMED' AND leaseOwner=? AND leaseToken=? AND leaseExpiresAt>?`)
+        .run(exhausted ? 'FAILED' : 'PENDING', exhausted ? 'DEFERRAL_LIMIT' : String(reason || 'DEFERRED'),
+          nextAttemptAt, now, taskId, agentId, leaseToken, now);
+      if (Number(result.changes) !== 1) { this.db.exec('ROLLBACK'); return false; }
+      this.recordEvent({ taskId, goalId: task.goalId, agentId, kind: exhausted ? 'TASK_FAILED' : 'TASK_DEFERRED',
+        data: { reason: exhausted ? 'DEFERRAL_LIMIT' : String(reason || 'DEFERRED'),
+          cause: reason, deferrals: task.deferrals + 1, retryAt: exhausted ? null : nextAttemptAt } });
+      if (exhausted) this._refreshGoal(task.goalId);
+      this.db.exec('COMMIT');
+      return true;
+    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
+  }
+
+  noteTaskProgress({ taskId, agentId, leaseToken }) {
+    return Number(this.db.prepare(`UPDATE swarm_tasks SET deferrals=0 WHERE id=? AND status='CLAIMED'
+      AND leaseOwner=? AND leaseToken=? AND leaseExpiresAt>?`)
+      .run(taskId, agentId, leaseToken, this.now()).changes) === 1;
   }
 
   failTask({ taskId, agentId, leaseToken, error, retryable = false }) {
-    if (retryable) return this.deferTask({ taskId, agentId, leaseToken, reason: error });
     const now = this.now();
-    const task = this.db.prepare('SELECT goalId FROM swarm_tasks WHERE id=?').get(taskId);
-    const result = this.db.prepare(`UPDATE swarm_tasks SET status='FAILED',lastError=?,leaseOwner=NULL,
-      leaseToken=NULL,leaseExpiresAt=NULL,updatedAt=?
-      WHERE id=? AND status='CLAIMED' AND leaseOwner=? AND leaseToken=?`)
-      .run(String(error || 'FAILED'), now, taskId, agentId, leaseToken);
-    if (Number(result.changes) !== 1) return false;
-    this.recordEvent({ taskId, goalId: task?.goalId, agentId, kind: 'TASK_FAILED', data: { error: String(error || 'FAILED') } });
-    this._refreshGoal(task?.goalId);
-    return true;
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      const task = this.db.prepare(`SELECT goalId,failures FROM swarm_tasks WHERE id=? AND status='CLAIMED'
+        AND leaseOwner=? AND leaseToken=? AND leaseExpiresAt>?`).get(taskId, agentId, leaseToken, now);
+      if (!task) { this.db.exec('ROLLBACK'); return false; }
+      const failures = Number(task.failures || 0) + 1;
+      const exhausted = !retryable || failures >= this.maxFailures;
+      const retryAt = now + Math.min(60000, 1000 * (2 ** Math.min(failures - 1, 6)));
+      this.db.prepare(`UPDATE swarm_tasks SET status=?,failures=?,lastError=?,leaseOwner=NULL,
+        leaseToken=NULL,leaseExpiresAt=NULL,nextAttemptAt=?,updatedAt=? WHERE id=?`)
+        .run(exhausted ? 'FAILED' : 'PENDING', failures, String(error || 'FAILED'), retryAt, now, taskId);
+      this.recordEvent({ taskId, goalId: task.goalId, agentId,
+        kind: exhausted ? 'TASK_FAILED' : 'TASK_RETRY',
+        data: { error: String(error || 'FAILED'), retryable, failures, maxFailures: this.maxFailures, retryAt: exhausted ? null : retryAt } });
+      if (exhausted) this._refreshGoal(task.goalId);
+      this.db.exec('COMMIT');
+      return true;
+    } catch (error) { this.db.exec('ROLLBACK'); throw error; }
   }
 
   _refreshGoal(goalId) {
     if (!goalId) return;
+    let cascaded;
+    do {
+      cascaded = false;
+      const taskRows = this.db.prepare(`SELECT id,dependencies FROM swarm_tasks
+        WHERE goalId=? AND status='PENDING'`).all(goalId);
+      const dependencyIds = [...new Set(taskRows.flatMap(row => parseJson(row.dependencies, [])))];
+      const statusRows = dependencyIds.length
+        ? this.db.prepare(`SELECT id,status FROM swarm_tasks WHERE id IN (${dependencyIds.map(() => '?').join(',')})`).all(...dependencyIds)
+        : [];
+      const statuses = new Map(statusRows.map(row => [row.id, row.status]));
+      for (const row of taskRows) {
+        const dependencies = parseJson(row.dependencies, []);
+        const missing = dependencies.some(id => !statuses.has(id));
+        const impossible = dependencies.some(id => ['FAILED', 'CANCELLED'].includes(statuses.get(id)));
+        if (!missing && !impossible) continue;
+        const status = missing ? 'FAILED' : 'CANCELLED';
+        const reason = missing ? 'DEPENDENCY_MISSING' : 'DEPENDENCY_FAILED';
+        const updated = this.db.prepare(`UPDATE swarm_tasks SET status=?,lastError=?,updatedAt=?
+          WHERE id=? AND status='PENDING'`).run(status, reason, this.now(), row.id);
+        if (Number(updated.changes) !== 1) continue;
+        this.recordEvent({ taskId: row.id, goalId, kind: missing ? 'TASK_FAILED' : 'TASK_CANCELLED',
+          data: { reason, dependencies } });
+        cascaded = true;
+      }
+    } while (cascaded);
     const counts = this.db.prepare(`SELECT status,COUNT(*) AS count FROM swarm_tasks WHERE goalId=? GROUP BY status`).all(goalId);
     const total = counts.reduce((sum, row) => sum + Number(row.count), 0);
     const completed = Number(counts.find(row => row.status === 'COMPLETED')?.count || 0);
     const failed = Number(counts.find(row => row.status === 'FAILED')?.count || 0);
-    const status = failed > 0 ? 'FAILED' : total > 0 && completed === total ? 'COMPLETED' : 'ACTIVE';
+    const active = Number(counts.find(row => row.status === 'PENDING')?.count || 0) +
+      Number(counts.find(row => row.status === 'CLAIMED')?.count || 0);
+    const status = total > 0 && completed === total ? 'COMPLETED' : failed > 0 && active === 0 ? 'FAILED' : 'ACTIVE';
     this.db.prepare('UPDATE swarm_goals SET status=?,updatedAt=? WHERE id=?').run(status, this.now(), goalId);
   }
 
@@ -310,4 +449,5 @@ class SwarmTaskBoard {
   }
 }
 
-module.exports = { SwarmTaskBoard, normalizeCapabilities, taskAnchor, assignmentAllowed };
+module.exports = { SwarmTaskBoard, normalizeCapabilities, taskAnchor, assignmentAllowed,
+  requiresTaskVerification, isValidTaskVerification };

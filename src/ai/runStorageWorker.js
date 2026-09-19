@@ -115,9 +115,10 @@ function startStorageWorker({ host, port, botName, scanRadius = 48, baseGoal = D
     // cest terjangkau" - root cause-nya persis ini, bukan buildMovements() yang salah.
     bot.pathfinder.setMovements(buildMovements(bot));
 
-    // Kuartermaster memakai storageRepository dan lock logistik tersendiri;
-    // snapshot 3D periodik tidak boleh menahan dashboard saat gudang ramai.
-    const adapter = new MineflayerRoleAdapter(bot, { log, sharedWorld: false, capabilities: ['storage', 'haul', 'audit'] });
+    // Logistik memakai reservasi bersama; sampling voxel tetap dimatikan agar
+    // banyak transaksi chest tidak membebani SQLite dan dashboard.
+    const adapter = new MineflayerRoleAdapter(bot, { log, spatialSampling: false, occupancyIntervalMs: 1500,
+      capabilities: ['storage', 'haul', 'audit'] });
 
     const bedResult = await adapter.setSpawnAtNearestBed();
     log(bedResult ? 'Spawn point diset di bed dekat base.' : 'Tidak ada bed dalam jangkauan - spawn point tidak diubah.');
@@ -132,7 +133,23 @@ function startStorageWorker({ host, port, botName, scanRadius = 48, baseGoal = D
       metadata: { role: 'storage' },
       handlers: createEngineTaskHandlers(engine, {
         AUDIT_STORAGE: { actions: ['inspect', 'reorganize', 'collect'], idleCompletes: true },
-        SORT_ITEMS: { actions: ['reorganize', 'collect', 'deliver', 'deliver_failed'], mutatesWorld: true, idleCompletes: true },
+        SORT_ITEMS: { actions: ['reorganize', 'collect', 'deliver'], mutatesWorld: true, idleCompletes: true,
+          verify: ({ result, action, before, context }) => {
+            const receipts = action === 'reorganize' ? result?.items : action === 'deliver' ? result?.deliveries : null;
+            if (!Array.isArray(receipts) || !receipts.length || !before.inventoryCounts) return false;
+            const after = context.snapshot?.()?.inventoryCounts;
+            if (!after) return false;
+            const totals = new Map();
+            for (const item of receipts) {
+              if (!item.name || !Number.isFinite(item.count) || item.count <= 0) return false;
+              totals.set(item.name, (totals.get(item.name) || 0) + item.count);
+            }
+            const checks = [...totals].map(([name, count]) => ({ name: `transferred:${name}`, passed: true,
+              expected: count, actual: action === 'deliver'
+                ? (before.inventoryCounts[name] || 0) - (after[name] || 0)
+                : (after[name] || 0) - (before.inventoryCounts[name] || 0) }));
+            return { status: 'VERIFIED', observedAt: Date.now(), checks };
+          } },
         VERIFY_STORAGE: { actions: ['inspect'], idleCompletes: true },
         HAUL_RESOURCES: { actions: ['deliver', 'collect'], idleCompletes: true },
         DEPOSIT_CROPS: { actions: ['deliver'], idleCompletes: true },

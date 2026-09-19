@@ -1,6 +1,7 @@
 /** Menjalankan empat resource gatherer pada kuadran quarry yang tidak tumpang tindih. */
 const { spawn } = require('node:child_process');
 const path = require('node:path');
+const { ChildProcessWatchdog, terminateChildProcess } = require('./childProcessWatchdog');
 const REGIONS = [
   [-66, -63, -406, -400, 40, 80],
   [-66, -63, -399, -393, 40, 80],
@@ -33,6 +34,7 @@ function startStorageRoomGathererSwarm({
 } = {}) {
   if (!Number.isInteger(count) || count < 1 || count > regions.length) throw new Error(`Jumlah gatherer harus 1..${regions.length}.`);
   const children = Array(count).fill(null);
+  const childWatchdogs = Array(count).fill(null);
   const workerStates = Array.from({ length: count }, () => ({ phase: 'STARTING', restarts: 0, terminal: false }));
   const restartTimers = new Set();
   let stopped = false;
@@ -45,7 +47,11 @@ function startStorageRoomGathererSwarm({
     clearTimeout(stopTimer);
     for (const timer of restartTimers) clearTimeout(timer);
     restartTimers.clear();
-    for (const child of children) child?.kill('SIGTERM');
+    for (let index = 0; index < children.length; index += 1) {
+      childWatchdogs[index]?.close();
+      childWatchdogs[index] = null;
+      terminateChildProcess(children[index]);
+    }
   };
   // Setiap quarry child punya timer sendiri dan dapat menulis PAUSED + checkpoint.
   // Parent tidak boleh membunuh semua region tepat pada detik yang sama, karena itu
@@ -76,8 +82,19 @@ function startStorageRoomGathererSwarm({
     };
     const child = spawnProcess(process.execPath, [runner], { env, stdio: ['ignore', 'pipe', 'pipe'] });
     children[index] = child;
+    const workerSession = workerStates[index].restarts;
+    childWatchdogs[index] = new ChildProcessWatchdog(child, {
+      timeoutMs: Number(process.env.STORAGE_GATHERER_PROGRESS_TIMEOUT_MS) || 9 * 60 * 1000,
+      onStall: ({ silentForMs }) => {
+        workerStates[index].phase = 'BLOCKED';
+        workerStates[index].reason = 'NO_PROGRESS_TIMEOUT';
+        workerStates[index].terminal = true;
+        failed = true;
+        log(`[ResourceW${index + 1}] WORK_EVENT ${JSON.stringify({ phase: 'BLOCKED', reason: 'NO_PROGRESS_TIMEOUT', silentForMs, workerSession })}`);
+      }
+    });
     workerStates[index].phase = 'STARTING';
-    log(`[ResourceW${index + 1}] WORK_EVENT ${JSON.stringify({ phase: 'STARTING', workerIndex: index, restart: workerStates[index].restarts })}`);
+    log(`[ResourceW${index + 1}] WORK_EVENT ${JSON.stringify({ phase: 'STARTING', workerIndex: index, restart: workerSession, workerSession })}`);
     const consume = (stream, level) => {
       let pending = '';
       stream.on('data', data => {
@@ -85,21 +102,27 @@ function startStorageRoomGathererSwarm({
       const lines = pending.split(/\r?\n/);
       pending = lines.pop();
       for (const line of lines.map(item => item.trim()).filter(Boolean)) {
+        let forwarded = line;
         const marker = line.indexOf('WORK_EVENT ');
         if (marker >= 0) {
           try {
             const event = JSON.parse(line.slice(marker + 11));
+            event.workerSession = workerSession;
+            forwarded = `${line.slice(0, marker)}WORK_EVENT ${JSON.stringify(event)}`;
+            childWatchdogs[index]?.beat(event);
             if (typeof event.phase === 'string') workerStates[index].phase = event.phase;
             if (event.reason) workerStates[index].reason = event.reason;
           } catch { /* Baris log biasa tidak mengubah state worker. */ }
         }
-        log(`[ResourceW${index + 1}]${level === 'error' ? ' ERROR' : ''} ${line}`);
+        log(`[ResourceW${index + 1}]${level === 'error' ? ' ERROR' : ''} ${forwarded}`);
       }
       });
     };
     consume(child.stdout, 'info');
     consume(child.stderr, 'error');
     child.on('exit', (code, signal) => {
+      childWatchdogs[index]?.close();
+      childWatchdogs[index] = null;
       log(`[ResourceW${index + 1}] selesai code=${code} signal=${signal || 'none'}`);
       if (stopped) return;
       if (workerStates[index].phase === 'COMPLETE') {
@@ -115,7 +138,7 @@ function startStorageRoomGathererSwarm({
         failed = true;
         workerStates[index].terminal = true;
         completed += 1;
-        log(`[ResourceW${index + 1}] WORK_EVENT ${JSON.stringify({ phase: 'BLOCKED', reason: workerStates[index].reason || 'WORKER_BLOCKED_TERMINAL' })}`);
+        log(`[ResourceW${index + 1}] WORK_EVENT ${JSON.stringify({ phase: 'BLOCKED', reason: workerStates[index].reason || 'WORKER_BLOCKED_TERMINAL', workerSession })}`);
         if (completed === count && require.main === module) {
           clearTimeout(stopTimer);
           process.exitCode = 2;
@@ -126,7 +149,7 @@ function startStorageRoomGathererSwarm({
         failed = true;
         workerStates[index].terminal = true;
         completed += 1;
-        log(`[ResourceW${index + 1}] WORK_EVENT ${JSON.stringify({ phase: 'BLOCKED', reason: 'RESTART_LIMIT' })}`);
+        log(`[ResourceW${index + 1}] WORK_EVENT ${JSON.stringify({ phase: 'BLOCKED', reason: 'RESTART_LIMIT', workerSession })}`);
         if (completed === count && require.main === module) {
           clearTimeout(stopTimer);
           process.exitCode = 2;
@@ -139,7 +162,7 @@ function startStorageRoomGathererSwarm({
         startWorker(index);
       }, Math.max(250, Number(restartDelayMs) || 5000));
       restartTimers.add(timer);
-      log(`[ResourceW${index + 1}] WORK_EVENT ${JSON.stringify({ phase: 'RESTARTING', restart: workerStates[index].restarts })}`);
+      log(`[ResourceW${index + 1}] WORK_EVENT ${JSON.stringify({ phase: 'RESTARTING', restart: workerStates[index].restarts, workerSession })}`);
     });
   };
   for (let index = 0; index < count; index += 1) startWorker(index);

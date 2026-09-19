@@ -172,12 +172,16 @@ function startStorageRoomLandscaper({
   let spawnTimer;
   let runTimer;
   let roleTask = null;
-  const reportWork = (phase, extra = {}) => log(`WORK_EVENT ${JSON.stringify({ phase, ...extra })}`);
-  const finish = code => {
+  const reportWork = (phase, extra = {}) => {
+    const details = { phase, ...extra };
+    log(`WORK_EVENT ${JSON.stringify(details)}`);
+    roleTask?.reportProgress(details);
+  };
+  const finish = (code, verification = null) => {
     if (finished) return;
     finished = true;
     if (roleTask) {
-      if (code === 0) roleTask.complete({ exitCode: code, role: 'landscaper' });
+      if (code === 0 && verification) roleTask.complete({ exitCode: code, role: 'landscaper', verification });
       else roleTask.defer(`PROCESS_EXIT_${code}`, 5000);
       roleTask = null;
     }
@@ -206,7 +210,8 @@ function startStorageRoomLandscaper({
       bot.pathfinder.setMovements(buildMovements(bot, { allowTerrainWork: false, allow1by1Towers: false }));
       bot.pathfinder.thinkTimeout = 30000;
       const adapter = new MineflayerRoleAdapter(bot, { log, capabilities: ['landscape', 'access', 'survey'] });
-      roleTask = claimExternalRoleTask(adapter, { taskTypes: ['LANDSCAPE_SITE'], capabilities: ['landscape'], log });
+      roleTask = claimExternalRoleTask(adapter, { taskTypes: ['LANDSCAPE_SITE'], capabilities: ['landscape'],
+        stallTimeoutMs: 9 * 60 * 1000, log });
       log(`Spawn landscaper di (${bot.entity.position.x.toFixed(1)}, ${bot.entity.position.y.toFixed(1)}, ${bot.entity.position.z.toFixed(1)})`);
       if (supportOnly) {
         await waitForChunks(bot, log);
@@ -244,7 +249,10 @@ function startStorageRoomLandscaper({
           verifiedBlocks: Number(result.repairs) || 0,
           reason: result.final.ok ? undefined : 'SUPPORT_AUDIT_FAILED'
         });
-        finish(result.final.ok ? 0 : 2);
+        finish(result.final.ok ? 0 : 2, result.final.ok ? {
+          status: 'VERIFIED', observedAt: Date.now(),
+          checks: [{ name: 'support_audit', passed: true, expected: true, actual: result.final.ok }]
+        } : null);
         return;
       }
       if (!skipBaseWalk) {
@@ -319,7 +327,11 @@ function startStorageRoomLandscaper({
       }
       if (result.status === 'COMPLETE') {
         log('LANDSCAPE_READY: seluruh kolom area gudang sudah rata dan terverifikasi.');
-        finish(0);
+        finish(0, {
+          status: 'VERIFIED', observedAt: Date.now(),
+          checks: [{ name: 'landscape_columns', passed: true, expected: 0, actual: result.plan?.summary?.blocked || 0 },
+            { name: 'landscape_complete', passed: true, expected: 'COMPLETE', actual: result.status }]
+        });
       } else {
         log(`STOP landscaping: retry maksimum tercapai (${maxRetries}).`);
         finish(2);

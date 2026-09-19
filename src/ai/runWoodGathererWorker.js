@@ -342,7 +342,8 @@ function startWoodGathererWorker({
       // batang/chest tidak boleh menunggu graph koridor bersama yang belum
       // dipelajari. Tanpa ini worker sudah berada di base namun setiap target
       // lokal berhenti di NEEDS_SURVEY.
-      const adapter = new MineflayerRoleAdapter(bot, { log, sharedWorld: false, capabilities: ['woodcut', 'haul', 'plant'], coordinateMovement: false });
+      const adapter = new MineflayerRoleAdapter(bot, { log, spatialSampling: false, occupancyIntervalMs: 1500,
+        capabilities: ['woodcut', 'haul', 'plant'], coordinateMovement: false });
       status = 'ONBOARDING';
       try {
         const spawnSet = await withTimeout(adapter.setSpawnAtNearestBed(24), 8000, false);

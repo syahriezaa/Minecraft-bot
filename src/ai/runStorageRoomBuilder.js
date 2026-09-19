@@ -280,11 +280,11 @@ function startStorageRoomBuilder({
   let runTimer;
   let spawnTimer;
   let roleTask = null;
-  const finish = (code) => {
+  const finish = (code, verification = null) => {
     if (finished) return;
     finished = true;
     if (roleTask) {
-      if (code === 0) roleTask.complete({ exitCode: code, role: 'builder' });
+      if (code === 0 && verification) roleTask.complete({ exitCode: code, role: 'builder', verification });
       else roleTask.defer(`PROCESS_EXIT_${code}`, 5000);
       roleTask = null;
     }
@@ -312,7 +312,11 @@ function startStorageRoomBuilder({
     spawned = true;
     clearTimeout(spawnTimer);
     try {
-    const reportWork = (phase, extra = {}) => log(`WORK_EVENT ${JSON.stringify({ phase, ...extra })}`);
+    const reportWork = (phase, extra = {}) => {
+      const details = { phase, ...extra };
+      log(`WORK_EVENT ${JSON.stringify(details)}`);
+      roleTask?.reportProgress(details);
+    };
     reportWork('PREPARE');
     bot.loadPlugin(pathfinder);
     bot.pathfinder.setMovements(buildMovements(bot));
@@ -711,7 +715,11 @@ function startStorageRoomBuilder({
       reason: result.reason || result.code || undefined
     });
     if (!continuous) {
-      finish(result.status === 'COMPLETE' || result.status === 'PAUSED' ? 0 : 2);
+      const complete = result.status === 'COMPLETE' && Number(result.remainingBlocks || 0) === 0;
+      finish(complete ? 0 : 2, complete ? {
+        status: 'VERIFIED', observedAt: Date.now(),
+        checks: [{ name: 'blueprint_remaining_blocks', passed: true, expected: 0, actual: 0 }]
+      } : null);
       return;
     }
     let pausedRetries = 0;
@@ -741,7 +749,11 @@ function startStorageRoomBuilder({
         reason: result.reason || result.code || undefined
       });
     }
-    finish(0);
+    const complete = result.status === 'COMPLETE' && Number(result.remainingBlocks || 0) === 0;
+    finish(complete ? 0 : 2, complete ? {
+      status: 'VERIFIED', observedAt: Date.now(),
+      checks: [{ name: 'blueprint_remaining_blocks', passed: true, expected: 0, actual: 0 }]
+    } : null);
     } catch (error) {
       if (finished || died) return;
       log(`STOP builder: ${error.stack || error.message}`);

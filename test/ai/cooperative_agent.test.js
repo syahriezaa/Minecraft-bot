@@ -2,15 +2,20 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { createEngineTaskHandlers, runCooperativeCycle } = require('../../src/ai/cooperativeAgent');
 
-test('engine handler memverifikasi aksi yang sesuai dan menunda aksi domain lain', async () => {
-  let action = 'harvest';
-  const handlers = createEngineTaskHandlers({ tick: async () => ({ action }) }, {
-    HARVEST: { actions: ['harvest'], mutatesWorld: true, idleCompletes: true }
+test('engine handler hanya menerima mutasi dengan bukti eksplisit dan menunda aksi domain lain', async () => {
+  let result = { action: 'harvest', verified: true };
+  let reads = 0;
+  const handlers = createEngineTaskHandlers({ tick: async () => result }, {
+    HARVEST: { actions: ['harvest'], mutatesWorld: true, idleCompletes: true, remaining: () => reads++ ? 0 : 1 }
   });
-  assert.deepEqual(await handlers.HARVEST({}), {
-    success: true, verified: true, action: 'harvest', result: { action: 'harvest' }
-  });
-  action = 'plant';
+  const verified = await handlers.HARVEST({});
+  assert.equal(verified.success, true);
+  assert.equal(verified.verified, true);
+  assert.equal(verified.verification.status, 'VERIFIED');
+  assert.equal(verified.verification.checks[0].passed, true);
+  result = { action: 'harvest' };
+  assert.equal((await handlers.HARVEST({})).reason, 'RESULT_NOT_VERIFIED:harvest');
+  result = { action: 'plant' };
   assert.equal((await handlers.HARVEST({})).retryable, true);
 });
 
