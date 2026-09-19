@@ -7,6 +7,8 @@
 
 const { goals } = require('mineflayer-pathfinder');
 const { Vec3 } = require('vec3');
+const { attachSharedWorldObserver } = require('./sharedWorldObserver');
+const { LocalSpatialPlanner } = require('./localSpatialPlanner');
 
 const FOOD_PRIORITY = Object.freeze([
   'golden_apple',
@@ -62,13 +64,35 @@ class MineflayerRoleAdapter {
       // terlihat sepanjang sesi ini) - window.slots lokal bot bisa saja belum lengkap/akurat,
       // membuat pengecekan "ada slot kosong?" mineflayer keliru menyimpulkan chest penuh.
       chestSettleMs: 250,
+      // Respons open_window yang hilang tidak boleh memegang lock logistik selamanya.
+      containerOpenTimeoutMs: 12000,
       // Dipanggil dengan pesan Bahasa Indonesia tiap kali verifyChestContentsByRoundTrip benar-
       // benar melakukan probe ambil-taruh - supaya pemilik bisa MELIHAT LANGSUNG (lewat feed
       // dashboard) bahwa verifikasi ini sungguhan terjadi, bukan cuma lolos di tes unit.
       log: () => {},
+      // Keep quarry survey cycles bounded so unreachable targets cannot monopolize a worker.
+      reachableWorkCandidateLimit: 24,
+      reachableWorkPathTimeoutMs: 30,
+      reachableWorkMaxPages: 8,
       ...options
     };
     this.worldAwareness = options.worldAwareness || null;
+    this.lastDigTool = null;
+    // Semua aksi role pada satu bot berbagi satu pathfinder. Tanpa antrean,
+    // pembukaan beberapa chest atau percobaan beberapa stance dapat mengganti
+    // goal aktif satu sama lain dan meninggalkan worker tanpa bekal.
+    this.navigationTail = Promise.resolve();
+    this.activeNavigation = null;
+    this.spatialPlanner = new LocalSpatialPlanner(pos => typeof bot?.blockAt === 'function' ? bot.blockAt(asVec3(pos)) : null);
+    this.sharedWorldObserver = options.sharedWorld === false ? null : attachSharedWorldObserver(bot, {
+      log: options.log || console.warn,
+      coordinateMovement: options.coordinateMovement !== false,
+      agent: {
+        id: options.agentId || bot?.username || 'worker',
+        capabilities: options.capabilities || ['generic'],
+        metadata: options.agentMetadata || {}
+      }
+    });
   }
 
   getPosition() {
@@ -108,33 +132,210 @@ class MineflayerRoleAdapter {
     return Boolean(this.getItemByName(names));
   }
 
-  async navigateNear(pos, range = this.options.defaultGoalRange) {
+  // Klaim kerja tingkat objek (mis. satu pohon penuh), bukan hanya satu blok
+  // yang sedang dipukul. Tanpa ini dua worker dapat memilih pohon yang sama
+  // dari snapshot dunia masing-masing lalu menghasilkan panen parsial.
+  acquireSharedReservation(positions) {
+    const hold = this.sharedWorldObserver?.actions?.hold;
+    if (typeof hold !== 'function') return undefined;
+    try { return hold(positions); }
+    catch (error) {
+      this.options.log(`[Reservasi] Objek kerja sedang dipakai worker lain: ${error.message}`);
+      return null;
+    }
+  }
+
+  async navigateNear(pos, range = this.options.defaultGoalRange, options = {}) {
+    const previous = this.navigationTail;
+    let release;
+    this.navigationTail = new Promise(resolve => { release = resolve; });
+    await previous.catch(() => false);
+    try {
+      return await this._navigateNear(pos, range, options);
+    } finally {
+      release();
+    }
+  }
+
+  async _navigateNear(pos, range = this.options.defaultGoalRange, options = {}) {
     if (!pos) return false;
+    if (this.activeNavigation && !this.activeNavigation.settled) {
+      this.bot?.pathfinder?.setGoal?.(null);
+      await Promise.race([
+        this.activeNavigation.promise.then(() => {}, () => {}),
+        new Promise(resolve => setTimeout(resolve, 250))
+      ]);
+      if (this.activeNavigation && !this.activeNavigation.settled) {
+        if (!this.activeNavigation.warned) {
+          this.activeNavigation.warned = true;
+          this.options.log('[Navigasi] Rute sebelumnya belum selesai setelah pembatalan; target baru ditahan agar goal tidak saling menimpa.');
+        }
+        return false;
+      }
+    }
+    let destination = pos;
+    let destinationRange = range;
+    let spatialPath = null;
+    // Untuk interaksi lokal, pilih pijakan yang terhubung alih-alih menjadikan blok solid tujuan.
+    if (this.bot?._client && !options.directPathfinder && !this.bot.pathfinder?.getPathTo && distance(this.getPosition(), pos) <= 12) {
+      const survey = this.spatialPlanner.survey(this.getPosition());
+      const stance = this.spatialPlanner.selectWorkPosition(survey, pos, range);
+      if (stance) { destination = stance.position; destinationRange = 0; spatialPath = stance.path; }
+      else if (survey.nodes.size && !survey.unknown && !survey.truncated) return false;
+    }
+    if (distance(this.getPosition(), pos) <= range) {
+      this.bot?.pathfinder?.setGoal?.(null);
+      return true;
+    }
     if (this.bot?.pathfinder?.goto) {
       // Balapan goto() melawan batas waktu - lihat catatan navigateTimeoutMs di constructor.
       // Timeout SENGAJA resolve (bukan reject) ke false: caller (findMatchingChest,
       // withdrawAllFromChest, dst) sudah menganggap false/gagal sebagai sinyal "lewati saja,
       // lanjut ke target berikutnya", bukan error yang perlu ditangani khusus.
       const start = Date.now();
+      const navigateTimeoutMs = Math.max(1, Number(options.timeoutMs) || this.options.navigateTimeoutMs);
       let timeoutHandle;
+      let cancelled = false;
       const timeout = new Promise((resolve) => {
-        timeoutHandle = setTimeout(() => resolve(false), this.options.navigateTimeoutMs);
+          timeoutHandle = setTimeout(() => { cancelled = true; this.bot.pathfinder.setGoal?.(null); resolve(false); }, navigateTimeoutMs);
       });
-      const result = await Promise.race([
-        this.bot.pathfinder.goto(new goals.GoalNear(pos.x, pos.y, pos.z, range)).then(() => true),
-        timeout
-      ]);
-      clearTimeout(timeoutHandle);
+      let result;
+      let movePromise;
+      const coordinator = this.sharedWorldObserver?.actions;
+      const move = async () => {
+        const pathfinder = this.bot.pathfinder;
+        const previousSharedRoute = pathfinder.allowSharedRoute;
+        if (options.sharedRoute === true) pathfinder.allowSharedRoute = true;
+        const points = spatialPath || [destination];
+        const resources = points.flatMap(p => [p, { ...p, y: p.y+1 }, { ...p, y: p.y-1 }]);
+        const execute = async () => {
+          const exclusions = this.bot.pathfinder.movements?.exclusionAreasStep;
+          const allowed = new Set(resources.map(p => `${p.x},${p.y},${p.z}`));
+          const routeOnly = block => allowed.has(`${block.position.x},${block.position.y},${block.position.z}`) ? 0 : Infinity;
+          if (coordinator && spatialPath && exclusions) exclusions.push(routeOnly);
+          try {
+            for (const point of points) {
+              if (cancelled) return false;
+              const goal = options.goalXZOnly && !spatialPath && goals.GoalNearXZ
+                ? new goals.GoalNearXZ(point.x, point.z, destinationRange)
+                : new goals.GoalNear(point.x, point.y, point.z, spatialPath ? 0 : destinationRange);
+              await this.bot.pathfinder.goto(goal);
+            }
+            return true;
+          } finally {
+            const index = exclusions?.indexOf(routeOnly) ?? -1;
+            if (index >= 0) exclusions.splice(index, 1);
+          }
+        };
+        try {
+          return coordinator
+            ? coordinator.run(resources, execute, { shared: options.sharedRoute === true })
+            : execute();
+        } finally {
+          pathfinder.allowSharedRoute = previousSharedRoute;
+        }
+      };
+      try {
+        // Jangan meninggalkan goto lama berjalan saat caller langsung mencoba
+        // kandidat berikutnya. Pathfinder akan memproses setGoal(null) secara
+        // asynchronous; menunggu sebentar di sini mencegah dua goal saling
+        // membatalkan dan menghasilkan "The goal was changed..." berantai.
+        movePromise = Promise.resolve().then(move);
+        const activeNavigation = { promise: movePromise, settled: false, warned: false };
+        this.activeNavigation = activeNavigation;
+        movePromise.then(() => {
+          activeNavigation.settled = true;
+          if (this.activeNavigation === activeNavigation) this.activeNavigation = null;
+        }, () => {
+          activeNavigation.settled = true;
+          if (this.activeNavigation === activeNavigation) this.activeNavigation = null;
+        });
+        result = await Promise.race([movePromise, timeout]);
+        if (cancelled) {
+          await Promise.race([
+            movePromise.catch(() => false),
+            new Promise(resolve => setTimeout(resolve, 1000))
+          ]);
+        }
+      } catch (error) {
+        // Goal dapat berubah karena reconnect, timeout, atau aksi worker lain yang sedang
+        // membersihkan pathfinder. Itu bukan alasan untuk mematikan seluruh worker; tandai
+        // navigasi target ini gagal agar caller bisa mencoba target berikutnya.
+        result = false;
+        this.options.log(`[Navigasi] Target (${pos.x},${pos.y},${pos.z}) gagal: ${error.message} - dilewati.`);
+      } finally {
+        clearTimeout(timeoutHandle);
+        if (!result) this.bot.pathfinder.setGoal?.(null);
+      }
       if (!result) {
         // Dulu gagal DIAM-DIAM tanpa jejak sama sekali - ditemukan dari keluhan nyata pemilik
         // ("kok bisa berjarak beberapa menit padahal harusnya kurang dari 5 detik") saat jeda
         // panjang tak terjelaskan antar pemeriksaan chest ternyata (diduga) navigasi yang macet
         // berulang kali, tapi tidak pernah tercatat di mana pun sehingga tidak kelihatan.
-        this.options.log(`[Navigasi] PERINGATAN: navigasi ke (${pos.x},${pos.y},${pos.z}) timeout setelah ${Date.now() - start}ms (${this.options.navigateTimeoutMs}ms batas) - dilewati, lanjut ke target berikutnya.`);
+        this.options.log(`[Navigasi] PERINGATAN: navigasi ke (${pos.x},${pos.y},${pos.z}) timeout setelah ${Date.now() - start}ms (${navigateTimeoutMs}ms batas) - dilewati, lanjut ke target berikutnya.`);
       }
       return result;
     }
     return distance(this.getPosition(), pos) <= range;
+  }
+
+  selectReachableWork(targets, offset = 0) {
+    if (this.bot.pathfinder?.getPathTo && this.bot.world?.raycast) {
+      const started = Date.now();
+      const candidateLimit = Math.max(4, Math.min(24, Number(this.options.reachableWorkCandidateLimit) || 24));
+      const pathTimeout = Math.max(5, Math.min(30, Number(this.options.reachableWorkPathTimeoutMs) || 30));
+      // Depth wins inside the local work window, not over distant inaccessible bottom layers.
+      const candidates = [...targets].sort((a,b)=>distance(this.getPosition(),a.pos)-distance(this.getPosition(),b.pos)).slice(offset,offset+candidateLimit)
+        .sort((a,b)=>(a.priority || 0)-(b.priority || 0)||distance(this.getPosition(),a.pos)-distance(this.getPosition(),b.pos));
+      let partial = targets.length > offset + candidateLimit;
+      let incomplete = false;
+      for (const target of candidates) {
+        if (Date.now()-started > 250) { partial = true; incomplete = true; break; }
+        const goal = new goals.GoalLookAtBlock(asVec3(target.pos),this.bot.world,{reach:4.5});
+        const result = this.bot.pathfinder.getPathFromTo
+          ? this.bot.pathfinder.getPathFromTo(this.bot.pathfinder.movements,this.getPosition(),goal,{timeout:pathTimeout,optimizePath:false}).next().value.result
+          : this.bot.pathfinder.getPathTo(this.bot.pathfinder.movements,goal,pathTimeout);
+        if (result.status !== 'success') { if (result.status !== 'noPath') { partial=true; incomplete=true; } continue; }
+        const route = [asVec3(this.getPosition()),...(result.path || [])];
+        if (route.some((p, i) => i > 0 && Math.abs(p.y - Math.floor(route[i - 1].y)) > 1)) continue;
+        if (route.some(p=>p.toBreak?.length||p.toPlace?.length||p.x===target.pos.x&&p.z===target.pos.z&&p.y-1===target.pos.y))continue;
+        return {status:'REACHABLE',target,stance:{position:route.at(-1),path:route,score:route.length},survey:{nodes:new Map(),unknown:false,truncated:false}};
+      }
+      return {status:partial?'NEEDS_SURVEY':'NEEDS_ACCESS',incomplete,nextOffset:offset+candidateLimit,survey:{nodes:new Map(),unknown:partial,truncated:partial}};
+    }
+    return this.spatialPlanner.selectTarget(this.getPosition(), targets);
+  }
+
+  async approachReachableWork(targets, shouldStop = () => false) {
+    let selection = this.selectReachableWork(targets);
+    if (selection.nextOffset !== undefined) {
+      let uncertain = selection.incomplete;
+      const maxPages = Math.max(1, Math.min(8, Number(this.options.reachableWorkMaxPages) || 8));
+      for (let page = 1; page < maxPages && !selection.target && selection.nextOffset < targets.length; page++) {
+        if (shouldStop()) break;
+        await new Promise(resolve => setImmediate(resolve));
+        selection = this.selectReachableWork(targets, selection.nextOffset);
+        uncertain ||= selection.incomplete;
+      }
+      if (!selection.target && uncertain) selection.status = 'NEEDS_SURVEY';
+      return selection;
+    }
+    const nearest = p => targets.reduce((d, t) => Math.min(d, distance(p, t.pos)), Infinity);
+    for (let attempt = 0; attempt < 3 && !selection.target && selection.status === 'NEEDS_SURVEY'; attempt++) {
+      if (shouldStop()) break;
+      const before = this.getPosition();
+      let frontier = null;
+      let bestDistance = nearest(before) - 1;
+      for (const { position } of selection.survey.nodes.values()) {
+        const d = nearest(position);
+        if (d < bestDistance) { bestDistance = d; frontier = position; }
+      }
+      // Hanya berpindah di komponen yang memiliki jalur pulang, lalu baca dunia lagi.
+      if (!frontier || !await this.navigateNear(frontier, 0)) break;
+      if (distance(before, this.getPosition()) < 0.5) break;
+      selection = this.selectReachableWork(targets);
+    }
+    return selection;
   }
 
   // Dekati target jarak dekat saat bertarung pakai GERAKAN LANGSUNG sederhana (lookAt + jalan
@@ -171,18 +372,38 @@ class MineflayerRoleAdapter {
   }
 
   async equipItem(names, destination = 'hand') {
-    const item = this.getItemByName(names);
-    if (!item || typeof this.bot?.equip !== 'function') return false;
-    await this.bot.equip(item, destination);
-    return true;
+    if (typeof this.bot?.equip !== 'function') return false;
+    const itemName = this.getItemByName(names)?.name;
+    if (!itemName) return false;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const item = this.getItemByName(itemName);
+      if (!item) return false;
+      await this.bot.equip(item, destination);
+      if (destination !== 'hand') return true;
+      const deadline = Date.now() + 1500;
+      while (Date.now() <= deadline) {
+        if (this.bot.heldItem?.name === itemName) return true;
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+    }
+    this.options.log(`[Inventaris] Gagal mengonfirmasi ${itemName} sudah berada di tangan; placement ditunda.`);
+    return false;
   }
 
   async eatBestFood(foodNames = FOOD_PRIORITY) {
     const food = this.getItemByName(foodNames);
     if (!food || typeof this.bot?.equip !== 'function' || typeof this.bot?.consume !== 'function') return false;
-    await this.bot.equip(food, 'hand');
-    await this.bot.consume();
-    return true;
+    try {
+      await this.bot.equip(food, 'hand');
+      await this.bot.consume();
+      return true;
+    } catch (error) {
+      // Server 775 kadang tidak mengonfirmasi consume sebelum timeout Mineflayer. Ini operasi
+      // pemulihan, jadi jangan biarkan satu timeout makan mematikan seluruh worker; caller akan
+      // memeriksa health/food dan memutuskan apakah perlu berhenti.
+      this.options.log(`[Makanan] Gagal makan ${food.name}: ${error.message}`);
+      return false;
+    }
   }
 
   async lookAt(pos) {
@@ -193,15 +414,61 @@ class MineflayerRoleAdapter {
     return false;
   }
 
-  async dig(block) {
+  async equipBestToolForBlock(block) {
+    const name = block?.name || '';
+    const toolNames = name.includes('log') || name.includes('wood') || name.endsWith('_stem')
+      ? ['iron_axe', 'diamond_axe', 'netherite_axe', 'stone_axe', 'wooden_axe']
+      : ['dirt', 'grass', 'sand', 'gravel', 'clay', 'snow', 'mud'].some(part => name.includes(part)) ||
+        ['coarse_dirt', 'podzol', 'mycelium', 'rooted_dirt'].includes(name)
+        ? ['iron_shovel', 'diamond_shovel', 'netherite_shovel', 'stone_shovel', 'wooden_shovel']
+        : ['stone', 'cobblestone', 'deepslate', 'tuff', 'andesite', 'diorite', 'granite', 'ore'].some(part => name.includes(part))
+          ? ['iron_pickaxe', 'diamond_pickaxe', 'netherite_pickaxe', 'stone_pickaxe', 'wooden_pickaxe']
+          : [];
+    for (const tool of toolNames) {
+      if (this.getItemCount(tool) > 0 && await this.equipItem(tool, 'hand')) return tool;
+    }
+    return null;
+  }
+
+  async dig(block, { collectDrops = true, allowNavigation = true } = {}) {
     if (!block || typeof this.bot?.dig !== 'function') return false;
     const pos = block.position || block;
-    await this.navigateNear(pos, 3);
-    await this.bot.dig(block);
+    const directFromStance = this.bot.canDigBlock?.(block) && this.bot.canSeeBlock?.(block);
+    const isWoodLog = /(?:^|_)(?:log|wood|stem|hyphae)(?:$|_)/.test(block.name || '');
+    const tool = await this.equipBestToolForBlock(block);
+    if (tool !== this.lastDigTool) {
+      this.options.log(tool ? `[Tool] ${tool} dipakai untuk menggali ${block.name}.` : `[Tool] Tidak ada tool cocok; ${block.name} digali dengan tangan.`);
+      this.lastDigTool = tool;
+    }
+    // Tree drops fall to the base. Do not walk toward an upper trunk block
+    // merely because collectDrops is enabled; that creates false access
+    // failures after the first reachable log.
+    const reachableFromStance = directFromStance || (collectDrops && isWoodLog && directFromStance);
+    if (!reachableFromStance && (!allowNavigation || !await this.navigateNear(pos, 3))) return false;
+    // Some protocol-775 item components expose malformed enchantment data. Mineflayer's
+    // digTime expects an iterable here; preserve the normal calculation and fall back to the
+    // same vanilla block calculation with no enchantment bonus when that component is invalid.
+    const originalDigTime = this.bot.digTime;
+    let patchedDigTime = false;
+    if (typeof originalDigTime === 'function') {
+      this.bot.digTime = target => {
+        try { return originalDigTime(target); } catch (error) {
+          if (!/enchantments is not iterable|know how to get the enchants/i.test(error.message)) throw error;
+          const held = this.bot.heldItem;
+          const eye = typeof this.bot._getBlockAtEyeLevel === 'function' ? this.bot._getBlockAtEyeLevel() : null;
+          return target.digTime(held?.type ?? null, this.bot.game?.gameMode === 'creative',
+            ['water', 'flowing_water'].includes(eye?.name), !this.bot.entity.onGround, [], this.bot.entity.effects || {});
+        }
+      };
+      patchedDigTime = true;
+    }
+    try { await this.bot.dig(block); } finally {
+      if (patchedDigTime) this.bot.digTime = originalDigTime;
+    }
     // Barang hasil gali (mis. panen crop) jatuh sebagai item entity di tanah - jarak 3 blok cukup
     // untuk menggali tapi TIDAK cukup dekat untuk memicu pickup otomatis Minecraft. Mendekat sampai
     // benar-benar menginjak posisi blok (range 0) supaya barangnya ikut terambil, bukan ditinggalkan.
-    await this.navigateNear(pos, 0);
+    if (collectDrops && !isWoodLog) await this.navigateNear(pos, 0);
     return true;
   }
 
@@ -209,7 +476,7 @@ class MineflayerRoleAdapter {
     if (!referenceBlock || !seedName || typeof this.bot?.placeBlock !== 'function') return false;
     const equipped = await this.equipItem(seedName, 'hand');
     if (!equipped) return false;
-    await this.navigateNear(referenceBlock.position || referenceBlock, 3);
+    if (!await this.navigateNear(referenceBlock.position || referenceBlock, 3)) return false;
     await this.bot.placeBlock(referenceBlock, new Vec3(0, 1, 0));
     return true;
   }
@@ -239,9 +506,18 @@ class MineflayerRoleAdapter {
     if (!pos || typeof this.bot?.activateBlock !== 'function') return false;
     const equipped = await this.equipItem(HOE_NAMES, 'hand');
     if (!equipped) return false;
-    await this.navigateNear(pos, 3);
+    if (!await this.navigateNear({ ...pos, y: pos.y + 1 }, 3)) return false;
     const block = this.blockAt(pos);
     if (!block) return false;
+    await this.bot.activateBlock(block);
+    return true;
+  }
+
+  async toggleDoor(pos) {
+    if (!pos || typeof this.bot?.activateBlock !== 'function') return false;
+    if (!await this.navigateNear(pos, 3)) return false;
+    const block = this.blockAt(pos);
+    if (!block || !String(block.name || '').endsWith('_door')) return false;
     await this.bot.activateBlock(block);
     return true;
   }
@@ -255,12 +531,91 @@ class MineflayerRoleAdapter {
     if (!pos || typeof this.bot?.placeBlock !== 'function') return false;
     const equipped = await this.equipItem(itemName, 'hand');
     if (!equipped) return false;
-    const below = { x: pos.x, y: pos.y - 1, z: pos.z };
-    await this.navigateNear(below, 3);
-    const belowBlock = this.blockAt(below);
-    if (!belowBlock || belowBlock.name === 'air') return false;
-    await this.bot.placeBlock(belowBlock, new Vec3(0, 1, 0));
-    return true;
+    // Tambal dari sisi tepi, tanpa menjadikan dasar lubang sebagai tujuan jalan.
+    for (const off of [{ x: 1, y: 0, z: 0 }, { x: -1, y: 0, z: 0 }, { x: 0, y: 0, z: 1 }, { x: 0, y: 0, z: -1 }, { x: 0, y: -1, z: 0 }]) {
+      const ref = this.blockAt({ x: pos.x + off.x, y: pos.y + off.y, z: pos.z + off.z });
+      if (!ref || ['air', 'water', 'lava', 'cave_air'].includes(ref.name) || ref.boundingBox === 'empty') continue;
+      if (!await this.navigateNear({ x: pos.x + off.x, y: pos.y + 1, z: pos.z + off.z }, 3)) return false;
+      await this.placeBlockAt(pos, ref, new Vec3(-off.x, -off.y, -off.z));
+      return true;
+    }
+    return false;
+  }
+
+  async findReferences(pos) {
+    if (!pos) return [];
+    const offsets = [
+      { x: 1, y: 0, z: 0 }, { x: -1, y: 0, z: 0 },
+      { x: 0, y: 0, z: 1 }, { x: 0, y: 0, z: -1 },
+      { x: 0, y: -1, z: 0 }, { x: 0, y: 1, z: 0 }
+    ];
+    const references = [];
+    const negate = value => value === 0 ? 0 : -value;
+    for (const offset of offsets) {
+      const reference = this.blockAt({ x: pos.x + offset.x, y: pos.y + offset.y, z: pos.z + offset.z });
+      if (!reference || ['air', 'cave_air', 'void_air', 'water', 'lava'].includes(reference.name) || reference.boundingBox === 'empty') continue;
+      references.push({ reference, face: new Vec3(negate(offset.x), negate(offset.y), negate(offset.z)) });
+    }
+    return references;
+  }
+
+  async findReference(pos) {
+    return (await this.findReferences(pos))[0] || null;
+  }
+
+  async jumpBeforePlacement(pos) {
+    const entityPos = this.bot?.entity?.position;
+    if (!pos || !entityPos || typeof this.bot?.setControlState !== 'function') return false;
+    const halfWidth = (this.bot.entity.width || 0.6) / 2;
+    const sameColumn = entityPos.x + halfWidth > pos.x && entityPos.x - halfWidth < pos.x + 1 &&
+      entityPos.z + halfWidth > pos.z && entityPos.z - halfWidth < pos.z + 1;
+    const underFeet = sameColumn && entityPos.y < pos.y + 1 && entityPos.y + 0.2 >= pos.y;
+    if (!underFeet) return false;
+    this.bot.pathfinder?.setGoal?.(null);
+    for (const control of ['forward', 'back', 'left', 'right', 'sprint', 'sneak']) this.bot.setControlState(control, false);
+    this.bot.setControlState('jump', true);
+    try {
+      const deadline = Date.now() + (this.options.jumpTimeoutMs ?? 1200);
+      while (Date.now() < deadline) {
+        const currentY = this.bot.entity.position.y;
+        if (currentY >= pos.y + 1.02) {
+          this.options.log(`[Gerak] Kaki bebas target (${pos.x},${pos.y},${pos.z}), y=${currentY.toFixed(3)}; placement saat melompat.`);
+          return true;
+        }
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      throw new Error(`Lompatan belum membebaskan target (${pos.x},${pos.y},${pos.z}); kaki y=${this.bot.entity.position.y.toFixed(3)}`);
+    } finally {
+      this.bot.setControlState('jump', false);
+    }
+  }
+
+  async placeBlockAt(pos, reference, face, { facing } = {}) {
+    // Mengarahkan pandangan setelah melompat menghabiskan jendela placement di udara.
+    if (typeof this.bot.lookAt === 'function') {
+      await this.bot.lookAt(asVec3(reference.position).offset(0.5 + face.x * 0.5, 0.5 + face.y * 0.5, 0.5 + face.z * 0.5), true);
+    }
+    if (facing) {
+      const yaw = { north: Math.PI, south: 0, east: Math.PI / 2, west: -Math.PI / 2 }[facing];
+      if (yaw === undefined || typeof this.bot.look !== 'function') throw new Error(`Unsupported placement facing: ${facing}`);
+      await this.bot.look(yaw, this.bot.entity.pitch || 0, true);
+      // force=true changes the local look immediately; a physics tick sends it to the server.
+      if (typeof this.bot.waitForTicks === 'function') await this.bot.waitForTicks(1);
+    }
+    const previousSneak = this.bot.getControlState?.('sneak') || false;
+    await this.jumpBeforePlacement(pos);
+    const interactive = ['chest', 'trapped_chest', 'barrel', 'furnace', 'blast_furnace', 'smoker', 'crafting_table', 'hopper'].includes(reference.name);
+    if (interactive && typeof this.bot.setControlState !== 'function') throw new Error('Sneak is required to place against a container.');
+    if (interactive) this.bot.setControlState('sneak', true);
+    try {
+      if (typeof this.bot._placeBlockWithOptions === 'function') {
+        await this.bot._placeBlockWithOptions(reference, face, { forceLook: 'ignore', swingArm: 'right' });
+      } else {
+        await this.bot.placeBlock(reference, face);
+      }
+    } finally {
+      if (interactive) this.bot.setControlState('sneak', previousSneak);
+    }
   }
 
   blockAt(pos) {
@@ -268,7 +623,66 @@ class MineflayerRoleAdapter {
       return this.worldAwareness.getBlockAt(pos.x, pos.y, pos.z);
     }
     if (typeof this.bot?.blockAt !== 'function') return null;
-    return this.bot.blockAt(asVec3(pos));
+    const block = this.bot.blockAt(asVec3(pos));
+    this.sharedWorldObserver?.observe(block);
+    return block;
+  }
+
+  getSharedBlock(pos) {
+    const context = require('./sharedWorldObserver').worldContext(this.bot);
+    if (!context || !this.sharedWorldObserver) return null;
+    return this.sharedWorldObserver.memory.getBlock(context.world, context.dimension, asVec3(pos));
+  }
+
+  isQuarryExpansionColumnSafe(pos, bounds, { rejectFalling = false } = {}) {
+    const context = require('./sharedWorldObserver').worldContext(this.bot);
+    const observer = this.sharedWorldObserver;
+    const { minY, height } = this.bot.game || {};
+    if (!context || !observer || !Number.isInteger(minY) || !Number.isInteger(height) || height <= 0) return false;
+    const top = minY + height - 1;
+    if (bounds.floorY < minY || bounds.maxY > top) return false;
+    // Protect entire known structure footprints, including their empty interiors.
+    const structure = observer.memory.db.prepare(`SELECT id FROM structure_voxels
+      WHERE world=? AND dimension=? GROUP BY id
+      HAVING MIN(x)<=? AND MAX(x)>=? AND MIN(z)<=? AND MAX(z)>=? LIMIT 1`)
+      .get(context.world, context.dimension, pos.x + 2, pos.x - 2, pos.z + 2, pos.z - 2);
+    if (structure) return false;
+    for (const key of observer.reservations.blockedCells(context)) {
+      if (!key.startsWith('cell:')) continue;
+      const [x, , z] = key.slice(5).split(',').map(Number);
+      if (Math.abs(x - pos.x) <= 2 && Math.abs(z - pos.z) <= 2) return false;
+    }
+    const { QUARRY_NAMES } = require('./storageRoomQuarry');
+    const construction = new Set(['cobblestone', 'cobbled_deepslate', 'torch', 'wall_torch', 'soul_torch', 'soul_wall_torch']);
+    for (let x = pos.x - 2; x <= pos.x + 2; x++) {
+      for (let z = pos.z - 2; z <= pos.z + 2; z++) {
+        for (let y = bounds.floorY; y <= top; y++) {
+          const block = this.bot.blockAt(new Vec3(x, y, z));
+          if (!block || construction.has(block.name) || rejectFalling && ['sand', 'red_sand', 'gravel', 'suspicious_sand', 'suspicious_gravel'].includes(block.name) ||
+              !['air', 'cave_air', 'void_air'].includes(block.name) && !QUARRY_NAMES.has(block.name)) return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  isQuarryOverheadSafe(pos) {
+    // Reuse full-height structure/unknown/lease checks, with stricter falling-block protection.
+    if (this.sharedWorldObserver) {
+      return this.isQuarryExpansionColumnSafe(pos, { floorY: pos.y, maxY: pos.y }, { rejectFalling: true });
+    }
+    // Region-exclusive miners intentionally disable the shared observer to avoid
+    // serializing separate quarry cells. They still need a local, conservative
+    // overhead check so safe upward mining is not rejected as unknown forever.
+    const { QUARRY_NAMES } = require('./storageRoomQuarry');
+    const target = this.bot?.blockAt?.(new Vec3(pos.x, pos.y, pos.z));
+    if (!target || !QUARRY_NAMES.has(target.name)) return false;
+    for (const [x, y, z] of [[1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [0, 1, 0], [0, -1, 0]]) {
+      const block = this.bot?.blockAt?.(new Vec3(pos.x + x, pos.y + y, pos.z + z));
+      if (!block || ['water', 'lava', 'flowing_water', 'flowing_lava'].includes(block.name) ||
+          ['sand', 'red_sand', 'gravel', 'suspicious_sand', 'suspicious_gravel'].includes(block.name)) return false;
+    }
+    return true;
   }
 
   // Properti blockstate "type" chest ('left'/'right'/'single') - SATU-SATUNYA cara benar untuk
@@ -377,9 +791,56 @@ class MineflayerRoleAdapter {
   async openChestAt(pos) {
     const block = this.blockAt(pos);
     if (!block || typeof this.bot?.openChest !== 'function') return null;
-    await this.navigateNear(pos, 3);
+    let reachable = await this.navigateNear(pos, 3, { sharedRoute: true });
+    if (!reachable) {
+      // A chest row is a wall of solid blocks: GoalNear(container) can ask the
+      // pathfinder to finish inside the row even though the container is
+      // interactable from a neighbouring air block. Try a bounded set of safe
+      // standing voxels around the container before declaring it inaccessible.
+      const airNames = new Set(['air', 'cave_air', 'void_air', 'short_grass', 'tall_grass', 'fern', 'snow']);
+      const liquidNames = new Set(['water', 'flowing_water', 'lava', 'flowing_lava']);
+      const current = this.getPosition();
+      const candidates = [];
+      for (const dy of [-1, 0, 1]) {
+        for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1], [1, 1], [1, -1], [-1, 1], [-1, -1]]) {
+          const stance = { x: pos.x + dx, y: pos.y + dy, z: pos.z + dz };
+          const feet = this.blockAt(stance);
+          const head = this.blockAt({ ...stance, y: stance.y + 1 });
+          const ground = this.blockAt({ ...stance, y: stance.y - 1 });
+          if (!feet || !head || !ground || !airNames.has(feet.name) || !airNames.has(head.name) ||
+            liquidNames.has(feet.name) || liquidNames.has(head.name) || ground.boundingBox !== 'block') continue;
+          candidates.push(stance);
+        }
+      }
+      candidates.sort((a, b) => Math.hypot(a.x - current.x, a.y - current.y, a.z - current.z) -
+        Math.hypot(b.x - current.x, b.y - current.y, b.z - current.z));
+      for (const stance of candidates.slice(0, 4)) {
+        if (await this.navigateNear(stance, 1, { sharedRoute: true })) {
+          reachable = true;
+          this.options.log(`[Container] Pijakan alternatif ditemukan di (${stance.x},${stance.y},${stance.z}) untuk peti (${pos.x},${pos.y},${pos.z}).`);
+          break;
+        }
+      }
+    }
+    if (!reachable) {
+      this.options.log(`[Container] Navigasi gagal ke (${pos.x},${pos.y},${pos.z}); chest tidak dibuka.`);
+      return null;
+    }
     const openStart = Date.now();
-    const chest = await this.bot.openChest(block);
+    let chest;
+    let timer;
+    try {
+      const pending = Promise.resolve().then(() => this.bot.openChest(block));
+      const timeout = new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`window container timeout di (${pos.x},${pos.y},${pos.z})`)), this.options.containerOpenTimeoutMs);
+      });
+      chest = await Promise.race([pending, timeout]);
+      clearTimeout(timer);
+    } catch (error) {
+      clearTimeout(timer);
+      this.options.log(`[Container] Gagal membuka (${pos.x},${pos.y},${pos.z}): ${error.message}`);
+      return null;
+    }
     // Log EKSPLISIT buka/tutup - permintaan nyata pemilik: "coba tambahkan log bot membuka peti
     // dan bot menutup peti dan lihat di antara 2 log itu" - supaya waktu yang dihabiskan SELAMA
     // satu chest terbuka (settle-poll, probe verifikasi, withdraw/deposit) kelihatan jelas dan
@@ -441,6 +902,7 @@ class MineflayerRoleAdapter {
   // chest sembarangan. Membuka chest SATU-SATU (bukan paralel) - server Minecraft cuma izinkan satu
   // window terbuka per pemain dalam satu waktu.
   async findMatchingChest(itemNames, options = {}) {
+    const excluded = new Set((options.excludePositions || []).map(pos => `${pos.x},${pos.y},${pos.z}`));
     const positions = typeof this.bot?.findBlocks === 'function'
       ? this.bot.findBlocks({
         matching: (b) => b && (b.name === 'chest' || b.name === 'barrel'),
@@ -449,7 +911,14 @@ class MineflayerRoleAdapter {
       })
       : [];
     for (const pos of positions) {
-      const chest = await this.openChestAt(pos);
+      if (excluded.has(`${pos.x},${pos.y},${pos.z}`)) continue;
+      let chest;
+      try {
+        chest = await this.openChestAt(pos);
+      } catch (error) {
+        this.options.log(`[Restock] Peti (${pos.x},${pos.y},${pos.z}) gagal dibuka: ${error.message} - dilewati.`);
+        continue;
+      }
       if (!chest) continue;
       const items = typeof chest.containerItems === 'function' ? chest.containerItems() : [];
       if (typeof chest.close === 'function') chest.close();
@@ -611,6 +1080,7 @@ class MineflayerRoleAdapter {
 
   // Ambil item dari chest gudang ke inventaris - kebalikan dari depositToChest.
   async withdrawFromChest(pos, itemNames, count) {
+    if (!(count > 0)) return { withdrawn: 0 };
     const chest = await this.openChestAt(pos);
     if (!chest) return { withdrawn: 0 };
     let withdrawn = 0;
@@ -618,7 +1088,9 @@ class MineflayerRoleAdapter {
       const items = chest.containerItems();
       const match = items.find((it) => itemNames.includes(it.name));
       if (match && typeof chest.withdraw === 'function') {
-        const take = Math.min(count, match.count);
+        const available = items.filter(item => item.type === match.type && item.metadata === match.metadata)
+          .reduce((total, item) => total + item.count, 0);
+        const take = Math.min(count, available);
         await chest.withdraw(match.type, match.metadata ?? null, take);
         withdrawn = take;
       }
@@ -633,6 +1105,19 @@ class MineflayerRoleAdapter {
   // tidak ada meja atau bahan kurang, bukan crash - caller (GuardEngine) yang putuskan langkah
   // berikutnya (mis. ambil bahan dulu dari chest).
   async craftItem(itemName, count = 1) {
+    // Resep 2x2 seperti stone_bricks tidak membutuhkan GUI crafting table. Memakai inventory
+    // crafting menghindari windowOpen/updateSlot tambahan yang pada protokol 775 kadang terlambat.
+    const itemId = this.bot?.registry?.itemsByName?.[itemName]?.id ?? itemName;
+    if (this.bot?.inventory && typeof this.bot?.recipesFor === 'function') {
+      const inventoryRecipes = this.bot.recipesFor(itemId, null, 1);
+      if (inventoryRecipes.length > 0) {
+        // Protocol 775 on this server can delay updateSlot:0 until the whole batch is processed.
+        // One call per recipe type avoids paying the timeout once for every individual craft;
+        // callers verify the resulting inventory delta before treating it as successful.
+        await this.bot.craft(inventoryRecipes[0], count);
+        return true;
+      }
+    }
     const tablePos = typeof this.bot?.findBlock === 'function'
       ? this.bot.findBlock({ matching: (b) => b && b.name === 'crafting_table', maxDistance: 16 })
       : null;
@@ -640,7 +1125,6 @@ class MineflayerRoleAdapter {
     await this.navigateNear(tablePos.position, 3);
     const tableBlock = this.blockAt(tablePos.position);
     // recipesFor butuh ID numerik item (via registry), bukan nama string.
-    const itemId = this.bot?.registry?.itemsByName?.[itemName]?.id ?? itemName;
     const recipes = typeof this.bot?.recipesFor === 'function' ? this.bot.recipesFor(itemId, null, 1, tableBlock) : [];
     if (!recipes || recipes.length === 0) return false;
     await this.bot.craft(recipes[0], count, tableBlock);

@@ -148,6 +148,7 @@ class MultiInstanceFarmManager {
     this.isRunning = false;
     this.startTime = null;
     this.runId = null;
+    this.persistTelemetry = options.persistTelemetry ?? true;
   }
 
   /**
@@ -212,8 +213,10 @@ class MultiInstanceFarmManager {
     console.log(`   - Durasi Operasi    : ${(summary.durationMs / 1000).toFixed(1)} Detik`);
     console.log(`═══════════════════════════════════════════════════════════\n`);
 
-    // Catat ke PostgreSQL Database
+    // Catat ke PostgreSQL Database bila persistence diaktifkan. Test simulasi dapat
+    // mematikannya agar tidak menunggu koneksi eksternal setelah pekerjaan selesai.
     try {
+      if (!this.persistTelemetry) return summary;
       await db.query(
         `INSERT INTO benchmark_runs (id, level, status, start_time, end_time, duration_ms, obstacle_count, stuck_recovery_count, success_rate, metadata)
          VALUES ($1, $2, $3, NOW() - INTERVAL '${durationSeconds} seconds', NOW(), $4, $5, 0, 1.0, $6)`,

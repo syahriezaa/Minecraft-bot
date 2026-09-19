@@ -280,6 +280,11 @@ describe('Pengujian Komprehensif Codec Protokol 775 & LiveProtocolClient', () =>
       assert.equal(client.config.protocolVersion, 775);
     });
 
+    it('reset koneksi tidak boleh menjadi exception fatal bila pemakai tidak memasang listener error', () => {
+      const client = new LiveProtocolClient({ username: 'ResilientBot' });
+      assert.doesNotThrow(() => client.emit('error', new Error('uji reset tunnel')));
+    });
+
     it('harus mendukung pembuatan instans melalui fungsi factory createLiveClient', () => {
       const client = createLiveClient({ username: 'FactoryBot' });
       assert.ok(client instanceof LiveProtocolClient);
@@ -310,7 +315,7 @@ describe('Pengujian Komprehensif Codec Protokol 775 & LiveProtocolClient', () =>
         sent.push({ state, packetId, payload });
       };
 
-      client.sendPosition({ x: 1, y: 64, z: 2, onGround: true });
+      client.sendPosition({ x: 0.1, y: 64, z: 0, onGround: true });
       client.sendAttack(123);
       client.sendRespawn();
       client.sendFlying({ onGround: true, hasHorizontalCollision: false });

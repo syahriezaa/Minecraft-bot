@@ -29,6 +29,7 @@
     <div class="tab-nav-inner">
       <button class="tab-btn active" data-tab-target="overview">Ringkasan</button>
       <button class="tab-btn" data-tab-target="fleets">Armada &amp; Landmark</button>
+      <button class="tab-btn" data-tab-target="world-map">Peta Dunia</button>
       <button class="tab-btn" data-tab-target="storage">Gudang</button>
       <button class="tab-btn" data-tab-target="logs">Uji &amp; Log</button>
     </div>
@@ -197,6 +198,19 @@
       </div>
     </section>
 
+    <section class="row">
+      <div class="card" id="wood-gatherer-panel">
+        <h2>Armada Forestry</h2>
+        <div class="fleet-controls">
+          <label for="wood-gatherer-count">Jumlah bot</label>
+          <input type="number" id="wood-gatherer-count" class="fleet-count-input" min="1" max="4" value="1">
+          <button class="btn btn-fleet-start" id="btn-wood-gatherer-start">Mulai Armada</button>
+          <button class="btn btn-fleet-stop-all" id="btn-wood-gatherer-stop">Hentikan Semua</button>
+        </div>
+        <div id="wood-gatherer-list"></div>
+      </div>
+    </section>
+
     <!-- Armada Kuartermaster - kumpulkan chest di luar rumah, antar ke gudang, rapikan isi gudang -->
     <section class="row">
       <div class="card" id="storage-fleet-panel">
@@ -210,15 +224,106 @@
         <div id="storage-fleet-list"></div>
       </div>
 
+      <div class="card" id="storage-construction-panel">
+        <div class="card-header-flex">
+          <h2>Orkestrator Pembangunan Storage Room</h2>
+          <span class="badge live-badge" id="storage-construction-status">IDLE</span>
+        </div>
+        <div class="fleet-controls construction-controls">
+          <button class="btn btn-fleet-start" id="btn-storage-construction-start">Mulai Pembangunan</button>
+          <button class="btn btn-fleet-stop-all" id="btn-storage-construction-stop">Hentikan Pembangunan</button>
+        </div>
+        <div id="storage-construction-workers" class="fleet-list construction-worker-list"></div>
+        <div class="construction-log">
+          <span class="construction-log-label">Log terakhir</span>
+          <div id="storage-construction-last-log" class="bot-sub">Belum ada sesi pembangunan.</div>
+        </div>
+      </div>
+
+      <div class="card" id="storage-materials-panel">
+        <div class="card-header-flex">
+          <h2>Materials — smelting &amp; crafting</h2>
+          <span class="badge live-badge" id="storage-materials-status">SIAP</span>
+        </div>
+        <div class="fleet-controls construction-controls">
+          <button class="btn btn-fleet-start" id="btn-storage-materials-start">Mulai Materials</button>
+          <button class="btn btn-fleet-stop-all" id="btn-storage-materials-stop">Hentikan Materials</button>
+        </div>
+        <div class="materials-summary" id="storage-materials-summary">Belum ada worker materials aktif.</div>
+        <div class="construction-log">
+          <span class="construction-log-label">Log terakhir</span>
+          <div id="storage-materials-last-log" class="bot-sub">Belum ada sesi materials.</div>
+        </div>
+      </div>
+
+      <div class="card full-width" id="mining-fleet-panel">
+        <div class="card-header-flex">
+          <h2>Armada Tambang Mandiri</h2>
+          <span class="badge live-badge" id="mining-fleet-status">SIAP</span>
+        </div>
+        <div class="mining-config-grid">
+          <label class="mining-number-field mining-mode-field" for="mining-mode">
+            <span>Pola gali</span>
+            <select id="mining-mode">
+              <option value="surface_to_floor" selected>Permukaan → Floor Y</option>
+              <option value="strip_surface_to_floor">Strip permukaan → Floor Y (tangga tetap)</option>
+              <option value="surface_flat_then_stair">Ratakan permukaan → buat tangga → gali berlapis</option>
+              <option value="depth_first">Kedalaman dulu (legacy)</option>
+            </select>
+          </label>
+          <label class="mining-number-field" for="mining-fleet-count">
+            <span>Jumlah worker</span>
+            <input type="number" id="mining-fleet-count" min="1" max="4" value="4">
+          </label>
+          <label class="mining-number-field" for="mining-floor-y">
+            <span>Floor Y</span>
+            <input type="number" id="mining-floor-y" min="-64" max="319" value="40">
+          </label>
+          <label class="mining-number-field" for="mining-max-y">
+            <span>Max Y</span>
+            <input type="number" id="mining-max-y" min="-63" max="320" value="80">
+          </label>
+        </div>
+        <fieldset class="mining-corners">
+          <legend>Empat sudut area awal tambang (X, Z)</legend>
+          <div class="mining-corner-grid">
+            <label for="mining-corner-1-x"><span>Sudut 1</span><input type="number" id="mining-corner-1-x" value="-66" aria-label="Sudut 1 X"><input type="number" id="mining-corner-1-z" value="-406" aria-label="Sudut 1 Z"></label>
+            <label for="mining-corner-2-x"><span>Sudut 2</span><input type="number" id="mining-corner-2-x" value="-63" aria-label="Sudut 2 X"><input type="number" id="mining-corner-2-z" value="-406" aria-label="Sudut 2 Z"></label>
+            <label for="mining-corner-3-x"><span>Sudut 3</span><input type="number" id="mining-corner-3-x" value="-63" aria-label="Sudut 3 X"><input type="number" id="mining-corner-3-z" value="-379" aria-label="Sudut 3 Z"></label>
+            <label for="mining-corner-4-x"><span>Sudut 4</span><input type="number" id="mining-corner-4-x" value="-66" aria-label="Sudut 4 X"><input type="number" id="mining-corner-4-z" value="-379" aria-label="Sudut 4 Z"></label>
+          </div>
+        </fieldset>
+        <div class="fleet-controls mining-actions">
+          <button class="btn btn-fleet-start" id="btn-mining-fleet-start">Mulai Worker Tambang</button>
+          <button class="btn btn-fleet-stop-all" id="btn-mining-fleet-stop">Hentikan Tambang</button>
+        </div>
+        <div id="mining-fleet-workers" class="fleet-list construction-worker-list"></div>
+        <div id="mining-fleet-error" class="form-error" role="alert" aria-live="polite"></div>
+      </div>
+
       <!-- Landmark Dunia - semua titik/area yang sudah ditandai bot explorer (dan dipakai bot lain
            untuk otomatis menghindari, mis. villager_area) -->
-      <div class="card" id="landmarks-panel">
+      <div class="card full-width" id="landmarks-panel">
         <div class="card-header-flex">
           <h2>Landmark Dunia — hasil temuan bot explorer</h2>
           <span class="badge live-badge" id="landmarks-count-badge">0 LANDMARK</span>
         </div>
-        <div id="landmarks-list" class="chest-map-grid">
+        <div class="landmarks-toolbar">
+          <label class="sr-only" for="landmarks-category-filter">Filter kategori landmark</label>
+          <select id="landmarks-category-filter" class="landmarks-select">
+            <option value="">Semua kategori</option>
+          </select>
+          <label class="sr-only" for="landmarks-search">Cari landmark</label>
+          <input type="search" id="landmarks-search" class="landmarks-search" placeholder="Cari nama atau kategori..." autocomplete="off">
+        </div>
+        <div id="landmarks-meta" class="landmarks-meta" aria-live="polite">Belum ada landmark.</div>
+        <div id="landmarks-list" class="landmarks-grid">
           <p class="empty-row">Belum ada landmark yang ditemukan - jalankan armada penjelajah untuk mulai menandai.</p>
+        </div>
+        <div class="landmarks-pagination" aria-label="Navigasi halaman landmark">
+          <button class="btn landmarks-page-btn" id="landmarks-prev" type="button">Sebelumnya</button>
+          <span id="landmarks-page" class="landmarks-page-indicator">Halaman 1 / 1</span>
+          <button class="btn landmarks-page-btn" id="landmarks-next" type="button">Berikutnya</button>
         </div>
       </div>
     </section>
@@ -240,9 +345,101 @@
     </section>
     </div>
 
-    <div class="tab-view" data-tab-view="storage">
+    <div class="tab-view" data-tab-view="world-map">
+      <section class="row">
+        <div class="card full-width world-map-panel" id="world-map-panel">
+          <div class="card-header-flex world-map-header">
+            <div>
+              <h2>Peta Dunia Minecraft</h2>
+              <div class="world-map-meta" id="world-map-meta">Memuat spatial memory...</div>
+            </div>
+            <span class="badge live-badge" id="world-map-known-badge">0 KOLOM</span>
+          </div>
+          <div class="world-map-toolbar">
+            <label for="world-map-mode">Tampilan
+              <select id="world-map-mode">
+                <option value="surface">Permukaan</option>
+                <option value="slice">Lapisan Y</option>
+              </select>
+            </label>
+            <label class="world-map-y-control" for="world-map-y">Y
+              <input type="range" id="world-map-y" min="-64" max="320" value="70" disabled>
+              <output id="world-map-y-value" for="world-map-y">70</output>
+            </label>
+            <div class="world-map-tool-group" aria-label="Kontrol peta">
+              <button class="btn map-icon-btn" id="world-map-zoom-out" type="button" title="Perkecil" aria-label="Perkecil peta">−</button>
+              <button class="btn map-icon-btn" id="world-map-zoom-in" type="button" title="Perbesar" aria-label="Perbesar peta">+</button>
+              <button class="btn map-icon-btn" id="world-map-center-base" type="button" title="Pusatkan ke base" aria-label="Pusatkan peta ke base">⌂</button>
+              <button class="btn map-icon-btn" id="world-map-refresh" type="button" title="Muat ulang peta" aria-label="Muat ulang peta">↻</button>
+            </div>
+            <button class="btn world-map-select-btn" id="world-map-select-mining" type="button">Pilih 4 Sudut Tambang</button>
+            <button class="btn world-map-clear-btn" id="world-map-clear-selection" type="button" title="Hapus pilihan" aria-label="Hapus pilihan sudut tambang">×</button>
+          </div>
+          <div class="world-map-layers" aria-label="Lapisan peta">
+            <label><input type="checkbox" id="world-map-layer-landmarks"> Landmark</label>
+            <label><input type="checkbox" id="world-map-layer-structures"> Struktur</label>
+            <label><input type="checkbox" id="world-map-layer-bots" checked> Bot</label>
+            <label><input type="checkbox" id="world-map-layer-reservations" checked> Reservasi</label>
+            <label><input type="checkbox" id="world-map-layer-mining" checked> Tambang</label>
+          </div>
+          <div class="world-map-stage" id="world-map-stage">
+            <canvas id="world-map-canvas" width="1200" height="720" aria-label="Peta top-down Minecraft"></canvas>
+            <div class="world-map-tooltip" id="world-map-tooltip" hidden></div>
+            <div class="world-map-loading" id="world-map-loading">Memuat peta...</div>
+          </div>
+          <div class="world-map-footer">
+            <div class="world-map-legend" aria-label="Legenda terrain">
+              <span><i class="legend-swatch terrain-grass"></i>Daratan</span>
+              <span><i class="legend-swatch terrain-water"></i>Air</span>
+              <span><i class="legend-swatch terrain-stone"></i>Batu</span>
+              <span><i class="legend-swatch terrain-built"></i>Bangunan</span>
+              <span><i class="legend-swatch terrain-unknown"></i>Belum dikenal</span>
+            </div>
+            <div class="world-map-cursor" id="world-map-cursor">X — · Z —</div>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <div class="tab-view storage-workspace" data-tab-view="storage">
+    <section class="storage-overview" aria-labelledby="storage-page-title">
+      <div class="storage-overview-heading">
+        <div>
+          <h2 id="storage-page-title">Gudang</h2>
+          <p>Ringkasan isi peti dan antrean sortir kuartermaster.</p>
+        </div>
+        <span class="storage-freshness" id="storage-freshness">Menunggu pemetaan</span>
+      </div>
+      <div class="storage-stat-grid" aria-label="Ringkasan gudang">
+        <div class="storage-stat"><span>Peti dipetakan</span><strong id="storage-summary-chests">0</strong></div>
+        <div class="storage-stat"><span>Total barang</span><strong id="storage-summary-items">0</strong></div>
+        <div class="storage-stat storage-stat-good"><span>Peti rapi</span><strong id="storage-summary-clean">0</strong></div>
+        <div class="storage-stat storage-stat-bad"><span>Perlu dipindah</span><strong id="storage-summary-misplaced">0</strong></div>
+      </div>
+      <div class="storage-toolbar">
+        <label class="storage-search-field">
+          <span>Cari gudang</span>
+          <input type="search" id="storage-search" placeholder="Item, kategori, atau koordinat" autocomplete="off">
+        </label>
+        <label class="storage-filter-field">
+          <span>Kondisi peti</span>
+          <select id="storage-status-filter">
+            <option value="all">Semua peti</option>
+            <option value="dirty">Perlu dirapikan</option>
+            <option value="clean">Sudah rapi</option>
+          </select>
+        </label>
+      </div>
+      <nav class="storage-section-nav" aria-label="Tampilan gudang">
+        <button type="button" class="storage-section-btn active" data-storage-target="issues" aria-pressed="true">Perlu dirapikan <span id="storage-issue-tab-count">0</span></button>
+        <button type="button" class="storage-section-btn" data-storage-target="chests" aria-pressed="false">Peta peti <span id="storage-chest-tab-count">0</span></button>
+        <button type="button" class="storage-section-btn" data-storage-target="assignments" aria-pressed="false">Aturan sortir</button>
+        <button type="button" class="storage-section-btn" data-storage-target="history" aria-pressed="false">Riwayat</button>
+      </nav>
+    </section>
+
     <!-- Kepatuhan Kategori Gudang - chest yang ketahuan belum sesuai aturan kategori, dicatat di sini -->
-    <section class="row">
+    <section class="row storage-section-panel" data-storage-panel="history" hidden>
       <div class="card full-width" id="storage-compliance-panel">
         <div class="card-header-flex">
           <h2>Kepatuhan Kategori Gudang — barang yang ketahuan salah tempat</h2>
@@ -272,7 +469,7 @@
          mana rencananya, dikumpulkan dari seluruh chest yang sudah dipetakan - permintaan nyata
          pemilik: "di ui tampilkan item yang tidak tepat dan item yang akan di pindah dan di
          pindah kemana" -->
-    <section class="row">
+    <section class="row storage-section-panel" data-storage-panel="issues">
       <div class="card full-width" id="storage-misplaced-now-panel">
         <div class="card-header-flex">
           <h2>Item Salah Tempat Saat Ini — dan rencana pemindahannya</h2>
@@ -283,15 +480,20 @@
             <thead>
               <tr>
                 <th>Item</th>
-                <th>Jumlah</th>
+                <th>Total</th>
+                <th>Stack</th>
                 <th>Ditemukan Di</th>
                 <th>Akan Dipindah Ke</th>
               </tr>
             </thead>
             <tbody id="misplaced-now-table-body">
-              <tr class="empty-row"><td colspan="4">Belum ada item salah tempat yang terdeteksi saat ini.</td></tr>
+              <tr class="empty-row"><td colspan="5">Belum ada item salah tempat yang terdeteksi saat ini.</td></tr>
             </tbody>
           </table>
+        </div>
+        <div class="storage-table-footer" id="misplaced-now-footer" hidden>
+          <span id="misplaced-now-meta"></span>
+          <button type="button" class="btn storage-more-btn" id="misplaced-now-more">Tampilkan lebih banyak</button>
         </div>
       </div>
     </section>
@@ -300,7 +502,7 @@
          untuk item yang salah tempat - permintaan nyata pemilik: "tampilkan isi semua peti nya
          tepat dengan baris dan kolom per item dan jumlahnya dan bagaimana bot akan
          memindahkannya di tandai dengan panah panah" -->
-    <section class="row">
+    <section class="row storage-section-panel" data-storage-panel="chests" hidden>
       <div class="card full-width" id="storage-chest-map-panel">
         <div class="card-header-flex">
           <h2>Peta Isi Gudang — apa yang benar-benar dilihat worker</h2>
@@ -314,7 +516,7 @@
 
     <!-- Memori Sortir Worker - persis engine.getChestAssignments(), tanpa olahan - permintaan
          nyata pemilik: "harusnya yang tampil di web itu sama persis dengan memory worker nya" -->
-    <section class="row">
+    <section class="row storage-section-panel" data-storage-panel="assignments" hidden>
       <div class="card full-width" id="storage-assignments-panel">
         <div class="card-header-flex">
           <h2>Memori Sortir Worker — persis apa yang engine simpan</h2>
@@ -418,7 +620,9 @@
     </div>
   </main>
 
+  <script src="js/storageViewModel.js"></script>
   <script src="js/app.js"></script>
+  <script src="js/worldMap.js"></script>
   <script src="js/visualizer2d.js"></script>
   <script src="js/tabs.js"></script>
   <script src="js/aiTerminal.js"></script>

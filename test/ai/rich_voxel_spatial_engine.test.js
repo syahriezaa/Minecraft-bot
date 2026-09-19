@@ -117,17 +117,17 @@ describe('RichVoxelSpatialEngine - klasifikasi blok dekoratif non-solid', () => 
 });
 
 describe('RichVoxelSpatialEngine.findOptimalClearanceStep - batas eskalasi saat macet', () => {
-  it('harus terus mencoba RECOVERY_MICRO_JUMP_REWIND selama belum melewati batas macet', () => {
+  it('harus menahan posisi jika semua kandidat lompatan tidak tervalidasi', () => {
     const world = () => 'stone'; // padat total di semua arah -> selalu macet
     const engine = new RichVoxelSpatialEngine(world);
     const currPos = { x: 0, y: 64, z: 0 };
     const targetGoal = { x: 10, y: 64, z: 0 };
 
     const first = engine.findOptimalClearanceStep(currPos, targetGoal, 0);
-    assert.equal(first.type, 'RECOVERY_MICRO_JUMP_REWIND');
+    assert.equal(first.type, 'STUCK_HOLD');
 
     const second = engine.findOptimalClearanceStep(currPos, targetGoal, 1);
-    assert.equal(second.type, 'RECOVERY_MICRO_JUMP_REWIND');
+    assert.equal(second.type, 'STUCK_HOLD');
   });
 
   it('harus berhenti eskalasi ketinggian (STUCK_HOLD) setelah stuckStreak melewati batas, bukan naik Y tanpa akhir', () => {

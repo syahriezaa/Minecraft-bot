@@ -17,8 +17,11 @@ const {
   findNearbyLandmarks,
   makePointLandmark,
   makeAreaLandmark,
+  upsertAreaLandmark,
   loadLandmarks
 } = require('./worldLandmarks');
+const { connectedComponents, boundsOf, rectangle, voxelKey } = require('./structureGeometry');
+const { worldContext } = require('./sharedWorldObserver');
 
 // Kategori blok TITIK (satu landmark per blok) - struktur yang dibangun pemilik ("setiap peti
 // setiap...mob spawner yang sudah saya bangun").
@@ -34,7 +37,7 @@ const POINT_BLOCK_CATEGORIES = {
 // sama), makanya berbentuk daftar grup, bukan pemetaan 1 blok -> 1 kategori.
 const AREA_BLOCK_GROUPS = [
   { blockNames: ['farmland'], category: 'farming_area' },
-  { blockNames: ['water'], category: 'river' },
+  { blockNames: ['water'], category: 'water_area' },
   // Bahan bangunan umum - permintaan nyata pemilik: "saya ingin maping bangunan saya". SENGAJA
   // tidak menyertakan blok alami murni (stone/dirt/cobblestone polos dsb, yang juga muncul lewat
   // gua/medan alami) - cuma bentuk yang jelas hasil OLAHAN/konstruksi (planks, bricks, kaca,
@@ -59,6 +62,7 @@ const NAME_TEMPLATES = {
   mob_spawner: 'Mob Spawner',
   farming_area: 'Lahan Farming',
   river: 'Sungai/Air',
+  water_area: 'Area Air',
   villager_area: 'Area Villager',
   structure: 'Bangunan'
 };
@@ -202,10 +206,14 @@ class ExplorerEngine extends EventEmitter {
     const names = Object.keys(POINT_BLOCK_CATEGORIES);
     const blocks = this.adapter.findBlocksByNames(names, { maxDistance: this.options.scanRadius });
     for (const block of blocks) {
-      if (this.isAlreadyKnown(block.position)) continue;
       const category = POINT_BLOCK_CATEGORIES[block.name];
+      const context = worldContext(this.adapter.bot) || {};
+      if (loadLandmarks().some(l => l.shape === 'point' && l.category === category
+        && l.world === context.world && l.dimension === context.dimension
+        && ['x', 'y', 'z'].every(axis => l.position[axis] === block.position[axis]))) continue;
       const name = await this.nameFor(category, { blockName: block.name, position: block.position });
       const landmark = makePointLandmark({ name, category, position: block.position });
+      Object.assign(landmark, context);
       addLandmark(landmark, this.options.log);
       this.options.log(`[Explorer] Landmark baru: ${name} (${category}) di (${block.position.x},${block.position.y},${block.position.z})`);
       created.push(landmark);
@@ -216,46 +224,56 @@ class ExplorerEngine extends EventEmitter {
   async recordAreaLandmarks() {
     const created = [];
     for (const { blockNames, category } of AREA_BLOCK_GROUPS) {
-      const blocks = this.adapter.findBlocksByNames(blockNames, { maxDistance: this.options.scanRadius });
+      const blocks = this.adapter.findBlocksByNames(blockNames, { maxDistance: this.options.scanRadius, count: 4096 });
       if (blocks.length === 0) continue;
-      const points = blocks.map((b) => ({ x: b.position.x, z: b.position.z }));
-      const centroid = centroidOf(points);
-      if (this.isAreaAlreadyKnown(category, centroid)) continue;
-      const boundary = convexHull(points);
-      if (boundary.length < 3) continue; // terlalu sedikit blok untuk membentuk area sungguhan
-      const name = await this.nameFor(category, { blockNames: [...new Set(blocks.map((b) => b.name))], count: blocks.length, centroid });
-      const landmark = makeAreaLandmark({ name, category, boundary });
-      addLandmark(landmark, this.options.log);
-      this.options.log(`[Explorer] Landmark area baru: ${name} (${category}) - ${blocks.length} blok, ${boundary.length} titik batas`);
-      created.push(landmark);
+      for (const group of connectedComponents(blocks)) {
+        if (group.length < 3) continue;
+        const bounds = boundsOf(group);
+        const evidence = { blockNames: [...new Set(group.map(b => b.name))], observedBlocks: group.length,
+          coverage: 'partial', scanLimitReached: blocks.length >= 4096 };
+        if (category === 'farming_area' && this.adapter.blockAt) {
+          evidence.cropBlocks = group.filter(b => ['wheat', 'carrots', 'potatoes', 'beetroots', 'torchflower_crop', 'pitcher_crop']
+            .includes(this.adapter.blockAt({ ...b.position, y: b.position.y + 1 })?.name)).length;
+          bounds.max.y += 2;
+        }
+        const name = await this.nameFor(category, evidence);
+        const landmark = makeAreaLandmark({ name, category, boundary: rectangle(bounds), bounds,
+          ...worldContext(this.adapter.bot), observedVoxels: group.map(b => voxelKey(b.position)), evidence,
+          confidence: category === 'farming_area' && evidence.cropBlocks > 0 ? 0.85 : 0.5,
+          classificationStatus: 'tentative' });
+        const saved = upsertAreaLandmark(landmark);
+        if (saved.revision === 1) created.push(saved);
+      }
     }
     return created;
   }
 
   async recordVillagerAreaLandmark() {
     const villagers = this.adapter.getEntities().filter((e) => e.name === 'villager' || e.type === 'villager');
-    if (villagers.length === 0) return [];
-    const points = villagers.map((v) => ({ x: v.position.x, z: v.position.z }));
-    const centroid = centroidOf(points);
-    if (this.isAreaAlreadyKnown('villager_area', centroid)) return [];
-    let boundary = convexHull(points);
-    if (boundary.length < 3) {
-      // Terlalu sedikit villager untuk membentuk poligon sungguhan - buat kotak kecil di
-      // sekeliling titik-titik yang ada supaya tetap tercatat sebagai area yang bisa dihindari.
-      const xs = points.map((p) => p.x), zs = points.map((p) => p.z);
-      const pad = 4;
-      boundary = [
-        { x: Math.min(...xs) - pad, z: Math.min(...zs) - pad },
-        { x: Math.max(...xs) + pad, z: Math.min(...zs) - pad },
-        { x: Math.max(...xs) + pad, z: Math.max(...zs) + pad },
-        { x: Math.min(...xs) - pad, z: Math.max(...zs) + pad }
-      ];
+    const remaining = [...villagers];
+    const created = [];
+    while (remaining.length) {
+      const group = [remaining.pop()];
+      for (let i = 0; i < group.length; i++) {
+        const a = group[i].position;
+        for (let j = remaining.length - 1; j >= 0; j--) {
+          const b = remaining[j].position;
+          if (Math.abs(a.y - b.y) <= 2 && Math.hypot(a.x - b.x, a.z - b.z) <= 4) {
+            group.push(...remaining.splice(j, 1));
+          }
+        }
+      }
+      const bounds = boundsOf(group);
+      bounds.max.y += 1;
+      const evidence = { villagerCount: group.length, coverage: 'partial',
+        limitation: 'Posisi villager saja tidak membuktikan breeder, trading hall, atau iron farm.' };
+      const saved = upsertAreaLandmark(makeAreaLandmark({ name: 'Area Villager', category: 'villager_area',
+        boundary: rectangle(bounds), bounds, ...worldContext(this.adapter.bot),
+        observedVoxels: group.map(v => voxelKey({ x: Math.floor(v.position.x), y: Math.floor(v.position.y), z: Math.floor(v.position.z) })),
+        evidence, confidence: 0.4, classificationStatus: 'tentative' }));
+      if (saved.revision === 1) created.push(saved);
     }
-    const name = await this.nameFor('villager_area', { villagerCount: villagers.length, centroid });
-    const landmark = makeAreaLandmark({ name, category: 'villager_area', boundary });
-    addLandmark(landmark, this.options.log);
-    this.options.log(`[Explorer] Landmark area baru: ${name} (villager_area) - ${villagers.length} villager terdeteksi`);
-    return [landmark];
+    return created;
   }
 
   async tick() {

@@ -10,6 +10,7 @@ const { MineflayerRoleAdapter } = require('./mineflayerRoleAdapter');
 const { FarmerEngine } = require('./farmerEngine');
 const { AnimalHusbandryEngine } = require('./animalHusbandryEngine');
 const { MobFarmEngine } = require('./mobFarmEngine');
+const { createEngineTaskHandlers, createCooperativeAgent } = require('./cooperativeAgent');
 
 const ROLE_STATES = Object.freeze({
   IDLE: 'IDLE',
@@ -37,6 +38,30 @@ class SurvivalRoleCoordinator extends EventEmitter {
     this.farmer = options.farmer || new FarmerEngine({ adapter, ...(options.farmerOptions || {}) });
     this.animals = options.animals || new AnimalHusbandryEngine({ adapter, ...(options.animalOptions || {}) });
     this.mobFarm = options.mobFarm || new MobFarmEngine({ adapter, ...(options.mobFarmOptions || {}) });
+    this.cooperativeRuntime = options.cooperativeRuntime === false ? null : createCooperativeAgent(adapter, {
+      capabilities: ['farm', 'animal_care', 'combat', 'haul', 'survey'],
+      metadata: { role: 'survival_coordinator' },
+      handlers: {
+        ...createEngineTaskHandlers(this.farmer, {
+          SURVEY_FARM: { execute: async () => ({ action: 'survey', mature: this.farmer.findMatureCrops().length,
+            plantingSpots: this.farmer.findPlantingSpots().length, repairs: this.farmer.findRepairCandidates().length }) },
+          REPAIR_FARM: { execute: async () => await this.farmer.attemptRepair() || { action: 'idle' }, actions: ['repair'], mutatesWorld: true, idleCompletes: true },
+          HARVEST: { actions: ['harvest'], mutatesWorld: true, idleCompletes: true },
+          PLANT: { actions: ['plant'], mutatesWorld: true, idleCompletes: true },
+          DEPOSIT_CROPS: { execute: async () => await this.farmer.runAutoMatchDeposit() || { action: 'idle' }, actions: ['deposit'], idleCompletes: true }
+        }),
+        ...createEngineTaskHandlers(this.animals, {
+          INSPECT_ANIMALS: { execute: async () => ({ action: 'inspect', animals: this.animals.getAnimals().length }) },
+          FEED_ANIMALS: { actions: ['feed'], mutatesWorld: true, idleCompletes: true },
+          BALANCE_HERD: { actions: ['cull'], mutatesWorld: true, idleCompletes: true }
+        }),
+        ...createEngineTaskHandlers(this.mobFarm, {
+          SURVEY_THREATS: { execute: async () => ({ action: 'survey', threats: this.mobFarm.getThreats().length }) },
+          PATROL_AREA: { actions: ['patrol', 'standby'], idleCompletes: true },
+          ENGAGE_THREATS: { actions: ['attack', 'approach', 'cooldown'], idleCompletes: true }
+        })
+      }
+    });
     this.state = ROLE_STATES.IDLE;
     this._timer = null;
     this.metrics = {
@@ -60,11 +85,19 @@ class SurvivalRoleCoordinator extends EventEmitter {
       this._timer = null;
     }
     this.state = ROLE_STATES.STOPPED;
+    this.cooperativeRuntime?.stop();
     this.emit('stopped');
   }
 
   async tick() {
     this.metrics.ticks++;
+
+    const cooperative = await this.cooperativeRuntime?.runOnce();
+    if (cooperative && cooperative.status !== 'IDLE') {
+      const result = { role: 'swarm', action: 'cooperative_task', task: cooperative };
+      this.recordAction(result);
+      return result;
+    }
 
     if (this.adapter.getHealth() <= this.options.emergencyHealth || this.adapter.getFood() <= this.options.emergencyFood) {
       this.state = ROLE_STATES.RECOVERING;

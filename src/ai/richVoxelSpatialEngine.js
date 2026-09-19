@@ -187,18 +187,21 @@ class RichVoxelSpatialEngine {
     const dz = targetZ - currZ;
     const distance = Math.hypot(dx, dz);
 
-    if (distance < 0.001) {
+    const verticalDistance = Math.abs(targetY - currY);
+    if (distance < 0.001 && verticalDistance < 0.001) {
       return { canMove: true, adjustedTarget: { x: targetX, y: targetY, z: targetZ }, willCollide: false };
     }
 
-    const steps = Math.ceil(distance / 0.2);
+    const steps = Math.max(1, Math.ceil(Math.max(distance, verticalDistance) / 0.2));
     const half = PLAYER_HITBOX.HALF_WIDTH;
 
     for (let i = 1; i <= steps; i++) {
       const t = i / steps;
       const sampleX = currX + dx * t;
       const sampleZ = currZ + dz * t;
-      const sampleY = currY;
+      // Sampelkan Y sepanjang lintasan juga. Sebelumnya gerak lompat/menurun selalu
+      // diperiksa pada Y awal sehingga bot dapat masuk ke blok pada ketinggian tujuan.
+      const sampleY = currY + (targetY - currY) * t;
 
       const corners = [
         { x: sampleX - half, z: sampleZ - half },
@@ -303,12 +306,9 @@ class RichVoxelSpatialEngine {
       return { x: currPos.x, y: currPos.y, z: currPos.z, type: 'STUCK_HOLD' };
     }
 
-    return {
-      x: currPos.x - (directDx / len) * 0.4,
-      y: currPos.y + 1.0,
-      z: currPos.z - (directDz / len) * 0.4,
-      type: 'RECOVERY_MICRO_JUMP_REWIND'
-    };
+    // Jangan mengirim lompatan yang belum lolos pemeriksaan clearance. Bot harus
+    // menunggu pemetaan baru atau memakai rute lebar pada iterasi berikutnya.
+    return { x: currPos.x, y: currPos.y, z: currPos.z, type: 'STUCK_HOLD' };
   }
 
   /**

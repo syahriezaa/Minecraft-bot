@@ -117,6 +117,27 @@ describe('MineflayerRoleAdapter.getEquippedArmor - baca 4 slot armor bot sekaran
 });
 
 describe('MineflayerRoleAdapter.withdrawFromChest - ambil item dari chest gudang ke inventaris', () => {
+  it('mengambil bekal lintas stack dalam sekali kunjungan dan menolak permintaan nol', async () => {
+    let opened = 0;
+    const calls = [];
+    const adapter = new MineflayerRoleAdapter({});
+    adapter.openChestAt = async () => {
+      opened += 1;
+      return {
+        containerItems: () => [
+          { name: 'stone', type: 1, metadata: 0, count: 64 },
+          { name: 'stone', type: 1, metadata: 0, count: 64 },
+          { name: 'stone', type: 1, metadata: 0, count: 16 }
+        ],
+        withdraw: async (...args) => calls.push(args), close: () => {}
+      };
+    };
+    assert.equal((await adapter.withdrawFromChest({}, ['stone'], 0)).withdrawn, 0);
+    assert.equal(opened, 0);
+    assert.equal((await adapter.withdrawFromChest({}, ['stone'], 128)).withdrawn, 128);
+    assert.deepEqual(calls, [[1, 0, 128]]);
+    assert.equal(opened, 1);
+  });
   it('harus membuka chest, menarik item yang cocok sejumlah count, lalu menutup chest', async () => {
     const withdrawCalls = [];
     const closeCalls = [];
@@ -239,12 +260,27 @@ describe('MineflayerRoleAdapter.craftItem - buat item lewat crafting table terde
     };
     const adapter = new MineflayerRoleAdapter(bot);
 
-    const result = await adapter.craftItem('iron_helmet', 1);
+    const result = await adapter.craftItem('iron_helmet', 4);
 
     assert.equal(craftCalls.length, 1);
     assert.equal(craftCalls[0].recipe, recipe);
-    assert.equal(craftCalls[0].count, 1);
+    assert.equal(craftCalls[0].count, 4);
     assert.equal(result, true);
+  });
+
+  it('memakai crafting inventory untuk resep yang tidak membutuhkan crafting table', async () => {
+    const craftCalls = [];
+    const recipe = { result: { name: 'stone_bricks' } };
+    const bot = {
+      inventory: {},
+      registry: { itemsByName: { stone_bricks: { id: 376 } } },
+      recipesFor: (id, metadata, min, table) => table ? [] : [recipe],
+      craft: async (...args) => craftCalls.push(args),
+      findBlock: () => { throw new Error('crafting table tidak boleh dicari'); }
+    };
+    const adapter = new MineflayerRoleAdapter(bot);
+    assert.equal(await adapter.craftItem('stone_bricks', 4), true);
+    assert.deepEqual(craftCalls, [[recipe, 4]]);
   });
 
   it('kalau tidak ada crafting_table dalam jangkauan, harus mengembalikan false tanpa error - lebih baik gagal jelas daripada crash', async () => {
@@ -471,6 +507,34 @@ describe('MineflayerRoleAdapter.depositToChest - dukung batas maksimum per jenis
 });
 
 describe('MineflayerRoleAdapter.dig - harus mengambil barang yang jatuh, bukan cuma menggali', () => {
+  it('does not label a multi-block drop as reachable work', () => {
+    const bot = {
+      entity: { position: { x: 0, y: 64, z: 0 } },
+      world: { raycast: () => null },
+      pathfinder: { getPathTo: () => ({ status: 'success', path: [{ x: 1, y: 61, z: 0 }] }) }
+    };
+    const adapter = new MineflayerRoleAdapter(bot);
+    const result = adapter.selectReachableWork([{ pos: { x: 2, y: 60, z: 0 } }]);
+    assert.equal(result.status, 'NEEDS_ACCESS');
+    assert.equal(result.target, undefined);
+  });
+  it('quarry can defer pickup instead of entering the excavated block', async () => {
+    const bot = { entity: { position: { x: 0, y: 64, z: 0 } }, dig: async () => {} };
+    const adapter = new MineflayerRoleAdapter(bot);
+    const ranges = [];
+    adapter.navigateNear = async (pos, range) => { ranges.push(range); return true; };
+    assert.equal(await adapter.dig({ name: 'dirt', position: { x: 1, y: 61, z: 0 } }, { collectDrops: false }), true);
+    assert.deepEqual(ranges, [3]);
+  });
+  it('keeps the surveyed stance when the quarry block is visible and within reach', async () => {
+    let dug = false;
+    const bot = { entity: { position: { x: 0, y: 64, z: 0 } },
+      canDigBlock: () => true, canSeeBlock: () => true, dig: async () => { dug = true; } };
+    const adapter = new MineflayerRoleAdapter(bot);
+    adapter.navigateNear = async () => { throw new Error('unexpected navigation'); };
+    assert.equal(await adapter.dig({ name: 'dirt', position: { x: 1, y: 61, z: 0 } }, { collectDrops: false }), true);
+    assert.equal(dug, true);
+  });
   it('setelah menggali, harus mendekat SAMPAI BENAR-BENAR MENGINJAK posisi blok (range 0) supaya item yang jatuh ke tanah ikut terambil - ditemukan dari kekhawatiran nyata: menggali dari jarak 3 blok (cukup untuk gali) TIDAK cukup dekat untuk memicu pickup otomatis, item bisa tertinggal di tanah', async () => {
     const gotoCalls = [];
     const bot = {
@@ -490,6 +554,134 @@ describe('MineflayerRoleAdapter.dig - harus mengambil barang yang jatuh, bukan c
     const pickupGoal = gotoCalls[1];
     assert.equal(pickupGoal.x, 5);
     assert.equal(pickupGoal.z, 5);
+  });
+
+  it('memilih iron shovel atau iron pickaxe sesuai material sebelum menggali', async () => {
+    const equipped = [];
+    const inventory = [{ name: 'iron_shovel', count: 1 }, { name: 'iron_pickaxe', count: 1 }];
+    const bot = {
+      entity: { position: { x: 0, y: 64, z: 0 } },
+      inventory: { items: () => inventory },
+      equip: async item => { equipped.push(item.name); bot.heldItem = item; },
+      pathfinder: { goto: async () => {} },
+      dig: async () => {}
+    };
+    const adapter = new MineflayerRoleAdapter(bot);
+    await adapter.dig({ name: 'grass_block', position: { x: 1, y: 64, z: 1 } });
+    await adapter.dig({ name: 'stone', position: { x: 1, y: 64, z: 1 } });
+    assert.deepEqual(equipped, ['iron_shovel', 'iron_pickaxe']);
+  });
+
+  it('menggali tetap berjalan ketika komponen enchantment item malformed', async () => {
+    let digTimeCalls = 0;
+    const block = { position: { x: 1, y: 64, z: 1 }, digTime: (...args) => {
+      digTimeCalls += 1;
+      assert.deepEqual(args.slice(-2), [[], {}]);
+      return 1;
+    } };
+    const bot = {
+      entity: { position: { x: 0, y: 64, z: 0 }, onGround: true, effects: {} },
+      inventory: { items: () => [{ name: 'iron_pickaxe', type: 1, count: 1 }] },
+      equip: async item => { bot.heldItem = { ...item, get enchants() { throw new Error('enchantments is not iterable'); } }; },
+      pathfinder: { goto: async () => {} },
+      digTime: () => { throw new Error('enchantments is not iterable'); },
+      dig: async target => { assert.equal(bot.digTime(target), 1); }
+    };
+    const adapter = new MineflayerRoleAdapter(bot);
+    await adapter.dig({ ...block, name: 'stone' });
+    assert.equal(digTimeCalls, 1);
+  });
+});
+
+describe('MineflayerRoleAdapter.findReferences - referensi blok untuk mengisi lubang landscaping', () => {
+  it('mengembalikan blok solid dan arah face yang benar, melewati udara serta cairan', async () => {
+    const blocks = new Map([
+      ['1,64,0', { name: 'stone', boundingBox: 'block', position: { x: 1, y: 64, z: 0 } }],
+      ['-1,64,0', { name: 'water', boundingBox: 'block', position: { x: -1, y: 64, z: 0 } }],
+      ['0,63,0', { name: 'dirt', boundingBox: 'block', position: { x: 0, y: 63, z: 0 } }]
+    ]);
+    const adapter = new MineflayerRoleAdapter({ blockAt: pos => blocks.get(`${pos.x},${pos.y},${pos.z}`) || { name: 'air', boundingBox: 'empty', position: pos } });
+
+    const references = await adapter.findReferences({ x: 0, y: 64, z: 0 });
+
+    assert.deepEqual(references.map(item => ({ name: item.reference.name, face: { x: item.face.x, y: item.face.y, z: item.face.z } })), [
+      { name: 'stone', face: { x: -1, y: 0, z: 0 } },
+      { name: 'dirt', face: { x: 0, y: 1, z: 0 } }
+    ]);
+  });
+});
+
+describe('MineflayerRoleAdapter.jumpBeforePlacement - hindari menaruh blok di bawah kaki tanpa lompat', () => {
+  it('menjaga facing melewati physics tick dan sneak selama penempatan pada container', async () => {
+    const actions = [];
+    const bot = {
+      entity: { position: { x: 4, y: 71, z: 4 }, pitch: -0.5 },
+      lookAt: async () => actions.push('aim'),
+      look: async yaw => { assert.equal(yaw, Math.PI); actions.push('face'); },
+      waitForTicks: async ticks => { assert.equal(ticks, 1); actions.push('tick'); },
+      getControlState: () => false,
+      setControlState: (control, value) => actions.push(`${control}:${value}`),
+      _placeBlockWithOptions: async (_, __, options) => {
+        assert.equal(options.forceLook, 'ignore');
+        actions.push('place');
+      }
+    };
+    const adapter = new MineflayerRoleAdapter(bot);
+    await adapter.placeBlockAt({ x: 0, y: 72, z: 0 }, { name: 'chest', position: { x: 0, y: 71, z: 0 } }, { x: 0, y: 1, z: 0 }, { facing: 'north' });
+    assert.deepEqual(actions, ['aim', 'face', 'tick', 'sneak:true', 'place', 'sneak:false']);
+    bot._placeBlockWithOptions = async () => { throw new Error('rejected'); };
+    await assert.rejects(adapter.placeBlockAt({ x: 0, y: 72, z: 0 }, { name: 'furnace', position: { x: 0, y: 71, z: 0 } }, { x: 0, y: 1, z: 0 }), /rejected/);
+    assert.equal(actions.at(-1), 'sneak:false');
+  });
+  it('menunggu kaki melewati satu blok penuh sebelum placement dan mengarahkan pandangan lebih dulu', async () => {
+    const controls = [];
+    const actions = [];
+    const bot = {
+      entity: { position: { x: 4.5, y: 68, z: -2.5 } },
+      setControlState: (name, value) => {
+        controls.push([name, value]);
+        if (name === 'jump' && value) {
+          actions.push('jump');
+          bot.entity.position.y = 68.42;
+          setTimeout(() => { bot.entity.position.y = 69.1; }, 30);
+        }
+      },
+      pathfinder: { setGoal: () => {} },
+      lookAt: async () => { actions.push('aim'); },
+      _placeBlockWithOptions: async (reference, face, options) => {
+        assert.ok(bot.entity.position.y >= 69.02);
+        assert.equal(options.forceLook, 'ignore');
+        actions.push('place');
+      }
+    };
+    const adapter = new MineflayerRoleAdapter(bot);
+    await adapter.placeBlockAt({ x: 4, y: 68, z: -3 }, { position: { x: 4, y: 67, z: -3 } }, { x: 0, y: 1, z: 0 });
+    assert.deepEqual(actions, ['aim', 'jump', 'place']);
+    assert.deepEqual(controls.filter(([name]) => name === 'jump'), [['jump', true], ['jump', false]]);
+  });
+
+  it('menolak placement ketika lompatan terhalang dan selalu melepas tombol jump', async () => {
+    const controls = [];
+    const bot = {
+      entity: { position: { x: -0.1, y: 68, z: 0.5 } },
+      setControlState: (name, value) => controls.push([name, value]),
+      placeBlock: async () => assert.fail('tidak boleh menaruh block saat badan masih beririsan')
+    };
+    const adapter = new MineflayerRoleAdapter(bot, { jumpTimeoutMs: 30 });
+    await assert.rejects(adapter.placeBlockAt({ x: 0, y: 68, z: 0 }, { position: { x: 0, y: 67, z: 0 } }, { x: 0, y: 1, z: 0 }), /belum membebaskan/);
+    assert.deepEqual(controls.at(-1), ['jump', false]);
+  });
+
+  it('tidak melompat untuk target yang tidak berada di bawah kaki', async () => {
+    const controls = [];
+    const bot = {
+      entity: { position: { x: 4.5, y: 68, z: -2.5 } },
+      setControlState: (name, value) => controls.push([name, value])
+    };
+    const adapter = new MineflayerRoleAdapter(bot);
+
+    assert.equal(await adapter.jumpBeforePlacement({ x: 8, y: 68, z: -2 }), false);
+    assert.deepEqual(controls, []);
   });
 });
 
@@ -729,6 +921,18 @@ describe('MineflayerRoleAdapter.navigateNear - harus PUNYA BATAS WAKTU, jangan p
 
     assert.equal(result, true);
   });
+
+  it('tidak menimpa goal baru jika goto sebelumnya tetap menggantung setelah timeout', async () => {
+    let calls = 0;
+    const bot = {
+      entity: { position: { x: 0, y: 64, z: 0 } },
+      pathfinder: { goto: () => { calls += 1; return new Promise(() => {}); }, setGoal: () => {} }
+    };
+    const adapter = new MineflayerRoleAdapter(bot, { navigateTimeoutMs: 20 });
+    assert.equal(await adapter.navigateNear({ x: 10, y: 64, z: 10 }, 3), false);
+    assert.equal(await adapter.navigateNear({ x: 20, y: 64, z: 20 }, 3), false);
+    assert.equal(calls, 1, 'pathfinder tidak boleh menerima goal kedua selagi goto pertama masih hidup');
+  });
 });
 
 describe('MineflayerRoleAdapter.getChestHalfType - baca properti blockstate "type" (left/right/single) chest - satu-satunya cara benar tahu pasangan double-chest SUNGGUHAN, bukan cuma kebetulan bersebelahan', () => {
@@ -792,6 +996,22 @@ describe('MineflayerRoleAdapter.findChestPositions / findMatchingChest - juga ha
     assert.equal(capturedMatcher({ name: 'chest' }), true);
     assert.equal(capturedMatcher({ name: 'barrel' }), true);
     assert.equal(capturedMatcher({ name: 'furnace' }), false);
+  });
+
+  it('findMatchingChest dapat mengecualikan sumber yang sudah dicoba agar fallback tidak mengulang chest yang sama', async () => {
+    const positions = [{ x: 1, y: 2, z: 3 }, { x: 4, y: 5, z: 6 }];
+    const opened = [];
+    const bot = {
+      findBlocks: ({ matching }) => positions.filter(position => matching({ name: 'chest' })),
+      blockAt: position => ({ name: 'chest', position }),
+      pathfinder: { setGoal() {}, goto: async () => true },
+      entity: { position: { x: 0, y: 0, z: 0 } },
+      openChest: async block => { opened.push(block.position); return { containerItems: () => [{ name: 'bread', count: 1 }], close() {} }; }
+    };
+    const adapter = new MineflayerRoleAdapter(bot, { chestSettleMs: 0 });
+    const result = await adapter.findMatchingChest(['bread'], { excludePositions: [positions[0]], count: 10 });
+    assert.deepEqual({ x: result.x, y: result.y, z: result.z }, positions[1]);
+    assert.deepEqual(opened.map(position => ({ x: position.x, y: position.y, z: position.z })), [positions[1]]);
   });
 });
 

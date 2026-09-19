@@ -276,6 +276,9 @@ function buildChestCategoryLabels() {
 const CHEST_CATEGORY_LABELS = buildChestCategoryLabels();
 
 const CANONICAL_GEAR_ASSIGNMENTS = {
+  // Stick juga dipakai sebagai fuel darurat. Snapshot container live menunjukkan
+  // stok stick berada di chest utility ini, bukan di chest planks.
+  stick: '-181,71,-349',
   // Buku & catatan
   enchanted_book: BOOKS_CHEST, book: BOOKS_CHEST, bookshelf: BOOKS_CHEST,
   writable_book: BOOKS_CHEST, written_book: BOOKS_CHEST, knowledge_book: BOOKS_CHEST,
@@ -346,7 +349,7 @@ const CANONICAL_GEAR_ASSIGNMENTS = {
   ender_pearl: TRINKETS_CHEST, flint: TRINKETS_CHEST, iron_nugget: TRINKETS_CHEST, cactus: TRINKETS_CHEST,
 
   // Bahan bangunan olahan (bata/tangga/lempeng/dinding/kaca)
-  stone_bricks: BUILDING_MATERIALS_CHEST, deepslate: BUILDING_MATERIALS_CHEST, glowstone: NETHER_MATERIALS_CHEST,
+  stone_bricks: BUILDING_MATERIALS_CHEST, deepslate: BUILDING_MATERIALS_CHEST, oak_door: UTILITY_BLOCKS_CHEST, glowstone: NETHER_MATERIALS_CHEST,
   glowstone_dust: NETHER_MATERIALS_CHEST, blaze_rod: RARE_DROPS_CHEST,
   netherite_upgrade_smithing_template: RARE_DROPS_CHEST, obsidian: RAW_ORE_CHEST,
 
@@ -485,6 +488,7 @@ module.exports = {
   getSharedChestAssignments,
   parseChestPositionKey,
   TOOLS_CHEST,
+  STONE_COBBLE_CHEST,
   WEAPONS_CHEST,
   COMPOSTER_POSITIONS,
   FOOD_CHEST

@@ -29,8 +29,9 @@ const mineflayer = require('mineflayer');
 const { pathfinder, Movements } = require('mineflayer-pathfinder');
 const { MineflayerRoleAdapter } = require('./mineflayerRoleAdapter');
 const { MobFarmEngine } = require('./mobFarmEngine');
-const { walkToBase } = require('./walkToBase');
+const { walkToBase, SAFE_TRAVEL_TERRAIN_NAMES } = require('./walkToBase');
 const { getSharedChestAssignments, parseChestPositionKey, TOOLS_CHEST, WEAPONS_CHEST, FOOD_CHEST } = require('./storageMemory');
+const { createEngineTaskHandlers, createCooperativeAgent } = require('./cooperativeAgent');
 
 const TICK_INTERVAL_MS = Number(process.env.MOBFARM_TICK_MS) || 2000;
 const DEFAULT_BASE_GOAL = { x: -185, y: 71, z: -352 };
@@ -81,6 +82,7 @@ function startMobFarmWorker({
 
   let combatEngine = null;
   let adapter = null;
+  let cooperativeRuntime = null;
   let sharedChestAssignments = null;
   let stopped = false;
   let timer = null;
@@ -92,13 +94,13 @@ function startMobFarmWorker({
     bot.pathfinder.thinkTimeout = 20000;
     log(`Spawn di (${bot.entity.position.x.toFixed(1)}, ${bot.entity.position.y.toFixed(1)}, ${bot.entity.position.z.toFixed(1)}) - menunggu chunk sekitar ter-load...`);
 
-    const walkToBaseResult = await walkToBase({ bot, goal: baseGoal, range: 4, settleMs: 5000, log });
+    const walkToBaseResult = await walkToBase({ bot, goal: baseGoal, range: 4, settleMs: 5000, maxGotoMs: 12000, thinkTimeoutMs: 12000, stageDistance: 32, allowTerrainWork: true, allow1by1Towers: false, maxDropDown: 3, terrainBreakAllowlist: SAFE_TRAVEL_TERRAIN_NAMES, log });
     if (!walkToBaseResult.success) {
       log(`PERINGATAN: gagal berjalan ke base (${walkToBaseResult.reason}) - lanjut coba ambil pedang & berangkat ke spawner dari posisi sekarang.`);
     }
     bot.pathfinder.setMovements(buildMovements(bot));
 
-    adapter = new MineflayerRoleAdapter(bot);
+    adapter = new MineflayerRoleAdapter(bot, { capabilities: ['combat', 'mob_farm', 'haul'] });
     sharedChestAssignments = getSharedChestAssignments(log);
 
     // Klik bed terdekat SEBELUM lanjut - sama seperti worker lain (runFarmerWorker.js dst) - tanpa
@@ -146,14 +148,14 @@ function startMobFarmWorker({
     // disitu ada jalan masuk kamu coba cari" - singgah di sini DULU, baru lanjut turun ke titik
     // spawner sungguhan (jarak dari pintu masuk jauh lebih pendek & lewat lorong yang sudah ada).
     log(`Berjalan ke pintu masuk spawner (${entranceGoal.x}, ${entranceGoal.y}, ${entranceGoal.z})...`);
-    const walkToEntranceResult = await walkToBase({ bot, goal: entranceGoal, range: 4, settleMs: 3000, log });
+    const walkToEntranceResult = await walkToBase({ bot, goal: entranceGoal, range: 4, settleMs: 3000, maxGotoMs: 12000, thinkTimeoutMs: 12000, stageDistance: 32, allowTerrainWork: true, allow1by1Towers: false, maxDropDown: 3, terrainBreakAllowlist: SAFE_TRAVEL_TERRAIN_NAMES, log });
     let reachedSpawnerArea = false;
     if (!walkToEntranceResult.success) {
       log(`PERINGATAN: gagal berjalan ke pintu masuk spawner (${walkToEntranceResult.reason}) - tetap coba lanjut turun ke spawner dari posisi sekarang.`);
     } else {
       log('Sampai di pintu masuk spawner - lanjut turun ke titik spawner sungguhan.');
       bot.pathfinder.setMovements(buildMovements(bot));
-      const walkToSpawnerResult = await walkToBase({ bot, goal: spawnerGoal, range: 4, settleMs: 3000, log });
+      const walkToSpawnerResult = await walkToBase({ bot, goal: spawnerGoal, range: 4, settleMs: 3000, maxGotoMs: 12000, thinkTimeoutMs: 12000, stageDistance: 32, allowTerrainWork: true, allow1by1Towers: false, maxDropDown: 3, terrainBreakAllowlist: SAFE_TRAVEL_TERRAIN_NAMES, log });
       reachedSpawnerArea = walkToSpawnerResult.success;
       if (!walkToSpawnerResult.success) {
         log(`PERINGATAN: sudah di pintu masuk tapi tetap gagal turun ke spawner (${walkToSpawnerResult.reason}) - berburu dari sekitar pintu masuk saja.`);
@@ -185,6 +187,15 @@ function startMobFarmWorker({
       retreatPosition: entranceGoal
     });
     combatEngine.on('attacked', ({ target }) => log(`Menyerang ${target.name || target.type}`));
+    cooperativeRuntime = createCooperativeAgent(adapter, {
+      capabilities: ['combat', 'mob_farm', 'haul'],
+      metadata: { role: 'mob_farm' },
+      handlers: createEngineTaskHandlers(combatEngine, {
+        SURVEY_THREATS: { execute: async () => ({ action: 'survey', threats: combatEngine.getThreats().length }) },
+        PATROL_AREA: { actions: ['patrol', 'standby'], idleCompletes: true },
+        ENGAGE_THREATS: { actions: ['attack', 'approach', 'cooldown'], idleCompletes: true }
+      })
+    });
 
     log('Pekerja pemburu spawner mulai berburu.');
     lastAction = 'HUNTING';
@@ -232,6 +243,12 @@ function startMobFarmWorker({
     async function tick() {
       if (stopped) return;
       try {
+        const cooperative = await cooperativeRuntime?.runOnce();
+        if (cooperative && cooperative.status !== 'IDLE') {
+          lastAction = `TASK_${cooperative.status}`;
+          timer = setTimeout(tick, TICK_INTERVAL_MS);
+          return;
+        }
         const combatResult = await combatEngine.tick();
         lastAction = combatResult.action.toUpperCase();
         if (!['idle', 'standby'].includes(combatResult.action)) {
@@ -272,6 +289,7 @@ function startMobFarmWorker({
     log(`Koneksi terputus tak terduga (${reason || 'tidak diketahui'}) - worker berhenti.`);
     stopped = true;
     if (timer) clearTimeout(timer);
+    cooperativeRuntime?.stop();
     onDisconnect();
   });
 
@@ -279,6 +297,7 @@ function startMobFarmWorker({
     stop() {
       stopped = true;
       if (timer) clearTimeout(timer);
+      cooperativeRuntime?.stop();
       bot.quit();
     },
     getMetrics() {

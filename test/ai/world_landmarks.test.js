@@ -37,6 +37,17 @@ describe('worldLandmarks', () => {
     assert.deepEqual(worldLandmarks.loadLandmarks(), []);
   });
 
+  it('writer sibuk atau JSON rusak tidak boleh ditimpa', () => {
+    const landmark = worldLandmarks.makePointLandmark({ name: 'A', category: 'chest', position: { x: 0, y: 0, z: 0 } });
+    fs.writeFileSync(`${tmpFile}.lock`, 'writer aktif');
+    try { assert.throws(() => worldLandmarks.addLandmark(landmark), { code: 'EEXIST' }); }
+    finally { fs.unlinkSync(`${tmpFile}.lock`); }
+    fs.writeFileSync(tmpFile, '{rusak');
+    assert.throws(() => worldLandmarks.addLandmark(landmark));
+    assert.equal(fs.readFileSync(tmpFile, 'utf8'), '{rusak');
+    assert.equal(fs.existsSync(`${tmpFile}.lock`), false);
+  });
+
   it('makePointLandmark() harus membuat landmark bertipe "point" dengan posisi x,y,z persis', () => {
     const landmark = worldLandmarks.makePointLandmark({ name: 'Peti Buku Cadangan', category: 'chest', position: { x: -181, y: 73, z: -351 } });
     assert.equal(landmark.shape, 'point');

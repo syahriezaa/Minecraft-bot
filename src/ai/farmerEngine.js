@@ -126,6 +126,8 @@ class FarmerEngine extends EventEmitter {
     // objek {x,y,z}, tidak bisa dipakai langsung sebagai kunci lookup overflowChests.
     this.depositChestKeyCache = new Map();
     this.plantRotationIndex = 0;
+    this.rowSeeds = new Map();
+    this.repairRetryAt = new Map();
   }
 
   isMatureCrop(block) {
@@ -160,7 +162,9 @@ class FarmerEngine extends EventEmitter {
   }
 
   findPlantingSpots() {
-    return this.findFarmlandBlocks().filter(block => {
+    const farmland = this.findFarmlandBlocks();
+    if (!this.rowAxis && farmland.length) this.rowAxis = new Set(farmland.map(b => b.position.x)).size >= new Set(farmland.map(b => b.position.z)).size ? 'x' : 'z';
+    return this.groupSpotsByRow(farmland).flat().filter(block => {
       const above = this.adapter.blockAt({
         x: block.position.x,
         y: block.position.y + 1,
@@ -180,16 +184,17 @@ class FarmerEngine extends EventEmitter {
     if (spots.length === 0) return [];
     const distinctX = new Set(spots.map(s => s.position.x)).size;
     const distinctZ = new Set(spots.map(s => s.position.z)).size;
-    const rowKeyOf = distinctX >= distinctZ
-      ? (pos) => `z:${pos.z}`
-      : (pos) => `x:${pos.x}`;
+    const axis = this.rowAxis || (distinctX >= distinctZ ? 'x' : 'z');
+    const cross = axis === 'x' ? 'z' : 'x';
+    const rowKeyOf = (pos) => `${pos.y}:${pos[cross]}`;
     const rows = new Map();
     for (const spot of spots) {
       const key = rowKeyOf(spot.position);
       if (!rows.has(key)) rows.set(key, []);
       rows.get(key).push(spot);
     }
-    return [...rows.values()];
+    return [...rows.values()].sort((a, b) => a[0].position.y - b[0].position.y || a[0].position[cross] - b[0].position[cross])
+      .map(row => row.sort((a, b) => a.position[axis] - b.position[axis]));
   }
 
   chooseSeedFor(referenceBlock) {
@@ -199,10 +204,18 @@ class FarmerEngine extends EventEmitter {
     // seragam wheat semua walau punya benih carrot/potato juga, karena benih pertama yang cocok
     // selalu dipakai duluan dan wheat_seeds biasanya paling melimpah. Dipanggil SEKALI PER BARIS
     // (bukan per spot individual) supaya satu baris memanjang jadi satu jenis benih yang rapi.
-    const available = Object.values(CROP_RULES).map(rule => rule.seed).filter(seed => this.adapter.hasItem(seed));
+    if (referenceBlock?.name === 'soul_sand') return null;
+    const pos = referenceBlock.position;
+    const key = `${pos.y}:${this.rowAxis || 'x'}:${pos[this.rowAxis === 'z' ? 'x' : 'z']}`;
+    if (this.rowSeeds.has(key)) {
+      const seed = this.rowSeeds.get(key);
+      return this.adapter.hasItem(seed) ? seed : null;
+    }
+    const available = Object.values(CROP_RULES).map(rule => rule.seed).filter(seed => seed !== 'nether_wart' && this.adapter.hasItem(seed));
     if (available.length === 0) return null;
     const seed = available[this.plantRotationIndex % available.length];
     this.plantRotationIndex++;
+    this.rowSeeds.set(key, seed);
     return seed;
   }
 
@@ -284,7 +297,7 @@ class FarmerEngine extends EventEmitter {
 
   async attemptRepair() {
     if (!this.options.repairEnabled) return null;
-    const candidates = this.findRepairCandidates().slice(0, this.options.repairBatchSize);
+    const candidates = this.findRepairCandidates().filter(c => (this.repairRetryAt.get(JSON.stringify(c.position)) || 0) <= Date.now()).slice(0, this.options.repairBatchSize);
     if (candidates.length === 0) return null;
 
     const needsFill = candidates.some(c => c.type === 'fill');
@@ -297,6 +310,8 @@ class FarmerEngine extends EventEmitter {
 
     let repaired = 0;
     for (const candidate of candidates) {
+      const retryKey = JSON.stringify(candidate.position);
+      this.repairRetryAt.set(retryKey, Date.now() + 30000);
       // Kandidat SATU-SATU dibungkus try/catch - pathfinder sungguhan (navigateNear di dalam
       // tillFarmland/placeDirtAt) MELEMPAR "No path to the goal!" kalau posisinya tidak
       // terjangkau, bukan gagal dengan tenang. Tanpa penjagaan ini SATU kandidat yang kebetulan
@@ -314,6 +329,7 @@ class FarmerEngine extends EventEmitter {
         if (!this.adapter.hasItem(HOE_NAMES)) break; // kehabisan cangkul di tengah jalan
         const tilled = await this.adapter.tillFarmland(candidate.position);
         if (tilled) {
+          this.repairRetryAt.delete(retryKey);
           repaired++;
           this.metrics.repaired++;
           this.emit('repaired', { position: candidate.position, type: candidate.type });
@@ -484,7 +500,7 @@ class FarmerEngine extends EventEmitter {
       // Variasi tetap ada, cuma sekarang ANTAR baris, bukan campur-campur di dalam satu baris.
       for (const row of this.groupSpotsByRow(spots)) {
         const seed = this.chooseSeedFor(row[0]);
-        if (!seed) break; // kehabisan semua jenis benih - tidak ada lagi yang bisa ditanam
+        if (!seed) continue;
         for (const spot of row) {
           const planted = await this.adapter.placeSeed(spot, seed);
           if (planted) {

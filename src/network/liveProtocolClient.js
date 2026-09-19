@@ -66,6 +66,10 @@ const DEFAULT_CLIENT_CONFIG = Object.freeze({
   movementHeartbeatEnabled: true,
   movementHeartbeatIntervalMs: 1000,
   movementCorrectionPauseMs: 750,
+  // Batas konservatif per paket posisi. Perpindahan jauh harus memakai navigasi bertahap,
+  // bukan teleport koordinat mentah yang memicu "moved too quickly" pada server.
+  maxMovementDeltaMeters: 0.75,
+  minMovementIntervalMs: 40,
   autoConfirmTeleport: true,
   autoSendPlayerLoaded: true,
   autoRespawn: true,
@@ -573,6 +577,12 @@ class LiveProtocolClient extends EventEmitter {
   constructor(options = {}) {
     super();
 
+    // EventEmitter memperlakukan event "error" tanpa listener sebagai exception
+    // fatal. Klien dipakai juga oleh probe/worker yang hanya menunggu Promise
+    // connect(), jadi reset tunnel tidak boleh mematikan seluruh proses swarm.
+    // Pemakai tetap dapat memasang listener sendiri untuk logging/telemetri.
+    this.on('error', () => {});
+
     // Gabungkan konfigurasi dengan nilai bawaan
     this.config = { ...DEFAULT_CLIENT_CONFIG, ...options };
     this.packetIds = {
@@ -611,6 +621,7 @@ class LiveProtocolClient extends EventEmitter {
     this._lastTeleportId = null;
     this._teleportsReceived = 0;
     this._movementPausedUntil = 0;
+    this._lastMovementSentAt = 0;
 
     // Inisialisasi komponen pembantu
     this.framer = new PacketFramer();
@@ -663,6 +674,7 @@ class LiveProtocolClient extends EventEmitter {
       this._lastTeleportId = null;
       this._teleportsReceived = 0;
       this._movementPausedUntil = 0;
+      this._lastMovementSentAt = 0;
 
       this.emit('connecting', { host: this.config.host, port: this.config.port });
       console.log(`🌐 [Jaringan] Menghubungkan ke server ${this.config.host}:${this.config.port}...`);
@@ -1085,6 +1097,7 @@ class LiveProtocolClient extends EventEmitter {
             )
           };
           this._movementPausedUntil = Date.now() + Math.max(0, this.config.movementCorrectionPauseMs);
+          this._lastMovementSentAt = 0;
           this.emit('movement_correction', correction);
         }
 
@@ -1368,8 +1381,33 @@ class LiveProtocolClient extends EventEmitter {
   /**
    * Mengirim paket posisi pemain ke server (ID 0x1a pada 1.21.1)
    */
+  _movementIsSafe(x, y, z) {
+    const distance = Math.hypot(x - this.position.x, y - this.position.y, z - this.position.z);
+    if (distance > this.config.maxMovementDeltaMeters) {
+      this.emit('movement_rejected', {
+        reason: 'DELTA_TOO_LARGE',
+        distance,
+        from: { ...this.position },
+        to: { x, y, z }
+      });
+      return false;
+    }
+    const now = Date.now();
+    if (distance > 0.01 && now - this._lastMovementSentAt < this.config.minMovementIntervalMs) {
+      this.emit('movement_rejected', {
+        reason: 'RATE_LIMIT',
+        elapsedMs: now - this._lastMovementSentAt,
+        from: { ...this.position },
+        to: { x, y, z }
+      });
+      return false;
+    }
+    this._lastMovementSentAt = now;
+    return true;
+  }
+
   sendPosition(posOrX, maybeY, maybeZ, maybeOnGround = true) {
-    if (this.protocolState !== PROTOCOL_STATES.PLAY) return;
+    if (this.protocolState !== PROTOCOL_STATES.PLAY) return false;
 
     let x, y, z, onGround = true;
     if (typeof posOrX === 'object' && posOrX !== null) {
@@ -1384,7 +1422,8 @@ class LiveProtocolClient extends EventEmitter {
       if (maybeOnGround !== undefined) onGround = Boolean(maybeOnGround);
     }
 
-    if (isNaN(x) || isNaN(y) || isNaN(z)) return;
+    if (isNaN(x) || isNaN(y) || isNaN(z)) return false;
+    if (!this._movementIsSafe(x, y, z)) return false;
 
     this.position.x = x;
     this.position.y = y;
@@ -1401,13 +1440,14 @@ class LiveProtocolClient extends EventEmitter {
     }), 24);
 
     this._sendPacketRaw(PROTOCOL_STATES.PLAY, this.packetIds.play.toServer.position, buf);
+    return true;
   }
 
   /**
    * Mengirim pembaruan posisi dan rotasi pemain ke server (ID 0x1b pada 1.21.1)
    */
   sendPositionAndRotation(posOrX, maybeY, maybeZ, maybeYaw = 0, maybePitch = 0, maybeOnGround = true) {
-    if (this.protocolState !== PROTOCOL_STATES.PLAY) return;
+    if (this.protocolState !== PROTOCOL_STATES.PLAY) return false;
 
     let x, y, z, yaw = 0, pitch = 0, onGround = true, hasHorizontalCollision = false;
     if (typeof posOrX === 'object' && posOrX !== null) {
@@ -1427,7 +1467,8 @@ class LiveProtocolClient extends EventEmitter {
       if (maybeOnGround !== undefined) onGround = Boolean(maybeOnGround);
     }
 
-    if (isNaN(x) || isNaN(y) || isNaN(z) || isNaN(yaw) || isNaN(pitch)) return;
+    if (isNaN(x) || isNaN(y) || isNaN(z) || isNaN(yaw) || isNaN(pitch)) return false;
+    if (!this._movementIsSafe(x, y, z)) return false;
 
     this.position = { x, y, z, yaw, pitch, onGround, hasHorizontalCollision };
 
@@ -1440,6 +1481,7 @@ class LiveProtocolClient extends EventEmitter {
     buf.writeUInt8(encodeMovementFlags({ onGround, hasHorizontalCollision }), 32);
 
     this._sendPacketRaw(PROTOCOL_STATES.PLAY, this.packetIds.play.toServer.positionLook, buf);
+    return true;
   }
 
   /**

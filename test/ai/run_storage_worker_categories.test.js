@@ -8,9 +8,9 @@
  * Aturan Tim: Semua komentar, log, dan pesan error ditulis dalam Bahasa Indonesia.
  */
 
-const { describe, it } = require('node:test');
+const { describe, it, test } = require('node:test');
 const assert = require('node:assert/strict');
-const { CHEST_CATEGORY_LABELS } = require('../../src/ai/runStorageWorker');
+const { CHEST_CATEGORY_LABELS, canonicalContainerPosition } = require('../../src/ai/runStorageWorker');
 
 describe('CHEST_CATEGORY_LABELS', () => {
   it('harus punya nama kategori untuk chest utama yang sudah didaftarkan (mis. bahan berharga di -181,74,-353)', () => {
@@ -27,4 +27,14 @@ describe('CHEST_CATEGORY_LABELS', () => {
     assert.equal(CHEST_CATEGORY_LABELS['-181,71,-351'], 'Armor');
     assert.notEqual(CHEST_CATEGORY_LABELS['-180,71,-351'], 'Armor');
   });
+});
+
+test('canonicalContainerPosition menyatukan pasangan double chest tetapi tidak barel', () => {
+  const types = new Map([
+    ['-181,71,-352', 'right'],
+    ['-180,71,-352', 'left']
+  ]);
+  const adapter = { getChestHalfType: position => types.get(`${position.x},${position.y},${position.z}`) || null };
+  assert.deepEqual(canonicalContainerPosition(adapter, { x: -180, y: 71, z: -352 }), { x: -181, y: 71, z: -352 });
+  assert.deepEqual(canonicalContainerPosition(adapter, { x: -181, y: 71, z: -351 }), { x: -181, y: 71, z: -351 });
 });

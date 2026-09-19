@@ -23,12 +23,23 @@ const { goals: { GoalNear, GoalNearXZ } } = require('mineflayer-pathfinder');
 // sudah pendek dari awal.
 const STAGE_DISTANCE = 64;
 
+// Dipakai hanya untuk bootstrap/evakuasi perjalanan jauh. Blok bangunan, container,
+// workstation, kaca, dan mekanisme redstone sengaja tidak masuk daftar sehingga bot tidak
+// mengubah base ketika harus menggali keluar dari spawn yang berada di bawah tanah.
+const SAFE_TRAVEL_TERRAIN_NAMES = new Set([
+  'dirt', 'grass_block', 'coarse_dirt', 'rooted_dirt', 'podzol', 'mycelium',
+  'sand', 'red_sand', 'gravel', 'clay', 'mud', 'snow', 'snow_block',
+  'stone', 'cobblestone', 'deepslate', 'tuff', 'granite', 'diorite', 'andesite',
+  'calcite', 'dripstone_block', 'pointed_dripstone', 'netherrack', 'soul_sand',
+  'soul_soil', 'basalt', 'blackstone'
+]);
+
 function distanceXZ(a, b) {
   const dx = a.x - b.x, dz = a.z - b.z;
   return Math.sqrt(dx * dx + dz * dz);
 }
 
-function buildMovements(bot) {
+function buildMovements(bot, { allowTerrainWork = false, allow1by1Towers = true, allowParkour = true, allowSprinting = true, scaffoldingBlocks = [], maxDropDown = 4, terrainBreakAllowlist = null } = {}) {
   // mineflayer-pathfinder@2.x baca registry blok LANGSUNG dari bot.registry (diisi otomatis oleh
   // mineflayer sendiri saat spawn) - Movements cuma butuh satu argumen `bot`, bukan `(bot, mcData)`
   // terpisah seperti versi lama.
@@ -40,12 +51,17 @@ function buildMovements(bot) {
   // (144 ribu simpul dikunjungi sampai timeout) tepat di depan base padahal rutenya cuma lewat
   // pintu+tangga biasa. Base yang sah tidak butuh digali untuk dimasuki - matikan dig, nyalakan
   // buka pintu.
-  movements.canDig = false;
+  movements.canDig = allowTerrainWork;
   movements.canOpenDoors = true;
-  movements.allow1by1towers = true;
-  movements.allowSprinting = true;
-  movements.allowParkour = true;
-  movements.maxDropDown = 4;
+  movements.allow1by1towers = allow1by1Towers;
+  movements.scafoldingBlocks = scaffoldingBlocks;
+  movements.allowSprinting = allowSprinting;
+  movements.allowParkour = allowParkour;
+  movements.maxDropDown = maxDropDown;
+  if (allowTerrainWork && terrainBreakAllowlist) {
+    const allowed = terrainBreakAllowlist instanceof Set ? terrainBreakAllowlist : new Set(terrainBreakAllowlist);
+    movements.exclusionAreasBreak.push(block => allowed.has(block?.name) ? 0 : 100);
+  }
   return movements;
 }
 
@@ -69,27 +85,83 @@ function buildMovements(bot) {
 // di luar goto() itu sendiri.
 const DEFAULT_MAX_GOTO_MS = 45000;
 
-async function walkToBase({ bot, goal, range = 2, settleMs = 0, maxGotoMs = DEFAULT_MAX_GOTO_MS, log = () => {} }) {
+async function walkToBase({ bot, goal, range = 2, settleMs = 0, maxGotoMs = DEFAULT_MAX_GOTO_MS, thinkTimeoutMs = 30000, minimumY = null, allowTerrainWork = false, allow1by1Towers = true, allowParkour = true, allowSprinting = true, scaffoldingBlocks = [], maxDropDown = 4, terrainBreakAllowlist = null, fallbackGoalYOffsets = [], stageDistance = STAGE_DISTANCE, goalXZOnly = false, sharedRoute = false, shouldStop = () => false, log = () => {} }) {
   if (!bot?.pathfinder) {
     throw new Error('Bot belum punya plugin pathfinder dimuat - panggil bot.loadPlugin(pathfinder) dulu.');
   }
   async function gotoWithTimeout(goalObj) {
+    if (shouldStop()) throw new Error('Perjalanan dibatalkan karena worker dihentikan');
+    if (bot._client?.ended || bot._client?.socket?.destroyed) throw new Error('Koneksi Minecraft sudah terputus');
     let timeoutHandle;
+    let navigation;
+    let timedOut = false;
+    const previousSharedRoute = bot.pathfinder.allowSharedRoute;
+    if (sharedRoute) bot.pathfinder.allowSharedRoute = true;
     const timeout = new Promise((_, reject) => {
-      timeoutHandle = setTimeout(() => reject(new Error(`goto timeout setelah ${maxGotoMs}ms - kemungkinan rute terus di-reset (mis. knockback berulang dari mob)`)), maxGotoMs);
+      timeoutHandle = setTimeout(() => {
+        timedOut = true;
+        reject(new Error(`goto timeout setelah ${maxGotoMs}ms - kemungkinan rute terus di-reset (mis. knockback berulang dari mob)`));
+      }, maxGotoMs);
     });
     try {
-      await Promise.race([bot.pathfinder.goto(goalObj), timeout]);
+      navigation = bot.pathfinder.goto(goalObj);
+      await Promise.race([navigation, timeout]);
+      const position = bot.entity?.position;
+      if (position && Number.isFinite(goalObj.rangeSq)) {
+        const dx = position.x - goalObj.x;
+        const dz = position.z - goalObj.z;
+        const dy = typeof goalObj.y === 'number' ? position.y - goalObj.y : 0;
+        const distanceSq = dx * dx + dy * dy + dz * dz;
+        // Entity berada di tengah blok, sedangkan GoalNear menghitung radius terhadap posisi
+        // navigasi blok. Beri toleransi satu blok agar kedatangan di tepi radius tidak salah
+        // dianggap false-success (mis. jarak aktual 4.54 untuk goal radius 4), tetapi tetap
+        // menolak goto() yang benar-benar selesai tanpa memindahkan bot.
+        const acceptedDistance = Math.sqrt(goalObj.rangeSq) + 1;
+        if (distanceSq > acceptedDistance * acceptedDistance) {
+          throw new Error(`pathfinder melaporkan selesai tetapi posisi belum dekat tujuan (jarak2=${distanceSq.toFixed(1)}, batas2=${goalObj.rangeSq})`);
+        }
+      }
     } finally {
       clearTimeout(timeoutHandle);
+      // Promise.race tidak menghentikan goto() yang masih menghitung ulang rute.
+      // Jika langsung memulai target berikutnya, promise lama dapat memanggil
+      // setGoal(null) terlambat dan membatalkan target baru ("goal was changed").
+      if (timedOut && navigation) {
+        bot.pathfinder.setGoal?.(null);
+        await Promise.race([
+          Promise.resolve(navigation).catch(() => undefined),
+          new Promise(resolve => setTimeout(resolve, 1000))
+        ]);
+      }
+      bot.pathfinder.setGoal?.(null);
+      bot.pathfinder.allowSharedRoute = previousSharedRoute;
+    }
+  }
+  async function gotoWithRetry(goalObj, attempts = 4) {
+    for (let attempt = 1; attempt <= attempts; attempt += 1) {
+      if (shouldStop()) throw new Error('Perjalanan dibatalkan karena worker dihentikan');
+      try { return await gotoWithTimeout(goalObj); }
+      catch (error) {
+        const queued = /RESOURCE_RESERVED|DEADLOCK_REPLAN/.test(error.message || '');
+        if (!queued || attempt === attempts) throw error;
+        log(`Jalur sedang dipakai bot lain; antre ${attempt}/${attempts - 1} sebelum hitung ulang...`);
+        await new Promise(resolve => setTimeout(resolve, 750 * attempt));
+      }
     }
   }
   if (settleMs > 0) {
+    if (shouldStop()) return { success: false, reason: 'worker dihentikan sebelum perjalanan dimulai' };
     log(`Menunggu ${settleMs}ms supaya chunk sekitar sempat ter-load penuh sebelum mencari rute...`);
     await new Promise((r) => setTimeout(r, settleMs));
+    if (shouldStop()) return { success: false, reason: 'worker dihentikan saat menunggu chunk' };
   }
-  bot.pathfinder.setMovements(buildMovements(bot));
-  bot.pathfinder.thinkTimeout = 30000; // server lambat butuh waktu berpikir lebih lama dari default 5 detik
+  const movements = buildMovements(bot, { allowTerrainWork, allow1by1Towers, allowParkour, allowSprinting, scaffoldingBlocks, maxDropDown, terrainBreakAllowlist });
+  if (Number.isFinite(minimumY)) {
+    movements.exclusionAreasStep.push(block => block?.position && block.position.y < minimumY ? 100 : 0);
+    movements.allow1by1towers = false;
+  }
+  bot.pathfinder.setMovements(movements);
+  bot.pathfinder.thinkTimeout = Math.max(1000, Number(thinkTimeoutMs) || 30000);
 
   // Perjalanan JAUH dipecah jadi beberapa lompatan bertahap MENUJU tujuan dulu (lihat komentar
   // STAGE_DISTANCE) - pakai GoalNearXZ (abaikan Y persis, biar pathfinder cari ketinggian tanah
@@ -98,35 +170,84 @@ async function walkToBase({ bot, goal, range = 2, settleMs = 0, maxGotoMs = DEFA
   // mungkin menghitung lompatan - langsung ke goto() akhir seperti perilaku lama.
   const currentPos = bot.entity?.position;
   if (currentPos && typeof currentPos.x === 'number') {
-    const totalDist = distanceXZ(currentPos, goal);
-    if (totalDist > STAGE_DISTANCE) {
-      const stageCount = Math.ceil(totalDist / STAGE_DISTANCE);
-      for (let i = 1; i < stageCount; i++) {
-        const t = i / stageCount;
-        const hopX = currentPos.x + (goal.x - currentPos.x) * t;
-        const hopZ = currentPos.z + (goal.z - currentPos.z) * t;
-        log(`Menuju titik antara (${hopX.toFixed(0)}, ~, ${hopZ.toFixed(0)}) - tahap ${i}/${stageCount - 1} sebelum ke base...`);
-        try {
-          await gotoWithTimeout(new GoalNearXZ(hopX, hopZ, 8));
-        } catch (e) {
-          log(`Tahap ${i} gagal (${e.message}) - lanjut coba tahap berikutnya.`);
-        }
+    let cursor = { x: currentPos.x, y: currentPos.y, z: currentPos.z };
+    const hopDistance = Number.isFinite(stageDistance) && stageDistance > 0 ? stageDistance : STAGE_DISTANCE;
+    const initialDistance = distanceXZ(cursor, goal);
+    let stage = 0;
+    let stalledStages = 0;
+    let lastActual = { x: cursor.x, z: cursor.z };
+    while (distanceXZ(cursor, goal) > hopDistance) {
+      if (shouldStop()) return { success: false, reason: 'worker dihentikan saat perjalanan bertahap' };
+      stage += 1;
+      const remaining = distanceXZ(cursor, goal);
+      const ratio = hopDistance / remaining;
+      const hopX = cursor.x + (goal.x - cursor.x) * ratio;
+      const hopZ = cursor.z + (goal.z - cursor.z) * ratio;
+      log(`Menuju titik antara (${hopX.toFixed(0)}, ~, ${hopZ.toFixed(0)}) - tahap ${stage} (sisa awal ${initialDistance.toFixed(0)} blok)...`);
+      try {
+        await gotoWithRetry(new GoalNearXZ(hopX, hopZ, 8));
+      } catch (e) {
+        log(`Tahap ${stage} gagal (${e.message}) - lanjut coba tahap berikutnya.`);
       }
+      const actual = bot.entity?.position;
+      const hasActual = actual && Number.isFinite(actual.x) && Number.isFinite(actual.z);
+      const moved = hasActual ? distanceXZ(lastActual, actual) : 0;
+      const remainingAfter = hasActual ? distanceXZ(actual, goal) : Infinity;
+      const remainingBefore = distanceXZ(cursor, goal);
+      // Jangan memajukan cursor ke titik rencana ketika server tidak pernah memindahkan
+      // entity. Itu hanya membuat worker mengulang rute palsu tanpa batas dan mengunci CPU.
+      // Tiga kegagalan berturut-turut masih memberi kesempatan chunk/pathfinder pulih, setelah
+      // itu caller mendapat alasan yang bisa ditangani (retry/reconnect), bukan loop panas.
+      if (!hasActual || moved < 1 || remainingAfter >= remainingBefore - 1) {
+        stalledStages += 1;
+        cursor = hasActual ? { x: actual.x, y: actual.y, z: actual.z } : cursor;
+        if (stalledStages >= 3) {
+          const reason = `NAVIGATION_STALLED setelah ${stalledStages} tahap tanpa kemajuan posisi`;
+          log(`Perjalanan dihentikan: ${reason}.`);
+          return { success: false, reason };
+        }
+      } else {
+        stalledStages = 0;
+        cursor = { x: actual.x, y: actual.y, z: actual.z };
+      }
+      if (hasActual) lastActual = { x: actual.x, z: actual.z };
     }
   }
 
   log(`Berjalan ke base (${goal.x}, ${goal.y}, ${goal.z})...`);
   try {
-    await gotoWithTimeout(new GoalNear(goal.x, goal.y, goal.z, range));
+    await gotoWithRetry(goalXZOnly ? new GoalNearXZ(goal.x, goal.z, range) : new GoalNear(goal.x, goal.y, goal.z, range));
     log('Sampai di base.');
     return { success: true };
   } catch (e) {
+    const offsets = [...new Set((Array.isArray(fallbackGoalYOffsets) ? fallbackGoalYOffsets : [])
+      .filter(offset => Number.isInteger(offset) && offset !== 0))];
+    for (const offset of offsets) {
+      if (shouldStop()) return { success: false, reason: 'worker dihentikan sebelum landing cadangan' };
+      const fallbackY = goal.y + offset;
+      if (!Number.isFinite(fallbackY)) continue;
+      try {
+        log(`Rute presisi gagal; mencoba landing level base Y${fallbackY} (${offset > 0 ? '+' : ''}${offset})...`);
+        await gotoWithRetry(new GoalNear(goal.x, fallbackY, goal.z, range));
+        const position = bot.entity?.position;
+        const dx = (position?.x ?? Infinity) - goal.x;
+        const dy = (position?.y ?? Infinity) - goal.y;
+        const dz = (position?.z ?? Infinity) - goal.z;
+        const acceptedDistance = range + 1;
+        if (Math.hypot(dx, dy, dz) <= acceptedDistance) {
+          log(`Sampai di landing level aman dekat base (jarak ${Math.hypot(dx, dy, dz).toFixed(1)}).`);
+          return { success: true, fallback: true, landingY: Math.floor(position.y) };
+        }
+      } catch (fallbackError) {
+        log(`Landing level Y${fallbackY} gagal: ${fallbackError.message}`);
+      }
+    }
     log(`Gagal mencapai base: ${e.message}`);
     return { success: false, reason: e.message };
   }
 }
 
-module.exports = { walkToBase, buildMovements };
+module.exports = { walkToBase, buildMovements, SAFE_TRAVEL_TERRAIN_NAMES };
 
 if (require.main === module) {
   // HARUS di-require sebelum 'mineflayer' - lihat mineflayerVersionPatch.js untuk alasan lengkap

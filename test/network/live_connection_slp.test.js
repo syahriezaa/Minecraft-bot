@@ -83,9 +83,11 @@ describe('Pengujian Integrasi Live Server NeoForge 26.1.2 & SLP Verification', {
     assert.ok(stateSequence.includes('configuration'), 'Harus melewati status configuration');
     assert.ok(stateSequence.includes('play'), 'Harus mencapai status play');
 
-    // 3. Kirim pembaruan posisi dengan bitflags MovementFlags
-    client.sendPosition({ x: -256.0, y: -20.0, z: -432.0, onGround: true, hasHorizontalCollision: false });
-    client.sendPositionAndRotation({ x: -256.0, y: -20.0, z: -432.0, yaw: 90.0, pitch: 0.0, onGround: true, hasHorizontalCollision: false });
+    // 3. Kirim pembaruan posisi kecil dengan bitflags MovementFlags.
+    // Jangan teleport dari spawn ke spawner: server akan memutus bot dengan "moved too quickly".
+    const step = { ...client.position, z: client.position.z + 0.1, onGround: true, hasHorizontalCollision: false };
+    client.sendPosition(step);
+    client.sendPositionAndRotation({ ...step, yaw: 90.0, pitch: 0.0 });
 
     // 4. Kueri SLP untuk memverifikasi kehadiran bot secara objektif di server
     console.log('🔍 [Uji SLP] Memverifikasi kehadiran bot di daftar pemain SLP...');

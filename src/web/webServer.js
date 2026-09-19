@@ -5,6 +5,20 @@
 
 require('dotenv').config();
 
+// mineflayer-pathfinder 2.4.x can emit one physics tick after a bot session
+// ends. If that tick observes bot.entity already cleared while a placement was
+// pending, its monitorMovement handler throws a narrow TypeError and otherwise
+// brings down this shared dashboard process. Treat only that known disconnect
+// race as recoverable; all other uncaught exceptions remain fatal.
+process.on('uncaughtException', error => {
+  const stack = String(error?.stack || '');
+  const isPathfinderDisconnectRace = error?.name === 'TypeError' &&
+    /Cannot read properties of undefined \(reading 'y'\)/.test(String(error?.message || '')) &&
+    stack.includes('mineflayer-pathfinder') && stack.includes('monitorMovement');
+  if (!isPathfinderDisconnectRace) throw error;
+  console.error(`[Runtime Guard] pathfinder disconnect race diabaikan: ${error.message}`);
+});
+
 // HARUS di baris paling atas, sebelum require APAPUN yang bisa menarik 'mineflayer' secara
 // transitif (mis. BenchmarkRunner -> botClient.js -> require('mineflayer')) - lib/loader.js
 // mineflayer men-destructure latestSupportedVersion dari './version' SEKALI saat modul itu
@@ -31,6 +45,16 @@ const { startGuardWorker } = require('../ai/runGuardWorker');
 const { startMobFarmWorker } = require('../ai/runMobFarmWorker');
 const { startRancherWorker } = require('../ai/runRancherWorker');
 const { startStorageWorker, CHEST_CATEGORY_LABELS } = require('../ai/runStorageWorker');
+const woodGathererModulePath = require.resolve('../ai/runWoodGathererWorker');
+const { storageRoomConstructionCoordinator } = require('../ai/storageRoomConstructionCoordinator');
+const { miningFleetCoordinator } = require('../ai/miningFleetCoordinator');
+const { GlobalSwarmOrchestrator } = require('../ai/globalSwarmOrchestrator');
+const { querySLP } = require('../network/liveProtocolClient');
+const { WorldMapData } = require('./worldMapData');
+const { StorageRepository } = require('../ai/storageRepository');
+const { getSharedChestAssignments } = require('../ai/storageMemory');
+const { storageMaterialsCoordinator } = require('../ai/storageMaterialsCoordinator');
+const { resolveWorldIdentity } = require('../ai/worldIdentity');
 
 const app = express();
 const server = http.createServer(app);
@@ -53,6 +77,30 @@ const benchmarkRunner = new BenchmarkRunner({
     broadcast({ type: 'BENCHMARK_STATUS', data: result });
   }
 });
+const globalSwarmOrchestrator = new GlobalSwarmOrchestrator();
+const storageRepository = new StorageRepository(globalSwarmOrchestrator.memory, { historyLimit: 50 });
+const resolveRequestWorld = (source = {}) => {
+  const host = source.host || process.env.STORAGE_ROOM_SERVER_HOST || process.env.MC_REMOTE_HOST || 'atoms-girl.tun.ply.gg';
+  const port = Number(source.port) || Number(process.env.STORAGE_ROOM_SERVER_PORT) || Number(process.env.MC_REMOTE_PORT) || 25565;
+  const dimension = source.dimension || process.env.MC_DIMENSION_ID || 'overworld';
+  return resolveWorldIdentity(globalSwarmOrchestrator.memory, {
+    host, port, dimension, world: source.world || process.env.MC_WORLD_ID
+  });
+};
+const defaultStorageContext = () => ({
+  world: resolveRequestWorld(),
+  dimension: process.env.MC_DIMENSION_ID || 'overworld'
+});
+storageRepository.upsertAssignments(defaultStorageContext(), getSharedChestAssignments(), 'storage-memory-seed');
+storageRoomConstructionCoordinator.setOrchestrator(globalSwarmOrchestrator);
+miningFleetCoordinator.setOrchestrator(globalSwarmOrchestrator);
+storageMaterialsCoordinator.setOrchestrator(globalSwarmOrchestrator);
+const worldMapData = new WorldMapData({
+  memory: globalSwarmOrchestrator.memory,
+  loadLandmarks,
+  bots: () => buildRealSwarmList(),
+  miningStatus: () => miningFleetCoordinator.getStatus()
+});
 
 // Broadcast ke semua klien WebSocket
 function broadcast(message) {
@@ -62,14 +110,29 @@ function broadcast(message) {
   });
 }
 
+// Pembangunan storage room adalah bagian dari armada yang sama, bukan runner manual terpisah.
+// Event builder dan landscaper dipantulkan ke dashboard melalui channel yang sama.
+storageRoomConstructionCoordinator.on('update', data => {
+  broadcast({ type: 'STORAGE_CONSTRUCTION_UPDATE', data });
+});
+miningFleetCoordinator.on('update', data => {
+  broadcast({ type: 'MINING_FLEET_UPDATE', data });
+});
+storageMaterialsCoordinator.on('update', data => {
+  broadcast({ type: 'STORAGE_MATERIALS_UPDATE', data });
+});
+
 // REST API Endpoints
 app.get('/api/status', (req, res) => {
   res.json({
     success: true,
     data: {
-      bot: botStatus,
+      bot: getPrimaryBotStatus(),
       isRunningBenchmark,
       connectedClients: wss.clients.size,
+      storageConstruction: storageRoomConstructionCoordinator.getStatus(),
+      miningFleet: miningFleetCoordinator.getStatus(),
+      storageMaterials: storageMaterialsCoordinator.getStatus(),
       uptime: process.uptime()
     }
   });
@@ -92,7 +155,7 @@ function buildRealSwarmList() {
   // rancherWorkers/storageWorkers/explorerWorkers dideklarasikan lebih bawah di file ini (const) -
   // aman diakses di sini karena fungsi ini cuma benar-benar DIPANGGIL belakangan (lewat
   // setInterval/endpoint), bukan saat baris ini pertama dieksekusi.
-  for (const workerMap of [farmerWorkers, guardWorkers, rancherWorkers, storageWorkers, explorerWorkers, mobFarmWorkers]) {
+  for (const workerMap of [farmerWorkers, guardWorkers, rancherWorkers, storageWorkers, explorerWorkers, mobFarmWorkers, woodGathererWorkers]) {
     for (const [name, handle] of workerMap) {
       const status = typeof handle.getStatus === 'function' ? handle.getStatus() : null;
       if (!status?.position) continue;
@@ -108,6 +171,23 @@ function buildRealSwarmList() {
   return bots;
 }
 
+// Ringkasan header harus mencerminkan worker yang benar-benar terhubung ke
+// Minecraft. botStatus tetap dipakai sebagai fallback untuk mode benchmark lama,
+// tetapi tidak boleh menutupi posisi worker live ketika armada sedang berjalan.
+function getPrimaryBotStatus() {
+  const primary = buildRealSwarmList()[0];
+  if (!primary) return botStatus;
+  return {
+    ...botStatus,
+    position: { x: primary.x, y: primary.y, z: primary.z },
+    health: primary.health ?? botStatus.health,
+    mode: primary.status || 'IDLE',
+    workerName: primary.name,
+    workerRole: primary.role,
+    velocity: botStatus.velocity || 0
+  };
+}
+
 setInterval(() => {
   broadcast({ type: 'SWARM_COORDINATES_UPDATE', data: buildRealSwarmList() });
 }, 2000);
@@ -117,8 +197,16 @@ app.get('/api/swarm/coordinates', (req, res) => {
   res.json({ success: true, data: { server: 'atoms-girl.tun.ply.gg:25565', activeBots: bots.length, bots } });
 });
 
+app.get('/api/world-map', (req, res) => {
+  try {
+    res.json({ success: true, data: worldMapData.snapshot(req.query || {}) });
+  } catch (error) {
+    res.status(400).json({ success: false, error: { code: 'WORLD_MAP_FAILED', message: error.message } });
+  }
+});
+
 app.get('/api/telemetry', (req, res) => {
-  res.json({ success: true, data: { botStatus, swarmBotsList: buildRealSwarmList(), lastUpdate: new Date().toISOString() } });
+  res.json({ success: true, data: { botStatus: getPrimaryBotStatus(), swarmBotsList: buildRealSwarmList(), lastUpdate: new Date().toISOString() } });
 });
 
 app.get('/api/benchmarks', (req, res) => {
@@ -262,7 +350,8 @@ app.post('/api/ai/chat', async (req, res) => {
   }
 
   try {
-    const response = await aiClient.chat(prompt, { position: botStatus.position, health: botStatus.health });
+    const liveStatus = getPrimaryBotStatus();
+    const response = await aiClient.chat(prompt, { position: liveStatus.position, health: liveStatus.health });
     broadcast({ type: 'AI_ACTION_EVENT', data: { task: 'AI_CHAT', step: response.message, status: 'COMPLETED', toolCalls: response.toolCalls } });
     res.json({ success: true, data: response });
   } catch (e) {
@@ -347,6 +436,7 @@ app.get('/api/farmer/status', (req, res) => {
       count: farmerWorkers.size,
       workers: Array.from(farmerWorkers.entries()).map(([name, handle]) => ({
         botName: name,
+        status: typeof handle.getStatus === 'function' ? handle.getStatus() : null,
         metrics: handle.getMetrics()
       }))
     }
@@ -418,16 +508,148 @@ app.get('/api/explorer/status', (req, res) => {
       count: explorerWorkers.size,
       workers: Array.from(explorerWorkers.entries()).map(([name, handle]) => ({
         botName: name,
+        status: typeof handle.getStatus === 'function' ? handle.getStatus() : null,
         metrics: handle.getMetrics()
       }))
     }
   });
 });
 
+const woodGathererWorkers = new Map();
+
+// Worker baru harus memakai source terbaru tanpa membuat worker yang sudah hidup
+// kehilangan modulnya di tengah siklus. Cache hanya di-refresh tepat sebelum
+// start, jadi sesi aktif tetap berjalan dengan instance yang sedang dipakai.
+function startLatestWoodGathererWorker(options) {
+  delete require.cache[woodGathererModulePath];
+  return require(woodGathererModulePath).startWoodGathererWorker(options);
+}
+
+app.post('/api/wood-gatherer/start', (req, res) => {
+  const name = String(req.body?.botName || 'WoodDiag1').slice(0, 16);
+  if (woodGathererWorkers.has(name)) return res.status(409).json({ success: false, error: { code: 'ALREADY_RUNNING', message: `Wood gatherer '${name}' sudah berjalan` } });
+  const handle = startLatestWoodGathererWorker({
+    host: req.body?.host || 'atoms-girl.tun.ply.gg', port: Number(req.body?.port) || 25565, botName: name,
+    workerIndex: Number.isInteger(Number(req.body?.fleetIndex)) ? Number(req.body.fleetIndex) : 0,
+    workerCount: Math.max(1, Number(req.body?.fleetSize) || 1),
+    log: message => {
+      console.log(`[WoodGatherer:${name}] ${message}`);
+      broadcast({ type: 'AI_ACTION_EVENT', data: { task: 'WOOD_GATHERER', step: `[${name}] ${message}`, status: 'RUNNING' } });
+    },
+    onDisconnect: reason => {
+      console.log(`[WoodGatherer:${name}] terputus: ${reason || 'tanpa alasan'}`);
+      woodGathererWorkers.delete(name);
+    }
+  });
+  woodGathererWorkers.set(name, handle);
+  res.json({ success: true, data: { message: `${name} dimulai` } });
+});
+
+app.post('/api/wood-gatherer/stop', (req, res) => {
+  const name = req.body?.botName;
+  if (name) {
+    const handle = woodGathererWorkers.get(name);
+    if (!handle) return res.status(409).json({ success: false, error: { code: 'NOT_RUNNING', message: `${name} tidak berjalan` } });
+    handle.stop(); woodGathererWorkers.delete(name);
+  } else {
+    for (const handle of woodGathererWorkers.values()) handle.stop();
+    woodGathererWorkers.clear();
+  }
+  res.json({ success: true, data: { message: 'Wood gatherer dihentikan' } });
+});
+
+app.get('/api/wood-gatherer/status', (req, res) => res.json({ success: true, data: {
+  running: woodGathererWorkers.size > 0,
+  workers: [...woodGathererWorkers.entries()].map(([botName, handle]) => ({ botName, status: handle.getStatus(), metrics: handle.getMetrics() }))
+} }));
+
 // Semua landmark yang sudah ditemukan sejauh ini - dipakai dashboard untuk peta landmark, dan bisa
 // dipakai bot lain (mis. FarmerWorker) untuk menghindari zona yang ditandai secara otomatis.
 app.get('/api/landmarks', (req, res) => {
   res.json({ success: true, data: { landmarks: loadLandmarks() } });
+});
+
+app.get('/api/world-memory', (req, res) => {
+  let memory;
+  try {
+    const { SharedWorldMemory } = require('../ai/sharedWorldMemory');
+    memory = new SharedWorldMemory();
+    res.json({ success: true, data: memory.summary() });
+  } catch {
+    res.status(503).json({ success: false, error: 'Memori dunia belum tersedia; periksa runtime Node dan penyimpanan.' });
+  } finally { memory?.close(); }
+});
+
+app.get('/api/world-analysis', (req, res) => {
+  let memory;
+  try {
+    const { SharedWorldMemory } = require('../ai/sharedWorldMemory');
+    const { TYPES } = require('../ai/semanticSpatialAnalysis');
+    memory = new SharedWorldMemory();
+    const { StructureRegistry } = require('../ai/structureRegistry');
+    res.json({ success: true, data: { supportedTypes: TYPES, observations: memory.analyses(), structures: new StructureRegistry(memory).list() } });
+  } catch { res.status(503).json({ success: false, error: 'Analisis dunia belum tersedia.' }); }
+  finally { memory?.close(); }
+});
+
+app.patch('/api/structures/:id/label', (req,res)=>{
+  let memory;
+  try {
+    const {SharedWorldMemory}=require('../ai/sharedWorldMemory');
+    const {StructureRegistry}=require('../ai/structureRegistry');
+    if(typeof req.body?.label!=='string'||req.body.label.length>120)return res.status(400).json({success:false,error:'Label maksimal 120 karakter.'});
+    memory=new SharedWorldMemory();
+    const updated=new StructureRegistry(memory).label(req.params.id,req.body.label);
+    res.status(updated?200:404).json({success:updated});
+  } catch {res.status(503).json({success:false,error:'Penyimpanan label belum tersedia.'});}
+  finally {memory?.close();}
+});
+
+app.get('/api/reservations', (req, res) => {
+  let memory;
+  try {
+    const { SharedWorldMemory } = require('../ai/sharedWorldMemory');
+    const { SwarmReservations } = require('../ai/swarmReservations');
+    memory = new SharedWorldMemory();
+    new SwarmReservations(memory);
+    const rows = memory.db.prepare(`SELECT world,dimension,owner,token,COUNT(*) AS cells,MAX(expiresAt) AS expiresAt
+      FROM reservations WHERE expiresAt>? GROUP BY world,dimension,owner,token LIMIT 200`).all(Date.now());
+    res.json({ success: true, data: rows });
+  } catch { res.status(503).json({ success: false, error: 'Reservasi belum tersedia.' }); }
+  finally { memory?.close(); }
+});
+
+app.get('/api/swarm/architecture/status', (req, res) => {
+  const dimension = String(req.query.dimension || 'overworld');
+  const world = resolveRequestWorld({ world: req.query.world, host: req.query.host, port: req.query.port, dimension });
+  res.json({ success: true, data: globalSwarmOrchestrator.getStatus({ world, dimension }) });
+});
+
+app.post('/api/swarm/goals', (req, res) => {
+  try {
+    const type = String(req.body?.type || '');
+    if (!type) return res.status(400).json({ success: false, error: 'Goal type wajib diisi.' });
+    const dimension = String(req.body?.dimension || 'overworld');
+    const world = resolveRequestWorld({ ...req.body, dimension });
+    const goal = globalSwarmOrchestrator.submitGoal({
+      world,
+      dimension,
+      type,
+      payload: req.body?.payload || {},
+      priority: Number(req.body?.priority) || 0
+    });
+    broadcast({ type: 'SWARM_GOAL_UPDATE', data: goal });
+    return res.status(201).json({ success: true, data: goal });
+  } catch (error) {
+    return res.status(400).json({ success: false, error: error.message });
+  }
+});
+
+app.get('/api/swarm/goals/:id', (req, res) => {
+  const goal = globalSwarmOrchestrator.getGoal(req.params.id);
+  return res.status(goal ? 200 : 404).json(goal
+    ? { success: true, data: goal }
+    : { success: false, error: 'Goal tidak ditemukan.' });
 });
 
 // Pekerja penjaga otonom (lihat runGuardWorker.js) - jaga base dari mob hostile, perbaiki gear
@@ -490,6 +712,7 @@ app.get('/api/guard/status', (req, res) => {
       count: guardWorkers.size,
       workers: Array.from(guardWorkers.entries()).map(([name, handle]) => ({
         botName: name,
+        status: typeof handle.getStatus === 'function' ? handle.getStatus() : null,
         metrics: handle.getMetrics()
       }))
     }
@@ -559,6 +782,7 @@ app.get('/api/mobfarm/status', (req, res) => {
       count: mobFarmWorkers.size,
       workers: Array.from(mobFarmWorkers.entries()).map(([name, handle]) => ({
         botName: name,
+        status: typeof handle.getStatus === 'function' ? handle.getStatus() : null,
         metrics: handle.getMetrics()
       }))
     }
@@ -625,6 +849,7 @@ app.get('/api/rancher/status', (req, res) => {
       count: rancherWorkers.size,
       workers: Array.from(rancherWorkers.entries()).map(([name, handle]) => ({
         botName: name,
+        status: typeof handle.getStatus === 'function' ? handle.getStatus() : null,
         metrics: handle.getMetrics()
       }))
     }
@@ -635,47 +860,37 @@ app.get('/api/rancher/status', (req, res) => {
 // gudang, rapikan dengan memeriksa tiap chest di dalamnya. Sama pola armada seperti worker lain.
 const storageWorkers = new Map(); // botName -> handle
 
-// Riwayat "chest yang ketahuan belum sesuai aturan kategori" - permintaan nyata pemilik: chest di
-// dalam storage room yang belum sesuai aturan harus tercatat, terlihat di dashboard tanpa perlu
-// scan manual. Disimpan di memori (bukan disk) - cukup untuk sesi berjalan, dibatasi 50 entri
-// terbaru supaya tidak membengkak tanpa batas.
-const STORAGE_COMPLIANCE_LOG_LIMIT = 50;
-const storageComplianceLog = [];
-// Peta isi TIAP chest gudang (posKey "x,y,z" -> snapshot terakhir) - permintaan nyata pemilik:
-// "di ui web tampilkan isi semua peti nya...dan bagaimana bot akan memindahkannya di tandai
-// dengan panah panah" - "pemilik 100% yakin worker tidak melihat isi peti dengan benar", jadi
-// panel ini menampilkan APA ADANYA isi yang engine baca (via event 'chestSnapshot'), termasuk
-// rencana pemindahan (misplaced -> targetPosition) sebagai bukti visual langsung, bukan cuma log
-// teks yang harus dibaca satu-satu. Diperbarui tiap kali chest diperiksa (bersih ATAU salah
-// tempat) - disimpan di memori (bukan disk), cukup untuk sesi berjalan.
-const storageChestMap = new Map();
-
 app.post('/api/storage/start', (req, res) => {
   const { host, port, botName, scanRadius } = req.body || {};
   const name = botName || 'StorageWorker';
+  const workerHost = host || process.env.MC_REMOTE_HOST || 'atoms-girl.tun.ply.gg';
+  const workerPort = port || Number(process.env.MC_REMOTE_PORT) || 25565;
+  const storageContext = {
+    world: resolveRequestWorld({ host: workerHost, port: workerPort }),
+    dimension: process.env.MC_DIMENSION_ID || 'overworld'
+  };
   if (storageWorkers.has(name)) {
     return res.status(409).json({ success: false, error: { code: 'ALREADY_RUNNING', message: `Kuartermaster '${name}' sudah berjalan` } });
   }
   broadcast({ type: 'AI_ACTION_EVENT', data: { task: 'STORAGE_WORKER', step: `Memulai kuartermaster '${name}'...`, status: 'RUNNING' } });
 
   const handle = startStorageWorker({
-    host: host || 'atoms-girl.tun.ply.gg',
-    port: port || 25565,
+    host: workerHost,
+    port: workerPort,
     botName: name,
     scanRadius: scanRadius || 48,
+    storageRepository,
+    storageContext,
     log: (msg) => broadcast({ type: 'AI_ACTION_EVENT', data: { task: 'STORAGE_WORKER', step: `[${name}] ${msg}`, status: 'RUNNING' } }),
     onDisconnect: () => {
       storageWorkers.delete(name);
       broadcast({ type: 'AI_ACTION_EVENT', data: { task: 'STORAGE_WORKER', step: `[${name}] Koneksi terputus - dihapus dari daftar armada.`, status: 'STOPPED' } });
     },
     onMisplaced: (entry) => {
-      storageComplianceLog.unshift(entry);
-      if (storageComplianceLog.length > STORAGE_COMPLIANCE_LOG_LIMIT) storageComplianceLog.length = STORAGE_COMPLIANCE_LOG_LIMIT;
-      broadcast({ type: 'STORAGE_COMPLIANCE_UPDATE', data: { events: storageComplianceLog } });
+      broadcast({ type: 'STORAGE_COMPLIANCE_UPDATE', data: { events: storageRepository.listCompliance(storageContext) } });
     },
     onChestSnapshot: (snapshot) => {
-      storageChestMap.set(`${snapshot.position.x},${snapshot.position.y},${snapshot.position.z}`, snapshot);
-      broadcast({ type: 'STORAGE_CHEST_MAP_UPDATE', data: { chests: Array.from(storageChestMap.values()) } });
+      broadcast({ type: 'STORAGE_CHEST_MAP_UPDATE', data: { chests: storageRepository.listChestSnapshots(storageContext) } });
       // Log EKSPLISIT (bukan cuma data WS diam-diam) - permintaan nyata pemilik: "u should see
       // under 5 second memory update logs" - supaya pembaruan peta gudang di memori/dashboard
       // punya bukti waktu yang terlihat langsung di feed yang sama, sama seperti probe verifikasi.
@@ -711,20 +926,28 @@ app.get('/api/storage/categories', (req, res) => {
 });
 
 app.get('/api/storage/compliance', (req, res) => {
-  res.json({ success: true, data: { events: storageComplianceLog } });
+  const context = {
+    world: String(req.query.world || defaultStorageContext().world),
+    dimension: String(req.query.dimension || defaultStorageContext().dimension)
+  };
+  res.json({ success: true, data: { events: storageRepository.listCompliance(context) } });
 });
 
 app.get('/api/storage/chests', (req, res) => {
-  res.json({ success: true, data: { chests: Array.from(storageChestMap.values()) } });
+  const context = {
+    world: String(req.query.world || defaultStorageContext().world),
+    dimension: String(req.query.dimension || defaultStorageContext().dimension)
+  };
+  res.json({ success: true, data: { chests: storageRepository.listChestSnapshots(context) } });
 });
 
-// Memori sortir MENTAH langsung dari engine yang sedang berjalan (bukan turunan/olahan) -
-// permintaan nyata pemilik: "harusnya yang tampil di web itu sama persis dengan memory worker
-// nya" - ambil dari worker PERTAMA yang berjalan (biasanya cuma satu kuartermaster aktif).
+// Memori sortir persisten tetap tersedia walaupun worker sedang mati atau dashboard baru restart.
 app.get('/api/storage/assignments', (req, res) => {
-  const handle = storageWorkers.values().next().value;
-  const assignments = handle ? handle.getAssignments() : null;
-  res.json({ success: true, data: { assignments: assignments || {} } });
+  const context = {
+    world: String(req.query.world || defaultStorageContext().world),
+    dimension: String(req.query.dimension || defaultStorageContext().dimension)
+  };
+  res.json({ success: true, data: { assignments: storageRepository.getAssignments(context) } });
 });
 
 app.post('/api/storage/stop', (req, res) => {
@@ -759,16 +982,146 @@ app.get('/api/storage/status', (req, res) => {
       count: storageWorkers.size,
       workers: Array.from(storageWorkers.entries()).map(([name, handle]) => ({
         botName: name,
+        status: typeof handle.getStatus === 'function' ? handle.getStatus() : null,
         metrics: handle.getMetrics()
       }))
     }
   });
 });
 
+app.post('/api/mining/start', async (req, res) => {
+  try {
+    const options = { ...(req.body || {}) };
+    const host = options.host || process.env.STORAGE_ROOM_SERVER_HOST || 'atoms-girl.tun.ply.gg';
+    const port = Number(options.port) || Number(process.env.STORAGE_ROOM_SERVER_PORT) || 25565;
+    options.world = resolveRequestWorld({ ...options, host, port });
+    if (options.preflight !== false) {
+      const serverStatus = await querySLP({ host, port, timeoutMs: 8000, protocolVersion: 775 });
+      if (Number(serverStatus.version?.protocol) !== 775) {
+        return res.status(502).json({ success: false, error: { code: 'MINING_SERVER_PROTOCOL_MISMATCH', message: `Protokol server ${serverStatus.version?.protocol ?? 'tidak diketahui'}, membutuhkan 775.` } });
+      }
+    }
+    const result = miningFleetCoordinator.start({ ...options, host, port });
+    if (!result.started) return res.status(409).json({ success: false, error: { code: result.reason, message: 'Armada tambang sudah berjalan', status: result.status } });
+    broadcast({ type: 'AI_ACTION_EVENT', data: { task: 'MINING_FLEET', step: `${result.status.config.count} worker tambang dimulai pada area awal empat sudut yang dipilih.`, status: 'RUNNING' } });
+    return res.json({ success: true, data: result });
+  } catch (error) {
+    return res.status(400).json({ success: false, error: { code: 'MINING_START_FAILED', message: error.message } });
+  }
+});
+
+app.post('/api/mining/stop', (req, res) => {
+  const result = miningFleetCoordinator.stop();
+  if (!result.stopped) return res.status(409).json({ success: false, error: { code: result.reason, message: 'Armada tambang tidak sedang berjalan', status: result.status } });
+  broadcast({ type: 'AI_ACTION_EVENT', data: { task: 'MINING_FLEET', step: 'Armada tambang dihentikan; checkpoint setiap worker dipertahankan.', status: 'STOPPED' } });
+  return res.json({ success: true, data: result });
+});
+
+app.get('/api/mining/status', (req, res) => {
+  res.json({ success: true, data: miningFleetCoordinator.getStatus() });
+});
+
+// Lifecycle pembangunan memiliki builder, landscaper, dan pemasang peti yang menunggu lantai.
+// Miner serta pemroses material tetap dikelola fleet/goal mandiri agar kegagalannya tidak
+// menahan konstruksi.
+app.post('/api/storage/construction/start', async (req, res) => {
+  try {
+    const options = { ...(req.body || {}) };
+    options.host = options.host || process.env.STORAGE_ROOM_SERVER_HOST || 'atoms-girl.tun.ply.gg';
+    options.port = Number(options.port) || Number(process.env.STORAGE_ROOM_SERVER_PORT) || 25565;
+    options.world = resolveRequestWorld(options);
+    // Beri server waktu menerima login landscaper sebelum builder ikut masuk.
+    if (options.roleStartStaggerMs === undefined) options.roleStartStaggerMs = 6000;
+    // Socket TCP yang terbuka belum membuktikan backend Minecraft hidup. SLP harus
+    // berhasil lebih dulu agar satu klik dashboard tidak men-spawn seluruh armada ke
+    // tunnel yang hanya menerima koneksi lalu reset/timeout saat handshake.
+    if (options.preflight !== false) {
+      const host = options.host || process.env.STORAGE_ROOM_SERVER_HOST || 'atoms-girl.tun.ply.gg';
+      const port = Number(options.port) || Number(process.env.STORAGE_ROOM_SERVER_PORT) || 25565;
+      const timeoutMs = Math.min(15000, Math.max(2000, Number(options.preflightTimeoutMs) || 8000));
+      try {
+        const serverStatus = await querySLP({ host, port, timeoutMs, protocolVersion: 775 });
+        if (Number(serverStatus.version?.protocol) !== 775) {
+          return res.status(502).json({
+            success: false,
+            error: {
+              code: 'CONSTRUCTION_SERVER_PROTOCOL_MISMATCH',
+              message: `Server merespons, tetapi protokol Minecraft bukan 775 (diterima ${serverStatus.version?.protocol ?? 'tidak diketahui'}).`
+            }
+          });
+        }
+        options.serverPreflight = {
+          protocol: serverStatus.version.protocol,
+          latencyMs: serverStatus.latencyMs,
+          playersOnline: serverStatus.players?.online ?? null,
+          playersMax: serverStatus.players?.max ?? null
+        };
+      } catch (error) {
+        const queued = storageRoomConstructionCoordinator.startWhenReady(options, {
+          intervalMs: Number(options.preflightRetryMs) || 30000,
+          initialDelayMs: Number(options.preflightRetryDelayMs) || 30000,
+          probe: ({ host: probeHost, port: probePort }) => querySLP({ host: probeHost, port: probePort, timeoutMs, protocolVersion: 775 })
+        });
+        if (!queued.started) return res.status(409).json({ success: false, error: { code: queued.reason, message: 'Orkestrator pembangunan sudah berjalan', status: queued.status } });
+        return res.status(202).json({ success: true, data: queued, message: `Server belum siap (${error.message}); pembangunan menunggu SLP sehat.` });
+      }
+    }
+    const result = storageRoomConstructionCoordinator.start(options);
+    if (!result.started) return res.status(409).json({ success: false, error: { code: result.reason, message: 'Orkestrator pembangunan sudah berjalan', status: result.status } });
+    broadcast({ type: 'AI_ACTION_EVENT', data: { task: 'STORAGE_CONSTRUCTION', step: 'Pembangunan storage room dimulai: landscaper dan builder aktif; pemasang peti menunggu lantai terverifikasi.', status: 'RUNNING' } });
+    return res.json({ success: true, data: result });
+  } catch (error) {
+    return res.status(400).json({ success: false, error: { code: 'CONSTRUCTION_START_FAILED', message: error.message } });
+  }
+});
+
+app.post('/api/storage/construction/stop', (req, res) => {
+  const result = storageRoomConstructionCoordinator.stop();
+  if (!result.stopped) return res.status(409).json({ success: false, error: { code: result.reason, message: 'Orkestrator pembangunan tidak sedang berjalan', status: result.status } });
+  broadcast({ type: 'AI_ACTION_EVENT', data: { task: 'STORAGE_CONSTRUCTION', step: 'Orkestrator storage room dihentikan; checkpoint dipertahankan.', status: 'STOPPED' } });
+  return res.json({ success: true, data: result });
+});
+
+app.post('/api/storage/materials/start', (req, res) => {
+  try {
+    const options = { ...(req.body || {}) };
+    options.host = options.host || process.env.STORAGE_ROOM_SERVER_HOST || 'atoms-girl.tun.ply.gg';
+    options.port = Number(options.port) || Number(process.env.STORAGE_ROOM_SERVER_PORT) || 25565;
+    options.world = resolveRequestWorld(options);
+    const result = storageMaterialsCoordinator.start(options);
+    if (!result.started) return res.status(409).json({ success: false, error: { code: result.reason, message: 'Worker materials sudah berjalan', status: result.status } });
+    broadcast({ type: 'STORAGE_MATERIALS_UPDATE', data: result.status });
+    return res.json({ success: true, data: result });
+  } catch (error) {
+    return res.status(400).json({ success: false, error: { code: 'MATERIALS_START_FAILED', message: error.message } });
+  }
+});
+
+app.post('/api/storage/materials/stop', (req, res) => {
+  const result = storageMaterialsCoordinator.stop();
+  if (!result.stopped) return res.status(409).json({ success: false, error: { code: result.reason, message: 'Worker materials tidak sedang berjalan', status: result.status } });
+  broadcast({ type: 'STORAGE_MATERIALS_UPDATE', data: result.status });
+  return res.json({ success: true, data: result });
+});
+
+app.get('/api/storage/materials/status', (req, res) => {
+  res.json({ success: true, data: storageMaterialsCoordinator.getStatus() });
+});
+
+app.get('/api/storage/construction/status', (req, res) => {
+  res.json({ success: true, data: storageRoomConstructionCoordinator.getStatus() });
+});
+
 // WebSocket handler
 wss.on('connection', (ws) => {
   console.log('[WebSocket] Klien baru terhubung');
-  ws.send(JSON.stringify({ type: 'CONNECTED', data: { botStatus, benchmarks: benchmarkResults } }));
+  ws.send(JSON.stringify({ type: 'CONNECTED', data: {
+    botStatus: getPrimaryBotStatus(),
+    benchmarks: benchmarkResults,
+    storageConstruction: storageRoomConstructionCoordinator.getStatus(),
+    miningFleet: miningFleetCoordinator.getStatus(),
+    storageMaterials: storageMaterialsCoordinator.getStatus()
+  } }));
 
   ws.on('message', (raw) => {
     try {
@@ -776,7 +1129,8 @@ wss.on('connection', (ws) => {
       if (msg.action === 'START_BENCHMARK') {
         // Ditangani via REST API
       } else if (msg.action === 'SUBMIT_AI_COMMAND') {
-        aiClient.chat(msg.prompt || '', { position: botStatus.position }).then(resp => {
+        const liveStatus = getPrimaryBotStatus();
+        aiClient.chat(msg.prompt || '', { position: liveStatus.position, health: liveStatus.health }).then(resp => {
           ws.send(JSON.stringify({ type: 'AI_ACTION_EVENT', data: resp }));
         });
       }
@@ -788,7 +1142,7 @@ wss.on('connection', (ws) => {
 
 // Simulasi tick telemetri untuk demo
 setInterval(() => {
-  broadcast({ type: 'TICK_UPDATE', data: { ...botStatus, tick: Date.now(), timestamp: new Date().toISOString() } });
+  broadcast({ type: 'TICK_UPDATE', data: { ...getPrimaryBotStatus(), tick: Date.now(), timestamp: new Date().toISOString() } });
 }, 1000);
 
 const PORT = process.env.PORT || 8080;
@@ -799,4 +1153,27 @@ server.listen(PORT, () => {
   console.log(`   Status       : Aktif & Siap\n`);
 });
 
-module.exports = { app, server, wss, broadcast };
+// Worker Mineflayer adalah child/handle di luar lifecycle HTTP. Saat dashboard
+// direstart, hentikan semua role lebih dulu agar tidak ada bot lama yang tetap
+// membangun bersamaan dengan proses baru.
+let shuttingDown = false;
+const shutdown = signal => {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[Shutdown] ${signal}: menghentikan worker aktif sebelum server ditutup...`);
+  for (const workerMap of [farmerWorkers, guardWorkers, rancherWorkers, storageWorkers, explorerWorkers, mobFarmWorkers, woodGathererWorkers]) {
+    for (const handle of workerMap.values()) {
+      try { handle.stop?.(); } catch (error) { console.error(`[Shutdown] worker: ${error.message}`); }
+    }
+    workerMap.clear();
+  }
+  try { storageRoomConstructionCoordinator.stop(); } catch (error) { console.error(`[Shutdown] construction: ${error.message}`); }
+  try { miningFleetCoordinator.stop(); } catch (error) { console.error(`[Shutdown] mining: ${error.message}`); }
+  try { storageMaterialsCoordinator.stop(); } catch (error) { console.error(`[Shutdown] materials: ${error.message}`); }
+  wss.close(() => server.close(() => process.exit(0)));
+  setTimeout(() => process.exit(0), 5000).unref();
+};
+process.once('SIGTERM', () => shutdown('SIGTERM'));
+process.once('SIGINT', () => shutdown('SIGINT'));
+
+module.exports = { app, server, wss, broadcast, globalSwarmOrchestrator };

@@ -23,7 +23,8 @@ const mineflayer = require('mineflayer');
 const { pathfinder, Movements } = require('mineflayer-pathfinder');
 const { MineflayerRoleAdapter } = require('./mineflayerRoleAdapter');
 const { FarmerEngine, CROP_RULES } = require('./farmerEngine');
-const { walkToBase } = require('./walkToBase');
+const { walkToBase, SAFE_TRAVEL_TERRAIN_NAMES } = require('./walkToBase');
+const { createEngineTaskHandlers, createCooperativeAgent, runCooperativeCycle } = require('./cooperativeAgent');
 // Memori sortir gudang DIBAGIKAN dari StorageWorker - permintaan nyata pemilik: "share memory
 // tentang peti ke semua bot agar dapat mencari barang barang dan menaruh barang dengan tepat".
 // Dulu FarmerWorker terpaksa menebak lewat pemindaian chest satu-satu (findMatchingChest) setiap
@@ -55,6 +56,8 @@ const DEFAULT_FARM_AREA = { min: { x: -211, y: 55, z: -405 }, max: { x: -183, y:
 function buildMovements(bot) {
   const movements = new Movements(bot);
   movements.canDig = false;
+  movements.liquidCost = 100;
+  movements.exclusionAreasStep.push(block => block.name === 'water' || block.name === 'lava' ? 100 : 0);
   movements.canOpenDoors = true;
   // Parkour DIAKTIFKAN KEMBALI - permintaan nyata pemilik ("allow aja"). Sebelumnya dimatikan
   // karena diduga penyebab fall-damage berlebih, tapi FarmerEngine sekarang sudah punya
@@ -109,6 +112,7 @@ function startFarmerWorker({ host, port, botName, scanRadius = 32, baseGoal = DE
   });
 
   let engine = null;
+  let cooperativeRuntime = null;
   let stopped = false;
   let timer = null;
   let lastAction = 'CONNECTING';
@@ -119,7 +123,7 @@ function startFarmerWorker({ host, port, botName, scanRadius = 32, baseGoal = DE
     bot.pathfinder.thinkTimeout = 20000;
     log(`Spawn di (${bot.entity.position.x.toFixed(1)}, ${bot.entity.position.y.toFixed(1)}, ${bot.entity.position.z.toFixed(1)}) - menunggu chunk sekitar ter-load...`);
 
-    const walkResult = await walkToBase({ bot, goal: baseGoal, range: 4, settleMs: 5000, log });
+    const walkResult = await walkToBase({ bot, goal: baseGoal, range: 4, settleMs: 5000, maxGotoMs: 12000, thinkTimeoutMs: 12000, stageDistance: 32, allowTerrainWork: true, allow1by1Towers: false, maxDropDown: 3, terrainBreakAllowlist: SAFE_TRAVEL_TERRAIN_NAMES, log });
     if (!walkResult.success) {
       log(`PERINGATAN: gagal berjalan ke base (${walkResult.reason}) - tetap mulai bekerja di posisi sekarang, mungkin tidak menemukan apa-apa.`);
     }
@@ -129,7 +133,9 @@ function startFarmerWorker({ host, port, botName, scanRadius = 32, baseGoal = DE
     // blok padahal target (kebun/chest) sudah terjangkau jalan kaki biasa.
     bot.pathfinder.setMovements(buildMovements(bot));
 
-    const adapter = new MineflayerRoleAdapter(bot);
+    // Farmer memakai planner lokal dan tidak perlu menjadi penulis periodik ke
+    // SQLite spatial bersama; ini menjaga UI tetap responsif saat armada aktif.
+    const adapter = new MineflayerRoleAdapter(bot, { sharedWorld: false, capabilities: ['farm', 'haul', 'repair_farm'] });
 
     // Klik bed terdekat SEBELUM mulai kerja apapun - supaya kalau proses ini direstart/logout,
     // bot lanjut dari base pada login berikutnya, bukan jalan kaki 300+ blok ulang dari world spawn
@@ -159,6 +165,39 @@ function startFarmerWorker({ host, port, botName, scanRadius = 32, baseGoal = DE
       composterPositions: COMPOSTER_POSITIONS.map(parseChestPositionKey),
       harvestBatchSize: Number(process.env.FARM_HARVEST_BATCH) || 16,
       plantBatchSize: Number(process.env.FARM_PLANT_BATCH) || 16
+    });
+    cooperativeRuntime = createCooperativeAgent(adapter, {
+      capabilities: ['farm', 'haul', 'repair_farm'],
+      metadata: { role: 'farmer' },
+      handlers: createEngineTaskHandlers(engine, {
+        SURVEY_FARM: { execute: async () => ({ action: 'survey', mature: engine.findMatureCrops().length,
+          plantingSpots: engine.findPlantingSpots().length, repairs: engine.findRepairCandidates().length }) },
+        REPAIR_FARM: { execute: async () => await engine.attemptRepair() || { action: 'idle' }, actions: ['repair'], mutatesWorld: true, idleCompletes: true },
+        HARVEST: { execute: async () => {
+          const mature = engine.findMatureCrops().slice(0, engine.options.harvestBatchSize);
+          for (const crop of mature) {
+            await adapter.dig(crop);
+            engine.metrics.harvested += 1;
+            engine.emit('harvested', { crop: crop.name, position: crop.position });
+          }
+          return mature.length ? { action: 'harvest', count: mature.length } : { action: 'idle' };
+        }, actions: ['harvest'], mutatesWorld: true, idleCompletes: true },
+        PLANT: { execute: async () => {
+          const spots = engine.findPlantingSpots().slice(0, engine.options.plantBatchSize);
+          let count = 0;
+          for (const row of engine.groupSpotsByRow(spots)) {
+            const seed = engine.chooseSeedFor(row[0]);
+            if (!seed) continue;
+            for (const spot of row) if (await adapter.placeSeed(spot, seed)) {
+              count += 1;
+              engine.metrics.planted += 1;
+              engine.emit('planted', { seed, position: spot.position });
+            }
+          }
+          return count ? { action: 'plant', count } : { action: 'idle' };
+        }, actions: ['plant'], mutatesWorld: true, idleCompletes: true },
+        DEPOSIT_CROPS: { execute: async () => await engine.runAutoMatchDeposit() || { action: 'idle' }, actions: ['deposit'], idleCompletes: true }
+      })
     });
 
     engine.on('harvested', ({ crop, position }) => {
@@ -197,7 +236,7 @@ function startFarmerWorker({ host, port, botName, scanRadius = 32, baseGoal = DE
     async function tick() {
       if (stopped) return;
       try {
-        const farmResult = await engine.tick();
+        const farmResult = await runCooperativeCycle(cooperativeRuntime, () => engine.tick());
         if (farmResult.action === 'deposit') log(`Simpan ${farmResult.count} item ke gudang.`);
         if (farmResult.action === 'compost') log(`Kompos 1x ${farmResult.item} (kelebihan) ke composter.`);
         if (farmResult.action === 'retreat') log(`PERINGATAN: health kritis - mundur ke base.`);
@@ -222,6 +261,7 @@ function startFarmerWorker({ host, port, botName, scanRadius = 32, baseGoal = DE
     log(`Koneksi terputus tak terduga (${reason || 'tidak diketahui'}) - worker berhenti.`);
     stopped = true;
     if (timer) clearTimeout(timer);
+    cooperativeRuntime?.stop();
     onDisconnect();
   });
 
@@ -229,6 +269,7 @@ function startFarmerWorker({ host, port, botName, scanRadius = 32, baseGoal = DE
     stop() {
       stopped = true;
       if (timer) clearTimeout(timer);
+      cooperativeRuntime?.stop();
       bot.quit();
     },
     getMetrics() {

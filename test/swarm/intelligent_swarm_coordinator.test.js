@@ -198,6 +198,17 @@ describe('IntelligentSwarmCoordinator movement actuator', () => {
     assert.equal(client.sentPositions[0].hasHorizontalCollision, false);
   });
 
+  it('tidak boleh menembus blok saat langkah vertikal naik', () => {
+    const engine = new (require('../../src/ai/richVoxelSpatialEngine').RichVoxelSpatialEngine)((x, y) => {
+      if (y === 64) return 'stone';
+      if (y < 63) return 'stone';
+      if (y === 63) return 'grass_block';
+      return 'air';
+    });
+    const result = engine.predictSweptCollision(0, 63, 0, 0, 64, 0);
+    assert.equal(result.canMove, false);
+  });
+
   it('bot.stuckStreak harus naik saat macet berturut-turut dan berhenti eskalasi Y (STUCK_HOLD) - mencegah bug bot "terbang" tanpa batas', () => {
     const client = new DummyClient();
     const coordinator = new IntelligentSwarmCoordinator({
@@ -298,6 +309,44 @@ describe('IntelligentSwarmCoordinator hostile threat retreat (agregasi multi-anc
     assert.match(bot.currentObjective, /creeper/);
     // target retreat harus menjauhi creeper (creeper di +X, bot harus diarahkan ke -X)
     assert.ok(bot.targetFormationPos.x < bot.position.x, 'target retreat harus menjauh dari arah creeper');
+  });
+
+  it('Creeper tetap diprioritaskan saat hostile lain lebih dekat tetapi berada di luar radiusnya', () => {
+    const coordinator = new IntelligentSwarmCoordinator();
+    const bot = makeBotWithHostiles([
+      { entityId: 1, name: 'zombie', x: 4, y: 64, z: 0, lastSeenAt: Date.now() },
+      { entityId: 2, name: 'creeper', x: 5, y: 64, z: 0, lastSeenAt: Date.now() }
+    ]);
+    coordinator.bots.set('Scout_Test', bot);
+    coordinator._evaluateSwarmFormations();
+    assert.match(bot.currentObjective, /TACTICAL_RETREAT_THREAT \(creeper/);
+  });
+
+  it('HP rendah mengarahkan bot ke pusat leader untuk recovery', () => {
+    const coordinator = new IntelligentSwarmCoordinator();
+    const bot = makeBotWithHostiles([], { x: 10, y: 64, z: 10 });
+    bot.health = 5;
+    coordinator.bots.set('Scout_Test', bot);
+    coordinator._evaluateSwarmFormations();
+    assert.equal(bot.currentObjective, 'TACTICAL_RETREAT_LOW_HEALTH');
+    assert.deepEqual(bot.targetFormationPos, { x: -33.5, y: 64, z: 2.5 });
+  });
+
+  it('setLeaderPosition memperbarui pusat formasi dan timestamp sinkronisasi', () => {
+    const coordinator = new IntelligentSwarmCoordinator();
+    coordinator.setLeaderPosition({ x: 12, y: 70, z: -4, yaw: 90 });
+    assert.deepEqual(coordinator.sharedMemory.playerLeaderPos, { x: 12, y: 70, z: -4, yaw: 90 });
+    assert.ok(coordinator.sharedMemory.lastLeaderUpdateAt <= Date.now());
+  });
+
+  it('menghentikan gerak formasi jika posisi leader sudah stale', () => {
+    const coordinator = new IntelligentSwarmCoordinator({ leaderTimeoutMs: 1 });
+    const bot = makeBotWithHostiles([]);
+    coordinator.bots.set('Scout_Test', bot);
+    coordinator.sharedMemory.lastLeaderUpdateAt = Date.now() - 100;
+    coordinator._evaluateSwarmFormations();
+    assert.equal(bot.currentObjective, 'HOLD_LEADER_LOST');
+    assert.deepEqual(bot.targetFormationPos, bot.position);
   });
 
   it('mob hostile biasa (bukan creeper) baru memicu retreat kalau lebih dekat dari radius bahaya generik (default 3 blok)', () => {

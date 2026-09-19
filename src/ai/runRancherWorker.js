@@ -17,7 +17,8 @@ const mineflayer = require('mineflayer');
 const { pathfinder, Movements } = require('mineflayer-pathfinder');
 const { MineflayerRoleAdapter } = require('./mineflayerRoleAdapter');
 const { AnimalHusbandryEngine } = require('./animalHusbandryEngine');
-const { walkToBase } = require('./walkToBase');
+const { walkToBase, SAFE_TRAVEL_TERRAIN_NAMES } = require('./walkToBase');
+const { createEngineTaskHandlers, createCooperativeAgent, runCooperativeCycle } = require('./cooperativeAgent');
 
 const TICK_INTERVAL_MS = Number(process.env.RANCHER_TICK_MS) || 2000;
 const DEFAULT_BASE_GOAL = { x: -185, y: 71, z: -352 };
@@ -48,6 +49,7 @@ function startRancherWorker({ host, port, botName, scanRadius = 24, baseGoal = D
   });
 
   let animalEngine = null;
+  let cooperativeRuntime = null;
   let stopped = false;
   let timer = null;
   let lastAction = 'CONNECTING';
@@ -58,7 +60,7 @@ function startRancherWorker({ host, port, botName, scanRadius = 24, baseGoal = D
     bot.pathfinder.thinkTimeout = 20000;
     log(`Spawn di (${bot.entity.position.x.toFixed(1)}, ${bot.entity.position.y.toFixed(1)}, ${bot.entity.position.z.toFixed(1)}) - menunggu chunk sekitar ter-load...`);
 
-    const walkResult = await walkToBase({ bot, goal: baseGoal, range: 4, settleMs: 5000, log });
+    const walkResult = await walkToBase({ bot, goal: baseGoal, range: 4, settleMs: 5000, maxGotoMs: 12000, thinkTimeoutMs: 12000, stageDistance: 32, allowTerrainWork: true, allow1by1Towers: false, maxDropDown: 3, terrainBreakAllowlist: SAFE_TRAVEL_TERRAIN_NAMES, log });
     if (!walkResult.success) {
       log(`PERINGATAN: gagal berjalan ke base (${walkResult.reason}) - tetap mulai bekerja di posisi sekarang.`);
     }
@@ -66,12 +68,39 @@ function startRancherWorker({ host, port, botName, scanRadius = 24, baseGoal = D
     // perjalanan awal dari spawn) - pulihkan lagi supaya kerja sesudahnya tidak ikut memasang blok.
     bot.pathfinder.setMovements(buildMovements(bot));
 
-    const adapter = new MineflayerRoleAdapter(bot);
+    const adapter = new MineflayerRoleAdapter(bot, { sharedWorld: false, capabilities: ['animal_care', 'haul', 'survey'] });
 
     const bedResult = await adapter.setSpawnAtNearestBed();
     log(bedResult ? 'Spawn point diset di bed dekat base.' : 'Tidak ada bed dalam jangkauan - spawn point tidak diubah.');
 
     animalEngine = new AnimalHusbandryEngine({ adapter, scanRadius, avoidArea });
+    cooperativeRuntime = createCooperativeAgent(adapter, {
+      capabilities: ['animal_care', 'haul', 'survey'],
+      metadata: { role: 'rancher' },
+      handlers: createEngineTaskHandlers(animalEngine, {
+        INSPECT_ANIMALS: { execute: async () => ({ action: 'inspect', animals: animalEngine.getAnimals().length }) },
+        FEED_ANIMALS: { execute: async () => {
+          const targets = animalEngine.selectFeedTargets();
+          for (const target of targets) {
+            await adapter.equipItem(target.feed, 'hand');
+            await adapter.useOn(target.entity);
+            animalEngine.metrics.fed += 1;
+            animalEngine.emit('fed', target);
+          }
+          return targets.length ? { action: 'feed', count: targets.length } : { action: 'idle' };
+        }, actions: ['feed'], mutatesWorld: true, idleCompletes: true },
+        BALANCE_HERD: { execute: async () => {
+          const targets = animalEngine.selectCullTargets();
+          if (targets.length) await adapter.equipItem(animalEngine.options.weaponNames, 'hand');
+          for (const target of targets) {
+            await adapter.attack(target.entity);
+            animalEngine.metrics.culled += 1;
+            animalEngine.emit('culled', target);
+          }
+          return targets.length ? { action: 'cull', count: targets.length } : { action: 'idle' };
+        }, actions: ['cull'], mutatesWorld: true, idleCompletes: true }
+      })
+    });
     animalEngine.on('fed', ({ type, entity }) => log(`Beri makan ${type} (id ${entity.id})`));
     animalEngine.on('culled', ({ type, entity }) => log(`Panen surplus ${type} (id ${entity.id})`));
 
@@ -80,7 +109,7 @@ function startRancherWorker({ host, port, botName, scanRadius = 24, baseGoal = D
     async function tick() {
       if (stopped) return;
       try {
-        const result = await animalEngine.tick();
+        const result = await runCooperativeCycle(cooperativeRuntime, () => animalEngine.tick());
         if (result.action !== 'idle') lastAction = result.action.toUpperCase();
       } catch (e) {
         log(`ERROR di tick peternakan (non-fatal, lanjut tick berikutnya): ${e.message}`);
@@ -97,6 +126,7 @@ function startRancherWorker({ host, port, botName, scanRadius = 24, baseGoal = D
     log(`Koneksi terputus tak terduga (${reason || 'tidak diketahui'}) - worker berhenti.`);
     stopped = true;
     if (timer) clearTimeout(timer);
+    cooperativeRuntime?.stop();
     onDisconnect();
   });
 
@@ -104,6 +134,7 @@ function startRancherWorker({ host, port, botName, scanRadius = 24, baseGoal = D
     stop() {
       stopped = true;
       if (timer) clearTimeout(timer);
+      cooperativeRuntime?.stop();
       bot.quit();
     },
     getMetrics() {

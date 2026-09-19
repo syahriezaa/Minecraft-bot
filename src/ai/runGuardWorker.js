@@ -21,7 +21,8 @@ const { pathfinder, Movements } = require('mineflayer-pathfinder');
 const { MineflayerRoleAdapter } = require('./mineflayerRoleAdapter');
 const { MobFarmEngine } = require('./mobFarmEngine');
 const { GearRepairEngine } = require('./gearRepairEngine');
-const { walkToBase } = require('./walkToBase');
+const { walkToBase, SAFE_TRAVEL_TERRAIN_NAMES } = require('./walkToBase');
+const { createEngineTaskHandlers, createCooperativeAgent } = require('./cooperativeAgent');
 
 const TICK_INTERVAL_MS = Number(process.env.GUARD_TICK_MS) || 2000;
 const DEFAULT_BASE_GOAL = { x: -185, y: 71, z: -352 };
@@ -53,6 +54,7 @@ function startGuardWorker({ host, port, botName, scanRadius = 16, baseGoal = DEF
 
   let combatEngine = null;
   let repairEngine = null;
+  let cooperativeRuntime = null;
   let stopped = false;
   let timer = null;
   let lastAction = 'CONNECTING';
@@ -63,7 +65,7 @@ function startGuardWorker({ host, port, botName, scanRadius = 16, baseGoal = DEF
     bot.pathfinder.thinkTimeout = 20000;
     log(`Spawn di (${bot.entity.position.x.toFixed(1)}, ${bot.entity.position.y.toFixed(1)}, ${bot.entity.position.z.toFixed(1)}) - menunggu chunk sekitar ter-load...`);
 
-    const walkResult = await walkToBase({ bot, goal: baseGoal, range: 4, settleMs: 5000, log });
+    const walkResult = await walkToBase({ bot, goal: baseGoal, range: 4, settleMs: 5000, maxGotoMs: 12000, thinkTimeoutMs: 12000, stageDistance: 32, allowTerrainWork: true, allow1by1Towers: false, maxDropDown: 3, terrainBreakAllowlist: SAFE_TRAVEL_TERRAIN_NAMES, log });
     if (!walkResult.success) {
       log(`PERINGATAN: gagal berjalan ke base (${walkResult.reason}) - tetap mulai berjaga di posisi sekarang.`);
     }
@@ -72,7 +74,7 @@ function startGuardWorker({ host, port, botName, scanRadius = 16, baseGoal = DEF
     // memasang blok yang tidak perlu.
     bot.pathfinder.setMovements(buildMovements(bot));
 
-    const adapter = new MineflayerRoleAdapter(bot);
+    const adapter = new MineflayerRoleAdapter(bot, { sharedWorld: false, capabilities: ['combat', 'patrol', 'survey'] });
 
     // Klik bed terdekat SEBELUM mulai berjaga - sama seperti runFarmerWorker.js, supaya restart
     // berikutnya lanjut dari base, bukan jalan kaki ulang dari world spawn.
@@ -101,12 +103,27 @@ function startGuardWorker({ host, port, botName, scanRadius = 16, baseGoal = DEF
     repairEngine = new GearRepairEngine({ adapter });
     repairEngine.on('repaired', ({ piece }) => log(`Perbaiki gear: ${piece} dipasang.`));
     repairEngine.on('gathered', ({ item, count }) => log(`Ambil ${count}x ${item} dari gudang untuk craft gear.`));
+    cooperativeRuntime = createCooperativeAgent(adapter, {
+      capabilities: ['combat', 'patrol', 'survey'],
+      metadata: { role: 'guard' },
+      handlers: createEngineTaskHandlers(combatEngine, {
+        SURVEY_THREATS: { execute: async () => ({ action: 'survey', threats: combatEngine.getThreats().length }) },
+        PATROL_AREA: { actions: ['patrol', 'standby'], idleCompletes: true },
+        ENGAGE_THREATS: { actions: ['attack', 'approach', 'cooldown'], idleCompletes: true }
+      })
+    });
 
     log('Pekerja penjaga mulai berjaga.');
     lastAction = 'GUARDING';
     async function tick() {
       if (stopped) return;
       try {
+        const cooperative = await cooperativeRuntime?.runOnce();
+        if (cooperative && cooperative.status !== 'IDLE') {
+          lastAction = `TASK_${cooperative.status}`;
+          timer = setTimeout(tick, TICK_INTERVAL_MS);
+          return;
+        }
         const combatResult = await combatEngine.tick();
         lastAction = combatResult.action.toUpperCase();
         // Kalau ada ancaman nyata (bukan cuma standby/idle), tangani itu dulu - jangan buang
@@ -141,6 +158,7 @@ function startGuardWorker({ host, port, botName, scanRadius = 16, baseGoal = DEF
     log(`Koneksi terputus tak terduga (${reason || 'tidak diketahui'}) - worker berhenti.`);
     stopped = true;
     if (timer) clearTimeout(timer);
+    cooperativeRuntime?.stop();
     onDisconnect();
   });
 
@@ -148,6 +166,7 @@ function startGuardWorker({ host, port, botName, scanRadius = 16, baseGoal = DEF
     stop() {
       stopped = true;
       if (timer) clearTimeout(timer);
+      cooperativeRuntime?.stop();
       bot.quit();
     },
     getMetrics() {

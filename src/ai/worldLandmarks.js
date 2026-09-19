@@ -28,23 +28,74 @@ function loadLandmarks(log = () => {}) {
   }
 }
 
-function saveLandmarks(landmarks, log = () => {}) {
+function writeLandmarks(landmarks) {
+  const tmp = `${WORLD_LANDMARKS_FILE}.${process.pid}.${crypto.randomUUID()}.tmp`;
   try {
     fs.mkdirSync(path.dirname(WORLD_LANDMARKS_FILE), { recursive: true });
-    fs.writeFileSync(WORLD_LANDMARKS_FILE, JSON.stringify(landmarks, null, 2));
-  } catch (e) {
-    log(`PERINGATAN: gagal menyimpan memori landmark dunia ke disk (${e.message})`);
+    fs.writeFileSync(tmp, JSON.stringify(landmarks, null, 2));
+    fs.renameSync(tmp, WORLD_LANDMARKS_FILE);
+  } finally {
+    if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
   }
 }
+
+function mutateLandmarks(update) {
+  fs.mkdirSync(path.dirname(WORLD_LANDMARKS_FILE), { recursive: true });
+  const lock = `${WORLD_LANDMARKS_FILE}.lock`;
+  // Gagal cepat saat sibuk; tick berikutnya mengulang tanpa menimpa perubahan proses lain.
+  const fd = fs.openSync(lock, 'wx');
+  try {
+    fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, createdAt: Date.now() }));
+    const current = fs.existsSync(WORLD_LANDMARKS_FILE)
+      ? JSON.parse(fs.readFileSync(WORLD_LANDMARKS_FILE, 'utf8')) : [];
+    if (!Array.isArray(current)) throw new Error('Memori landmark rusak; penulisan dibatalkan');
+    const next = update(current);
+    writeLandmarks(next);
+    return next;
+  } finally {
+    fs.closeSync(fd);
+    fs.unlinkSync(lock);
+  }
+}
+
+function saveLandmarks(landmarks) { return mutateLandmarks(() => landmarks); }
 
 // Tambah SATU landmark baru ke memori yang sudah ada di disk (bukan menimpa) - bot explorer
 // menemukan landmark satu-satu seiring berjalan, bukan sekaligus semua di akhir sesi (kalau
 // proses mati di tengah jalan, landmark yang sudah ditemukan tidak boleh hilang).
 function addLandmark(landmark, log = () => {}) {
-  const landmarks = loadLandmarks(log);
-  landmarks.push(landmark);
-  saveLandmarks(landmarks, log);
-  return landmarks;
+  return mutateLandmarks(landmarks => {
+    const duplicate = landmark.shape === 'point' && landmarks.some(l => l.shape === 'point'
+      && l.category === landmark.category && l.world === landmark.world && l.dimension === landmark.dimension
+      && ['x', 'y', 'z'].every(axis => l.position[axis] === landmark.position[axis]));
+    return duplicate ? landmarks : [...landmarks, landmark];
+  });
+}
+
+function upsertAreaLandmark(landmark) {
+  let saved;
+  mutateLandmarks(landmarks => {
+    const cells = new Set(landmark.observedVoxels || []);
+    const existing = landmarks.find(l => l.shape === 'area' && l.category === landmark.category
+      && l.world === landmark.world && l.dimension === landmark.dimension
+      && l.observedVoxels?.some(key => cells.has(key)));
+    saved = { ...landmark, lastObservedAt: Date.now(), revision: (existing?.revision || 0) + 1 };
+    if (existing) {
+      saved.id = existing.id;
+      saved.discoveredAt = existing.discoveredAt;
+      saved.observedVoxels = [...new Set([...existing.observedVoxels, ...landmark.observedVoxels])];
+      // Pemindaian parsial tidak membuktikan bagian bangunan lain telah hilang.
+      for (const axis of ['x', 'y', 'z']) {
+        saved.bounds.min[axis] = Math.min(saved.bounds.min[axis], existing.bounds.min[axis]);
+        saved.bounds.max[axis] = Math.max(saved.bounds.max[axis], existing.bounds.max[axis]);
+      }
+      saved.boundary = require('./structureGeometry').rectangle(saved.bounds);
+      saved.userLabel = existing.userLabel;
+      landmarks[landmarks.indexOf(existing)] = saved;
+    } else landmarks.push(saved);
+    return landmarks;
+  });
+  return saved;
 }
 
 function makePointLandmark({ name, category, position, description, source = 'explorer' }) {
@@ -64,13 +115,15 @@ function makePointLandmark({ name, category, position, description, source = 'ex
 // dipakai untuk batas (area di Minecraft dipahami sebagai jejak di peta atas, bukan volume 3D
 // tertutup) - permintaan nyata pemilik: "batas batasnya sebagai vektor yang nantinya bisa di
 // interpretasikan".
-function makeAreaLandmark({ name, category, boundary, description, source = 'explorer' }) {
+function makeAreaLandmark({ name, category, boundary, description, source = 'explorer', bounds,
+  world, dimension, observedVoxels, evidence, confidence, classificationStatus }) {
   return {
     id: crypto.randomUUID(),
     shape: 'area',
     name,
     category,
     boundary: boundary.map((p) => ({ x: p.x, z: p.z })),
+    ...(bounds ? { bounds, world, dimension, observedVoxels, evidence, confidence, classificationStatus } : {}),
     description: description || null,
     source,
     discoveredAt: Date.now()
@@ -81,6 +134,7 @@ function makeAreaLandmark({ name, category, boundary, description, source = 'exp
 // (mis. bentuk L, sungai berkelok), bukan cuma kotak.
 function isInsideAreaLandmark(landmark, pos) {
   if (!landmark || landmark.shape !== 'area' || !Array.isArray(landmark.boundary)) return false;
+  if (landmark.bounds && (pos.y < landmark.bounds.min.y || pos.y >= landmark.bounds.max.y)) return false;
   const { x, z } = pos;
   const points = landmark.boundary;
   let inside = false;
@@ -121,6 +175,7 @@ module.exports = {
   loadLandmarks,
   saveLandmarks,
   addLandmark,
+  upsertAreaLandmark,
   makePointLandmark,
   makeAreaLandmark,
   isInsideAreaLandmark,

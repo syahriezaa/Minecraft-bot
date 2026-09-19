@@ -113,7 +113,10 @@ async function main() {
     }
   }, Number(process.env.AWARENESS_SCAN_INTERVAL_MS || 1000)).unref();
 
-  const adapter = new MineflayerRoleAdapter(bot, { worldAwareness: awareness });
+  const adapter = new MineflayerRoleAdapter(bot, {
+    worldAwareness: awareness,
+    capabilities: ['farm', 'animal_care', 'combat', 'haul', 'survey']
+  });
   const coordinator = new SurvivalRoleCoordinator({
     adapter,
     ...options.coordinator

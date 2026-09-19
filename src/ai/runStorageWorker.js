@@ -18,7 +18,8 @@ const mineflayer = require('mineflayer');
 const { pathfinder, Movements } = require('mineflayer-pathfinder');
 const { MineflayerRoleAdapter } = require('./mineflayerRoleAdapter');
 const { StorageManagerEngine } = require('./storageManagerEngine');
-const { walkToBase } = require('./walkToBase');
+const { walkToBase, SAFE_TRAVEL_TERRAIN_NAMES } = require('./walkToBase');
+const { createEngineTaskHandlers, createCooperativeAgent, runCooperativeCycle } = require('./cooperativeAgent');
 // Memori sortir gudang (rumah baku ore/ingot/gear, memori yang dipelajari dari disk, nama
 // kategori, cadangan darurat) DIPINDAHKAN ke storageMemory.js - permintaan nyata pemilik: "share
 // memory tentang peti ke semua bot agar dapat mencari barang barang dan menaruh barang dengan
@@ -64,7 +65,23 @@ function buildMovements(bot) {
   return movements;
 }
 
-function startStorageWorker({ host, port, botName, scanRadius = 48, baseGoal = DEFAULT_BASE_GOAL, houseBounds = DEFAULT_HOUSE_BOUNDS, log = (m) => console.log(m), onDisconnect = () => {}, onMisplaced = () => {}, onChestSnapshot = () => {}, onAssignmentsChanged = () => {} }) {
+function canonicalContainerPosition(adapter, position) {
+  const current = { x: Math.floor(position.x), y: Math.floor(position.y), z: Math.floor(position.z) };
+  const hereType = adapter.getChestHalfType(current);
+  if (!hereType || hereType === 'single') return current;
+  const opposite = hereType === 'left' ? 'right' : 'left';
+  const neighbours = [
+    { x: current.x - 1, y: current.y, z: current.z },
+    { x: current.x + 1, y: current.y, z: current.z },
+    { x: current.x, y: current.y, z: current.z - 1 },
+    { x: current.x, y: current.y, z: current.z + 1 }
+  ];
+  const pair = neighbours.find(candidate => adapter.getChestHalfType(candidate) === opposite);
+  if (!pair) return current;
+  return [current, pair].sort((a, b) => a.x - b.x || a.y - b.y || a.z - b.z)[0];
+}
+
+function startStorageWorker({ host, port, botName, scanRadius = 48, baseGoal = DEFAULT_BASE_GOAL, houseBounds = DEFAULT_HOUSE_BOUNDS, log = (m) => console.log(m), onDisconnect = () => {}, onMisplaced = () => {}, onChestSnapshot = () => {}, onAssignmentsChanged = () => {}, storageRepository = null, storageContext = null }) {
   const bot = mineflayer.createBot({
     host, port,
     username: botName || 'StorageWorker',
@@ -74,6 +91,7 @@ function startStorageWorker({ host, port, botName, scanRadius = 48, baseGoal = D
   });
 
   let engine = null;
+  let cooperativeRuntime = null;
   let stopped = false;
   let timer = null;
   let lastAction = 'CONNECTING';
@@ -84,7 +102,7 @@ function startStorageWorker({ host, port, botName, scanRadius = 48, baseGoal = D
     bot.pathfinder.thinkTimeout = 20000;
     log(`Spawn di (${bot.entity.position.x.toFixed(1)}, ${bot.entity.position.y.toFixed(1)}, ${bot.entity.position.z.toFixed(1)}) - menunggu chunk sekitar ter-load...`);
 
-    const walkResult = await walkToBase({ bot, goal: baseGoal, range: 4, settleMs: 5000, log });
+    const walkResult = await walkToBase({ bot, goal: baseGoal, range: 4, settleMs: 5000, maxGotoMs: 12000, thinkTimeoutMs: 12000, stageDistance: 32, allowTerrainWork: true, allow1by1Towers: false, maxDropDown: 3, terrainBreakAllowlist: SAFE_TRAVEL_TERRAIN_NAMES, log });
     if (!walkResult.success) {
       log(`PERINGATAN: gagal berjalan ke base (${walkResult.reason}) - tetap mulai bekerja di posisi sekarang.`);
     }
@@ -97,7 +115,9 @@ function startStorageWorker({ host, port, botName, scanRadius = 48, baseGoal = D
     // cest terjangkau" - root cause-nya persis ini, bukan buildMovements() yang salah.
     bot.pathfinder.setMovements(buildMovements(bot));
 
-    const adapter = new MineflayerRoleAdapter(bot, { log });
+    // Kuartermaster memakai storageRepository dan lock logistik tersendiri;
+    // snapshot 3D periodik tidak boleh menahan dashboard saat gudang ramai.
+    const adapter = new MineflayerRoleAdapter(bot, { log, sharedWorld: false, capabilities: ['storage', 'haul', 'audit'] });
 
     const bedResult = await adapter.setSpawnAtNearestBed();
     log(bedResult ? 'Spawn point diset di bed dekat base.' : 'Tidak ada bed dalam jangkauan - spawn point tidak diubah.');
@@ -107,11 +127,24 @@ function startStorageWorker({ host, port, botName, scanRadius = 48, baseGoal = D
       log(`Muat memori sortir gudang: ${Object.keys(initialAssignments).length} jenis item sudah punya chest langganan (termasuk rumah baku ore/ingot dan gear/makanan/buku).`);
     }
     engine = new StorageManagerEngine({ adapter, scanRadius, houseBounds, initialAssignments, overflowChests: OVERFLOW_CHESTS });
+    cooperativeRuntime = createCooperativeAgent(adapter, {
+      capabilities: ['storage', 'haul', 'audit'],
+      metadata: { role: 'storage' },
+      handlers: createEngineTaskHandlers(engine, {
+        AUDIT_STORAGE: { actions: ['inspect', 'reorganize', 'collect'], idleCompletes: true },
+        SORT_ITEMS: { actions: ['reorganize', 'collect', 'deliver', 'deliver_failed'], mutatesWorld: true, idleCompletes: true },
+        VERIFY_STORAGE: { actions: ['inspect'], idleCompletes: true },
+        HAUL_RESOURCES: { actions: ['deliver', 'collect'], idleCompletes: true },
+        DEPOSIT_CROPS: { actions: ['deliver'], idleCompletes: true },
+        DEPOSIT_ANIMAL_PRODUCTS: { actions: ['deliver'], idleCompletes: true }
+      })
+    });
     engine.on('collected', ({ position, count }) => log(`Ambil ${count} item dari chest luar di (${position.x},${position.y},${position.z})`));
     engine.on('delivered', ({ position, count, name }) => {
       log(`Antar ${count}x ${name} ke chest gudang di (${position.x},${position.y},${position.z})`);
       const assignments = engine.getChestAssignments();
       saveLearnedAssignments(assignments, log);
+      storageRepository?.upsertAssignments(storageContext, assignments, botName || 'StorageWorker');
       // Dorong lewat WS LANGSUNG (bukan cuma disk) - permintaan nyata pemilik: "use ws to update
       // memory ui to memory is dynamic not just in every restart" - panel "Memori Sortir Worker"
       // di dashboard harus ikut berubah SAAT ITU JUGA kalau ada item baru yang belajar rumahnya
@@ -125,12 +158,22 @@ function startStorageWorker({ host, port, botName, scanRadius = 48, baseGoal = D
       log(`Item SALAH TEMPAT: ${count}x ${item} di (${position.x},${position.y},${position.z}) - diambil, akan diantar ke (${correctPosition.x},${correctPosition.y},${correctPosition.z})`);
       // Dipakai panel "Kepatuhan Kategori Gudang" di dashboard - permintaan nyata pemilik: chest
       // yang belum sesuai aturan kategori harus tercatat, supaya terlihat tanpa perlu scan manual.
-      onMisplaced({ botName: botName || 'StorageWorker', position, item, count, correctPosition, timestamp: Date.now() });
+      const entry = { botName: botName || 'StorageWorker', position, item, count, correctPosition, timestamp: Date.now() };
+      storageRepository?.recordCompliance(storageContext, entry);
+      onMisplaced(entry);
     });
     engine.on('chestSnapshot', ({ position, items, misplaced }) => {
       // Dipakai panel peta gudang di dashboard - permintaan nyata pemilik: "di ui web tampilkan
       // isi semua peti...dan bagaimana bot akan memindahkannya di tandai dengan panah panah".
-      onChestSnapshot({ position, items, misplaced, timestamp: Date.now() });
+      const snapshot = {
+        position,
+        containerPosition: canonicalContainerPosition(adapter, position),
+        items,
+        misplaced,
+        timestamp: Date.now()
+      };
+      storageRepository?.saveChestSnapshot(storageContext, snapshot, botName || 'StorageWorker');
+      onChestSnapshot(snapshot);
     });
 
     log('Pekerja gudang mulai bekerja.');
@@ -138,7 +181,7 @@ function startStorageWorker({ host, port, botName, scanRadius = 48, baseGoal = D
     async function tick() {
       if (stopped) return;
       try {
-        const result = await engine.tick();
+        const result = await runCooperativeCycle(cooperativeRuntime, () => engine.tick());
         if (result.action !== 'idle') lastAction = result.action.toUpperCase();
       } catch (e) {
         log(`ERROR di tick gudang (non-fatal, lanjut tick berikutnya): ${e.message}`);
@@ -160,6 +203,7 @@ function startStorageWorker({ host, port, botName, scanRadius = 48, baseGoal = D
     log(`Koneksi terputus tak terduga (${reason || 'tidak diketahui'}) - worker berhenti.`);
     stopped = true;
     if (timer) clearTimeout(timer);
+    cooperativeRuntime?.stop();
     onDisconnect();
   });
 
@@ -167,6 +211,7 @@ function startStorageWorker({ host, port, botName, scanRadius = 48, baseGoal = D
     stop() {
       stopped = true;
       if (timer) clearTimeout(timer);
+      cooperativeRuntime?.stop();
       bot.quit();
     },
     getMetrics() {
@@ -193,13 +238,25 @@ function startStorageWorker({ host, port, botName, scanRadius = 48, baseGoal = D
   };
 }
 
-module.exports = { startStorageWorker, CHEST_CATEGORY_LABELS };
+module.exports = { startStorageWorker, CHEST_CATEGORY_LABELS, canonicalContainerPosition };
 
 if (require.main === module) {
+  const { SharedWorldMemory } = require('./sharedWorldMemory');
+  const { StorageRepository } = require('./storageRepository');
+  const host = process.env.MC_HOST || 'atoms-girl.tun.ply.gg';
+  const port = Number(process.env.MC_PORT) || 25565;
+  const memory = new SharedWorldMemory();
+  const storageRepository = new StorageRepository(memory);
   startStorageWorker({
-    host: process.env.MC_HOST || 'atoms-girl.tun.ply.gg',
-    port: Number(process.env.MC_PORT) || 25565,
+    host,
+    port,
     botName: process.env.MC_BOT_NAME || 'StorageWorker',
-    scanRadius: Number(process.env.STORAGE_SCAN_RADIUS) || 48
+    scanRadius: Number(process.env.STORAGE_SCAN_RADIUS) || 48,
+    storageRepository,
+    storageContext: {
+      world: process.env.MC_WORLD_ID || `${host}:${port}`,
+      dimension: process.env.MC_DIMENSION_ID || 'overworld'
+    },
+    onDisconnect: () => memory.close()
   });
 }

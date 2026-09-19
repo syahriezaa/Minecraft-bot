@@ -79,6 +79,7 @@ class IntelligentSwarmCoordinator {
       movementEnabled: false,
       clientFactory: (config) => new LiveProtocolClient(config),
       worldAccessor: null,
+      leaderTimeoutMs: 5000,
       creeperDangerRadius: 6,    // Creeper: ledakan mematikan jarak dekat -> retreat lebih dini
       hostileDangerRadius: 3,    // mob hostile lain (zombie/skeleton/dkk) -> retreat kalau sudah dekat
       ...options
@@ -94,6 +95,8 @@ class IntelligentSwarmCoordinator {
       activeThreats: [],
       systemHealth: 'OPTIMAL'
     };
+
+    this.sharedMemory.lastLeaderUpdateAt = Date.now();
 
     this.coordinationInterval = null;
     this._lockHandle = null;
@@ -178,6 +181,18 @@ class IntelligentSwarmCoordinator {
       console.log(`[${config.name}] 🟢 BERHASIL MASUK KE SERVER! (Entity ID: ${d.entityId}) | Peran: ${config.role}`);
     });
 
+    client.on('disconnect', (info) => {
+      botState.isOnline = false;
+      botState.currentObjective = 'OFFLINE_RECONNECTING';
+      botState.lastDisconnect = { ...info, at: Date.now() };
+      this.sharedMemory.claimedMobTargets.forEach((owner, target) => {
+        if (owner === config.name) this.sharedMemory.claimedMobTargets.delete(target);
+      });
+      this.sharedMemory.claimedDrops.forEach((owner, target) => {
+        if (owner === config.name) this.sharedMemory.claimedDrops.delete(target);
+      });
+    });
+
     client.on('teleport', (pos) => {
       botState.position = { ...pos };
       console.log(`[${config.name}] 📍 SPAWN: (${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)})`);
@@ -251,6 +266,18 @@ class IntelligentSwarmCoordinator {
     return merged;
   }
 
+  /** Perbarui posisi pemain yang menjadi pusat formasi dari sumber eksternal. */
+  setLeaderPosition(position) {
+    if (!position || !Number.isFinite(position.x) || !Number.isFinite(position.y) || !Number.isFinite(position.z)) {
+      throw new TypeError('Posisi leader harus memiliki koordinat x, y, z yang valid');
+    }
+    this.sharedMemory.playerLeaderPos = {
+      ...this.sharedMemory.playerLeaderPos,
+      ...position
+    };
+    this.sharedMemory.lastLeaderUpdateAt = Date.now();
+  }
+
   /**
    * Mendeteksi mob hostile terdekat dari registry gabungan seluruh swarm (lihat
    * _getSwarmHostileRegistry) dan menghitung titik retreat menjauh darinya jika sudah
@@ -266,18 +293,23 @@ class IntelligentSwarmCoordinator {
     if (registry.size === 0) return null;
 
     let nearest = null;
-    let nearestDistance = Infinity;
+    let nearestScore = Infinity;
     for (const entity of registry.values()) {
       const distance = Math.hypot(entity.x - bot.position.x, entity.y - bot.position.y, entity.z - bot.position.z);
-      if (distance < nearestDistance) {
-        nearestDistance = distance;
-        nearest = { ...entity, distance };
+      const name = String(entity.name || '').toLowerCase();
+      const dangerRadius = name.includes('creeper') ? this.options.creeperDangerRadius : this.options.hostileDangerRadius;
+      if (distance <= dangerRadius) {
+        // Creeper selalu diprioritaskan bila beberapa ancaman aktif bersamaan.
+        const score = (name.includes('creeper') ? 0 : 1) * 1000 + distance;
+        if (score < nearestScore) {
+          nearestScore = score;
+          nearest = { ...entity, name, distance, dangerRadius };
+        }
       }
     }
     if (!nearest) return null;
 
-    const dangerRadius = nearest.name === 'creeper' ? this.options.creeperDangerRadius : this.options.hostileDangerRadius;
-    if (nearest.distance > dangerRadius) return null;
+    const dangerRadius = nearest.dangerRadius;
 
     const dx = bot.position.x - nearest.x;
     const dz = bot.position.z - nearest.z;
@@ -298,13 +330,20 @@ class IntelligentSwarmCoordinator {
   _evaluateSwarmFormations() {
     const leaderPos = this.sharedMemory.playerLeaderPos;
     const activeBots = Array.from(this.bots.values()).filter(b => b.isOnline);
+    const leaderLost = Date.now() - this.sharedMemory.lastLeaderUpdateAt > this.options.leaderTimeoutMs;
 
     for (let i = 0; i < activeBots.length; i++) {
       const bot = activeBots[i];
       const cfg = bot.config;
 
+      if (leaderLost) {
+        bot.targetFormationPos = { ...bot.position };
+        bot.currentObjective = 'HOLD_LEADER_LOST';
+        continue;
+      }
+
       // 1. Hitung Target Formasi Relatif terhadap Pemain
-      const angleRad = (cfg.formationAngleDeg * Math.PI) / 180;
+      const angleRad = ((cfg.formationAngleDeg + (leaderPos.yaw || 0)) * Math.PI) / 180;
       const targetX = leaderPos.x + cfg.formationRadius * Math.cos(angleRad);
       const targetZ = leaderPos.z + cfg.formationRadius * Math.sin(angleRad);
       const targetY = leaderPos.y;
@@ -333,6 +372,9 @@ class IntelligentSwarmCoordinator {
       if (retreat) {
         bot.targetFormationPos = { x: retreat.x, y: retreat.y, z: retreat.z };
         bot.currentObjective = `TACTICAL_RETREAT_THREAT (${retreat.threat.name} @ ${retreat.threat.distance.toFixed(1)}m)`;
+      } else if (bot.health < 8 && bot.health > 0) {
+        bot.targetFormationPos = { x: leaderPos.x, y: leaderPos.y, z: leaderPos.z };
+        bot.currentObjective = 'TACTICAL_RETREAT_LOW_HEALTH';
       } else {
         // Perbarui status tujuan bot (formasi normal)
         bot.targetFormationPos = {
@@ -385,9 +427,10 @@ class IntelligentSwarmCoordinator {
       hasHorizontalCollision: planned.type !== 'DIRECT_WALK'
     };
 
-    bot.position = { ...bot.position, ...next };
     bot.lastMovementType = planned.type;
-    bot.client.sendPositionAndRotation(next);
+    const accepted = bot.client.sendPositionAndRotation(next);
+    if (accepted !== false) bot.position = { ...bot.position, ...next };
+    else bot.currentObjective = 'MOVEMENT_REJECTED_WAIT_SERVER_SYNC';
   }
 
   /**

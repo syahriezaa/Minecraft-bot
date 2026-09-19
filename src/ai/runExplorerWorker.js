@@ -19,8 +19,9 @@ const mineflayer = require('mineflayer');
 const { pathfinder, Movements } = require('mineflayer-pathfinder');
 const { MineflayerRoleAdapter } = require('./mineflayerRoleAdapter');
 const { ExplorerEngine } = require('./explorerEngine');
-const { DeepSeekClient } = require('./deepseekClient');
-const { walkToBase } = require('./walkToBase');
+const { createLandmarkLlmClient } = require('./landmarkLlmClient');
+const { walkToBase, SAFE_TRAVEL_TERRAIN_NAMES } = require('./walkToBase');
+const { createEngineTaskHandlers, createCooperativeAgent, runCooperativeCycle } = require('./cooperativeAgent');
 
 const TICK_INTERVAL_MS = Number(process.env.EXPLORER_TICK_MS) || 3000;
 const DEFAULT_BASE_GOAL = { x: -185, y: 71, z: -352 };
@@ -51,6 +52,7 @@ function startExplorerWorker({ host, port, botName, scanRadius = 24, spiralStepS
   });
 
   let engine = null;
+  let cooperativeRuntime = null;
   let stopped = false;
   let timer = null;
   let lastAction = 'CONNECTING';
@@ -61,22 +63,18 @@ function startExplorerWorker({ host, port, botName, scanRadius = 24, spiralStepS
     bot.pathfinder.thinkTimeout = 20000;
     log(`Spawn di (${bot.entity.position.x.toFixed(1)}, ${bot.entity.position.y.toFixed(1)}, ${bot.entity.position.z.toFixed(1)}) - menunggu chunk sekitar ter-load...`);
 
-    const walkResult = await walkToBase({ bot, goal: baseGoal, range: 4, settleMs: 5000, log });
+    const walkResult = await walkToBase({ bot, goal: baseGoal, range: 4, settleMs: 5000, maxGotoMs: 12000, thinkTimeoutMs: 12000, stageDistance: 32, allowTerrainWork: true, allow1by1Towers: false, maxDropDown: 3, terrainBreakAllowlist: SAFE_TRAVEL_TERRAIN_NAMES, log });
     if (!walkResult.success) {
       log(`PERINGATAN: gagal berjalan ke base (${walkResult.reason}) - mulai menjelajah dari posisi sekarang, bukan dari base.`);
     }
     bot.pathfinder.setMovements(buildMovements(bot));
 
-    const adapter = new MineflayerRoleAdapter(bot);
+    const adapter = new MineflayerRoleAdapter(bot, { capabilities: ['survey', 'classify', 'navigate'] });
     const effectiveBase = walkResult.success ? baseGoal : { x: bot.entity.position.x, y: bot.entity.position.y, z: bot.entity.position.z };
 
-    // DeepSeek OPSIONAL - kalau tidak ada API key, DeepSeekClient otomatis jatuh ke mode mock
-    // (nama landmark pakai template baku, bukan hasil klasifikasi AI) - tetap berfungsi penuh
-    // tanpa API key, cuma nama landmarknya kurang deskriptif.
-    const llmClient = new DeepSeekClient({ useMock: !process.env.DEEPSEEK_API_KEY });
-    if (!process.env.DEEPSEEK_API_KEY) {
-      log('PERINGATAN: DEEPSEEK_API_KEY belum diset - nama landmark pakai template baku, bukan hasil klasifikasi AI.');
-    }
+    let llmClient = null;
+    try { llmClient = createLandmarkLlmClient(); }
+    catch { log('Konfigurasi LLM penamaan tidak valid; menggunakan nama deterministik.'); }
 
     engine = new ExplorerEngine({
       adapter,
@@ -86,6 +84,19 @@ function startExplorerWorker({ host, port, botName, scanRadius = 24, spiralStepS
       maxExploreRadius,
       llmClient,
       log
+    });
+    cooperativeRuntime = createCooperativeAgent(adapter, {
+      capabilities: ['survey', 'classify', 'navigate'],
+      metadata: { role: 'explorer' },
+      handlers: createEngineTaskHandlers(engine, {
+        SURVEY_AREA: { actions: ['explore'], idleCompletes: true },
+        CLASSIFY_STRUCTURES: { actions: ['explore'], idleCompletes: true },
+        PUBLISH_LANDMARKS: { actions: ['explore'], idleCompletes: true },
+        SURVEY_SITE: { actions: ['explore'], idleCompletes: true },
+        SURVEY_FRONTIER: { actions: ['explore'], idleCompletes: true },
+        SURVEY_FARM: { actions: ['explore'], idleCompletes: true },
+        SURVEY_THREATS: { actions: ['explore'], idleCompletes: true }
+      })
     });
 
     engine.on('landmarkFound', (landmark) => {
@@ -101,7 +112,7 @@ function startExplorerWorker({ host, port, botName, scanRadius = 24, spiralStepS
     async function tick() {
       if (stopped) return;
       try {
-        const result = await engine.tick();
+        const result = await runCooperativeCycle(cooperativeRuntime, () => engine.tick());
         lastAction = result.action.toUpperCase();
         // Log EKSPLISIT untuk mundur/makan - ditemukan dari bug live nyata: bot sempat health
         // 0.5/20 sambil tetap terus menjelajah tanpa henti, tanpa jejak apapun kenapa.
@@ -123,6 +134,7 @@ function startExplorerWorker({ host, port, botName, scanRadius = 24, spiralStepS
     log(`Koneksi terputus tak terduga (${reason || 'tidak diketahui'}) - worker berhenti.`);
     stopped = true;
     if (timer) clearTimeout(timer);
+    cooperativeRuntime?.stop();
     onDisconnect();
   });
 
@@ -130,6 +142,7 @@ function startExplorerWorker({ host, port, botName, scanRadius = 24, spiralStepS
     stop() {
       stopped = true;
       if (timer) clearTimeout(timer);
+      cooperativeRuntime?.stop();
       bot.quit();
     },
     getMetrics() {

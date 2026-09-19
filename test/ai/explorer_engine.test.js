@@ -203,6 +203,36 @@ describe('ExplorerEngine', () => {
     assert.equal(adapter.actions.filter((a) => a.type === 'navigate').length, 2);
   });
 
+  it('area bertingkat/terpisah tidak bergabung dan kunjungan ulang memperbarui ID yang sama', async () => {
+    const blocks = [];
+    for (const [startX, y] of [[0, 62], [0, 70], [8, 62]]) {
+      for (let x = startX; x < startX + 3; x++) for (let z = 0; z < 3; z++) {
+        blocks.push({ name: 'farmland', position: { x, y, z } });
+      }
+    }
+    const engine = new ExplorerEngine({ adapter: new FakeExplorerAdapter({ blocks }) });
+    await engine.recordAreaLandmarks();
+    const first = worldLandmarks.loadLandmarks();
+    assert.equal(first.length, 3);
+    await engine.recordAreaLandmarks();
+    const second = worldLandmarks.loadLandmarks();
+    assert.deepEqual(second.map(l => l.id), first.map(l => l.id));
+    assert.ok(second.every(l => l.revision === 2 && l.bounds && l.evidence.coverage === 'partial'));
+    assert.equal(worldLandmarks.isInsideAreaLandmark(second[0], { x: 1, y: 70, z: 1 }), false);
+  });
+
+  it('dua peti berdekatan tetap berbeda dan air tidak otomatis disebut sungai', async () => {
+    const blocks = [0, 1].map(x => ({ name: 'chest', position: { x, y: 64, z: 0 } }));
+    blocks.push(...[0, 1, 2].map(x => ({ name: 'water', position: { x, y: 60, z: 0 } })));
+    const engine = new ExplorerEngine({ adapter: new FakeExplorerAdapter({ blocks }) });
+    await engine.recordPointLandmarks();
+    await engine.recordAreaLandmarks();
+    const saved = worldLandmarks.loadLandmarks();
+    assert.equal(saved.filter(l => l.category === 'chest').length, 2);
+    assert.equal(saved.filter(l => l.category === 'river').length, 0);
+    assert.equal(saved.filter(l => l.category === 'water_area').length, 1);
+  });
+
   describe('keselamatan bot penjelajah - permintaan tersirat: bot ditemukan hampir mati (health 0.5/20) sambil tetap terus menjelajah tanpa henti, TIDAK PUNYA sama sekali mekanisme menyelamatkan diri (beda dari FarmerEngine yang setidaknya makan saat lapar) - penjelajah justru yang paling berisiko karena sengaja masuk area BELUM DIKENAL', () => {
     it('kalau health sudah kritis (di bawah retreatHealth), harus MUNDUR ke base SEGERA - jangan lanjut menjelajah dulu (bisa langsung mati kena satu serangan/jatuh lagi)', async () => {
       const adapter = new FakeExplorerAdapter({ health: 3 });

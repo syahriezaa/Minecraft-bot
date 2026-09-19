@@ -16,7 +16,13 @@
     "benchmark:l3": "node test/e2e/e2e_level3_test.js",
     "benchmark:l4": "node test/e2e/e2e_level4_test.js",
     "benchmark:ai": "node test/e2e/e2e_ai_tasks_test.js",
-    "survival:role-bot": "node src/ai/runSurvivalRoleBot.js"
+    "survival:role-bot": "node src/ai/runSurvivalRoleBot.js",
+    "storage:room": "node src/ai/runStorageRoomBuilder.js",
+    "storage:swarm": "node src/ai/runStorageRoomSwarm.js",
+    "storage:supervisor": "node src/ai/runStorageRoomSupervisor.js",
+    "storage:survey": "node src/ai/runStorageRoomSurvey.js",
+    "storage:landscape": "node src/ai/runStorageRoomLandscaper.js",
+    "storage:audit": "node src/ai/runStorageRoomAudit.js"
   },
   "keywords": [
     "minecraft",
@@ -37,8 +43,8 @@
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "flying-squid": "^1.12.0",
-    "minecraft-data": "^3.113.2",
-    "mineflayer": "^4.37.1",
+    "minecraft-data": "^3.116.0",
+    "mineflayer": "^4.39.0",
     "mineflayer-auto-eat": "^5.0.3",
     "mineflayer-pathfinder": "^2.4.5",
     "pg": "^8.13.1",

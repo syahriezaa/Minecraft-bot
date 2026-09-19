@@ -2,7 +2,7 @@ const { describe, it } = require('node:test');
 const assert = require('node:assert');
 const { walkToBase } = require('../../src/ai/walkToBase');
 
-function fakeBot({ gotoImpl, position } = {}) {
+function fakeBot({ gotoImpl, position, moveOnGoto = true } = {}) {
   const setMovementsCalls = [];
   const gotoCalls = [];
   return {
@@ -15,7 +15,20 @@ function fakeBot({ gotoImpl, position } = {}) {
       setMovements: (m) => setMovementsCalls.push(m),
       goto: async (goal) => {
         gotoCalls.push(goal);
-        if (gotoImpl) return gotoImpl(goal);
+        if (gotoImpl) {
+          const result = await gotoImpl(goal);
+          if (moveOnGoto && position) {
+            position.x = goal.x;
+            position.z = goal.z;
+            if (typeof goal.y === 'number') position.y = goal.y;
+          }
+          return result;
+        }
+        if (moveOnGoto && position) {
+          position.x = goal.x;
+          position.z = goal.z;
+          if (typeof goal.y === 'number') position.y = goal.y;
+        }
       },
       thinkTimeout: 5000
     },
@@ -25,6 +38,15 @@ function fakeBot({ gotoImpl, position } = {}) {
 }
 
 describe('walkToBase - navigasi spawn->base memakai mineflayer-pathfinder langsung', () => {
+  it('batas ketinggian perjalanan mencegah rute turun ke gua', async () => {
+    const bot = fakeBot();
+    await walkToBase({ bot, goal: { x: 100, y: 70, z: 0 }, minimumY: 58 });
+    const m = bot._setMovementsCalls[0];
+    assert.equal(m.exclusionAreasStep[0]({ position: { y: 20 } }), 100);
+    assert.equal(m.exclusionAreasStep[0]({ position: { y: 60 } }), 0);
+    assert.equal(m.exclusionAreasStep[0]({}), 0, 'node pathfinder tanpa position tidak boleh membuat worker crash');
+    assert.equal(m.allow1by1towers, false);
+  });
   it('harus memanggil bot.pathfinder.goto dengan GoalNear persis di koordinat & radius base yang diminta', async () => {
     const bot = fakeBot();
     const result = await walkToBase({ bot, goal: { x: -175, y: 71, z: -325 }, range: 2 });
@@ -36,6 +58,15 @@ describe('walkToBase - navigasi spawn->base memakai mineflayer-pathfinder langsu
     assert.equal(result.success, true, 'harus melaporkan sukses saat goto selesai tanpa error');
   });
 
+  it('harus menolak false-success ketika goto resolve tetapi posisi bot tidak berubah', async () => {
+    const logs = [];
+    const bot = fakeBot({ position: { x: 0, y: 64, z: 0 }, moveOnGoto: false });
+    const result = await walkToBase({ bot, goal: { x: 20, y: 64, z: 20 }, range: 2, maxGotoMs: 50, log: message => logs.push(message) });
+    assert.equal(result.success, false);
+    assert.match(result.reason, /posisi belum dekat tujuan/);
+    assert.ok(logs.some(message => message.includes('Gagal mencapai base')));
+  });
+
   it('harus mengaktifkan movements dengan parkour+sprint+buka pintu diaktifkan, TAPI gali (dig) DIMATIKAN - ditemukan dari uji coba live nyata: base sungguhan berpintu, dan canOpenDoors default mineflayer-pathfinder adalah FALSE, jadi kalau canDig=true tetap menyala, pathfinder mencoba MENGGALI TEMBUS DINDING sebagai alternatif alih-alih membuka pintu - meledakkan ruang pencarian (144 ribu simpul dikunjungi) sampai timeout tepat di depan base, padahal rutenya sebenarnya cuma lewat pintu+tangga biasa', async () => {
     const bot = fakeBot();
     await walkToBase({ bot, goal: { x: 0, y: 64, z: 0 } });
@@ -45,6 +76,47 @@ describe('walkToBase - navigasi spawn->base memakai mineflayer-pathfinder langsu
     assert.equal(movements.canOpenDoors, true);
     assert.equal(movements.allowParkour, true);
     assert.equal(movements.allowSprinting, true);
+  });
+
+  it('mode evakuasi dapat mengaktifkan penggalian/filling secara eksplisit tanpa menyalakan tower 1x1 secara default', async () => {
+    const bot = fakeBot();
+    await walkToBase({
+      bot,
+      goal: { x: 0, y: 64, z: 0 },
+      allowTerrainWork: true,
+      allow1by1Towers: false,
+      scaffoldingBlocks: ['cobblestone'],
+      terrainBreakAllowlist: new Set(['dirt'])
+    });
+    const movements = bot._setMovementsCalls[0];
+    assert.equal(movements.canDig, true);
+    assert.equal(movements.allow1by1towers, false);
+    assert.deepEqual(movements.scafoldingBlocks, ['cobblestone']);
+    assert.equal(movements.exclusionAreasBreak.at(-1)({ name: 'dirt' }), 0);
+    assert.equal(movements.exclusionAreasBreak.at(-1)({ name: 'stone' }), 100);
+  });
+
+  it('dapat memakai landing level di bawah base bila rute ke elevasi presisi gagal', async () => {
+    const bot = fakeBot({ position: { x: 0, y: 60, z: 0 }, moveOnGoto: false });
+    let calls = 0;
+    bot.pathfinder.goto = async goal => {
+      bot._gotoCalls.push(goal);
+      calls += 1;
+      if (calls === 1) throw new Error('target base belum terhubung');
+      bot.entity.position.x = 0;
+      bot.entity.position.y = 67;
+      bot.entity.position.z = 0;
+    };
+    const result = await walkToBase({ bot, goal: { x: 0, y: 71, z: 0 }, range: 4, fallbackGoalYOffsets: [-1, -2, -3, -4] });
+    assert.equal(result.success, true);
+    assert.equal(result.fallback, true);
+    assert.equal(result.landingY, 67);
+  });
+
+  it('stageDistance dapat diperkecil untuk onboarding di server lambat', async () => {
+    const bot = fakeBot({ position: { x: 0, y: 64, z: 0 } });
+    await walkToBase({ bot, goal: { x: 100, y: 64, z: 0 }, stageDistance: 32 });
+    assert.equal(bot._gotoCalls.length, 4);
   });
 
   it('kalau bot.pathfinder.goto gagal (rute tidak ditemukan/terputus), harus melaporkan gagal dengan alasan - BUKAN melempar exception tak tertangani yang mematikan proses bot', async () => {
